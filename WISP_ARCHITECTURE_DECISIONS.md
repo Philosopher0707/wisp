@@ -7629,6 +7629,75 @@ stands either way.
 
 ---
 
+## ADR-0076 — Confinement is a host-owned toggle with one authority; it is neither a model nor an API surface
+
+**Status:** ACCEPTED
+**Phase:** Corpus maintenance (post-13), from the sandbox-toggle request of 2026-10-01
+**Evidence:** read from the tree at `60462b0`, then driven end-to-end.
+- **Two decision sites, two vocabularies, one concept.** `get_sandbox()` accepted six spellings of "off"
+  (`off`/`0`/`false`/`no`/`host`/`noop`) while `wisp/tools/bash.py` compared the **literal** `"off"`. Driven:
+  `WISP_SANDBOX=false` disabled the sandbox on REST (`/api/bash`, `/api/diagnostics` — both call
+  `get_sandbox`) and left the agent's `run_bash` routing through the tier router. **One variable, two
+  meanings, two paths.**
+- **The tier actually in play was PTY, not Docker.** `docker=absent` on this host and the log reads
+  `Failed to remove Docker container: [Errno 2] No such file or directory: 'docker'`. A/B over the same
+  command, switch on vs removed, flipped **two independent discriminators**: `[ -t 1 ]` NO→YES and
+  `ulimit -t` unlimited→600 (the PTY tier's `RLIMIT_CPU`). Every earlier note saying *"`run_bash` runs in
+  DOCKER"* was wrong about the tier. What the PTY tier provided and the switch gives up: `os.setsid()`,
+  `RLIMIT_CPU=600 s`, `RLIMIT_AS=2 GiB`, `RLIMIT_FSIZE=100 MiB`, and a real pty. **Filesystem reach was never
+  bounded** — the tier's own warning says so.
+
+### Decision
+
+**R1 — One authority, one reader.** `wisp/sandbox.sandbox_mode()` answers "is confinement wanted?", and
+`set_sandbox_mode()` is its only writer. `get_sandbox()` and `bash.py` both ask it. `WISP_SANDBOX` has
+**exactly one reader in the whole of `wisp/`**, asserted by scanning every module for the quoted name — two
+readers is precisely how the divergence above happened.
+
+**R2 — Three states, because a toggle must work in both directions.** `None`/`""` **defers** to
+`WISP_SANDBOX`; the `SANDBOX_AUTO_VALUES` spellings **force confined**, overriding a config file that says
+`off`; the `SANDBOX_OFF_VALUES` spellings force host. Unrecognised values **raise** on set and **fail closed**
+(→ `auto`) on read, because confinement is the default and a typo must not disable it.
+
+**R3 — The toggle drops the memoised provider.** `get_sandbox()` caches per workspace, so `set_sandbox_mode`
+calls `reset_sandbox()`. A toggle that skipped that cache would report the change and not make it.
+
+**R4 — Operator-only: not a tool, and not an API field.** The surface is the slash command
+`/sandbox [auto|off]`. Exposing it over REST would make **holding an API key sufficient to run unconfined
+commands on the host** — a privilege change on an authenticated surface, which BOUNDARIES §2 puts in the
+*ask first* column. Asked; the operator chose operator-only. Pinned by two tests: no module under
+`wisp/server/` may name `set_sandbox_mode`, and `PromptRequest` may not carry a `sandbox` field.
+
+**R5 — The model cannot reach it, by construction.** Nothing under `wisp/tools/` names `set_sandbox_mode`,
+and no tool schema is named for the sandbox. The model must never be able to grant itself host execution;
+this is a permission property, not a naming preference.
+
+### Consequences
+
+- Changed: `wisp/sandbox/__init__.py` (the authority), `wisp/tools/bash.py` (asks it; the env read and the
+  now-orphaned `import os` are gone), `wisp/cli/dispatcher.py` (`/sandbox`). New:
+  `tests/reliability/test_sandbox_toggle.py` (36 tests).
+- **The default is unchanged.** With no override and no env var, `sandbox_mode()` is `auto` — today's
+  behaviour, byte for byte.
+- `CURRENT_AUTHORITIES.md`'s header states the ADR range read from this log, so this append stales that
+  register; regenerate it **after** the commit (BOUNDARIES §6), which also settles ADR-0075's.
+
+### Known limits
+
+- **The agent can still write `~/.config/wisp/.env`** through `write_file`, and that file now carries a
+  confinement switch. It takes effect on the next restart, not this session. This is **pre-existing** and not
+  closed here — closing it is its own decision about which paths are writable.
+- **A remote host cannot flip confinement.** That is R4 working as decided, not a gap; a deployment that needs
+  it must reopen R4 with the privilege question stated.
+- **`ruff` is not installed on this host**, so the orphaned `import os` left by removing the env read was found
+  by hand. The change is compile-checked and test-covered, but not lint-verified.
+
+**Reversal condition:** R4 reopens if a host surface genuinely needs remote control, and then only as its own
+decision naming what an API key grants. R2 reopens if a fourth state is ever needed; two were insufficient,
+which is why the first cut of this change failed its own tests.
+
+---
+
 ## Decision index
 
 | ADR | Title | Phase | Status |
@@ -7708,3 +7777,4 @@ stands either way.
 | 0073 | The platform is one daemon; alerts become incidents that dispatch headless agent turns by autonomy tier | The network agent, N6 (closed loop) | ACCEPTED (**R1** one `serve` platform, wisp via `mcp --connect`. **R2** separate agent and operator tokens. **R3** debounced incidents, adoption of open alerts, cooldown. **R4** observe / diagnose / propose (wisp read_only) / act; the platform's gates never move.) |
 | 0074 | No approver, no yes: REST follows the agent path; the denial taxonomy gains NO_APPROVER and BUDGET_EXCEEDED by decision | Repair of local main | ACCEPTED (**R1** one predicate `approval_needed` on the agent path and REST. **R2** two statuses added by decision; ADR-0052's envelope route unchanged. **R3** every denial status is classified and terminal. **R4** the pin changes only by a recorded decision. Known limit: the prompt's denial list is not updated.) |
 | 0075 | The memory budget is one declared quantity, owned by the store and read by every renderer | Corpus maintenance (post-13) | PROVISIONAL (**R1** one declared quantity; the four current caps stop being independent literals. **R2** the store owns it, at write time, extending `_MAX_FACTS`'s idiom. **R3** disclosure is a fact with provenance, never a directive — the host-harness *"ACTION REQUIRED"* mechanism rejected on three grounds. **R4** a committed guard, not only a runtime truncation. **The quantity is undecided** — tokens recommended, and the evidence that would settle it named. Records four pre-existing stale range claims (F97's class) and repairs none.) |
+| 0076 | Confinement is a host-owned toggle with one authority; it is neither a model nor an API surface | Corpus maintenance (post-13) | ACCEPTED (**R1** one authority, one reader — `sandbox_mode()`/`set_sandbox_mode()`; `WISP_SANDBOX` read in exactly one place, asserted. **R2** three states — defer / force confined / force host; unknown raises on set, fails closed on read. **R3** the toggle drops the memoised provider. **R4** operator-only: `/sandbox [auto|off]`, **not** a tool and **not** a REST field — an API key must not grant unconfined host execution; pinned by two tests. **R5** model-unreachable by construction. Corrects the record: the prior tier was **PTY, not Docker** (`docker=absent`), and filesystem reach was never bounded. Known limits: the agent can still write `~/.config/wisp/.env`; no remote surface; not lint-verified (no `ruff` on this host).) |

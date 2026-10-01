@@ -403,6 +403,39 @@ class Dispatcher:
             ctx.emit("\n".join(lines))
             return CommandResult.CONSUMED
 
+        @self.register("sandbox", "Show or set command confinement",
+                        usage="/sandbox [auto|off]")
+        def _sandbox(ctx: ReplContext, args: str) -> CommandResult:
+            """The operator's toggle for `run_bash` confinement.
+
+            Operator-only **by construction**: it is a slash command, so it is unreachable from the
+            tool registry and the model cannot grant itself host execution. `set_sandbox_mode` is the
+            single authority both this and `get_sandbox()` consult — see its docstring.
+            """
+            from wisp.sandbox import sandbox_mode, set_sandbox_mode
+
+            want = (args or "").strip()
+            if not want:
+                mode = sandbox_mode()
+                ctx.emit(f"Sandbox: {mode} — "
+                         + ("HOST, unconfined: commands run with the host toolchain and no "
+                            "resource limits" if mode == "off"
+                            else "confined when a provider is available"))
+                ctx.emit("  /sandbox off    run_bash executes on the host")
+                ctx.emit("  /sandbox auto   confine when possible (default)")
+                return CommandResult.CONSUMED
+            try:
+                mode = set_sandbox_mode(want)
+            except ValueError as exc:
+                ctx.emit(str(exc))
+                return CommandResult.CONSUMED
+            ctx.emit(f"Sandbox: {mode}")
+            if mode == "off":
+                ctx.emit("  run_bash now executes on the HOST — host filesystem and toolchain, "
+                         "no resource limits. Credentials are still stripped, the dangerous-command "
+                         "check still applies, and approvals are unaffected.")
+            return CommandResult.CONSUMED
+
         def _exit(ctx: ReplContext, args: str) -> CommandResult:
             return CommandResult.EXIT
 

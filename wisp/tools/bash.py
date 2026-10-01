@@ -5,7 +5,6 @@ and output size limits.
 """
 
 import asyncio
-import os
 import logging
 import time
 from dataclasses import dataclass
@@ -21,7 +20,7 @@ from wisp.tools._utils import (
     check_dangerous_command,
 )
 from wisp.auth.secrets import redact
-from wisp.sandbox import get_sandbox
+from wisp.sandbox import get_sandbox, sandbox_mode
 from wisp.sandbox.router import get_router  # the multi-tier router, not `get_sandbox`:
 # `get_sandbox` answers Docker-or-host and falls to raw host execution when the daemon
 # is missing; the router adds the isolated-PTY tier that works WITHOUT a daemon.
@@ -100,13 +99,18 @@ async def run_bash_confined(command: str, workspace: str, timeout: int = 60) -> 
     # `PtySandbox` — own session, rlimits, credential-stripped env — instead of unconfined host
     # execution. `route()` is asked only for the name/reason the log lines report; the call itself
     # goes through the router so failover stays inside it.
-    # `WISP_SANDBOX=off` is an OPERATOR'S EXPLICIT CHOICE and the router does not consult it —
+    # An explicit "off" is the OPERATOR'S (or host's) CHOICE and the router does not consult it —
     # its tiers are Docker -> PTY -> host unconditionally. Swapping `get_sandbox` for the router
     # without this branch silently overrode the setting (caught by
     # `test_explicit_off_is_info_not_warning`, which asserts an explicit choice must not scream).
     # So: explicit off -> `get_sandbox`, which returns the host provider with `reason="explicit"`;
     # anything else -> the tier router.
-    if os.environ.get("WISP_SANDBOX", "").strip().lower() == "off":
+    #
+    # `sandbox_mode()` is the single authority for that question — the vocabulary and the
+    # host-override precedence live there, not here. This line used to compare the literal "off"
+    # while `get_sandbox` accepted six spellings, so `WISP_SANDBOX=false` meant "off" to REST and
+    # "auto" to this path. One variable, two meanings; now one function.
+    if sandbox_mode() == "off":
         sandbox = get_sandbox(str(cwd))
         # It IS the provider — read name/reason from it directly. Going through `route()` here
         # returned None (NoopSandbox has no `route`), which lost `reason="explicit"` and made an
