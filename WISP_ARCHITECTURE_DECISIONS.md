@@ -7542,6 +7542,93 @@ The agent in that run was a stub standing in for a live model turn, which needs 
 
 ---
 
+## ADR-0075 — The memory budget is one declared quantity, owned by the store and read by every renderer
+
+**Status:** PROVISIONAL — the ownership is decided; the quantity is not.
+**Phase:** Corpus maintenance (post-13), from the memory-budget review of 2026-10-01
+**Evidence:** read from the tree at `60462b0`. **Four producers of one concept, three disagreeing caps, and
+two different precedence rules over the same facts:**
+
+- `stateless._build_memory_block` → `format_cross_session_block` (`wisp/core/stateless.py:1602`, `:2626`)
+  renders the system prompt's `## Cross-Session Memory`. Its caps are **literals inside `_emit`** —
+  `here[:15]`, `global` 15, `elsewhere` 5 — so no constant names them and none is greppable as policy.
+- `boot.BootContextAssembler.memory_bullets` (`wisp/core/context/boot.py:165`) renders the boot seed's
+  `## Active memory`, capped at `MEMORY_BULLETS = 8`.
+- `memory._evict_one` (`wisp/memory.py:487`) caps the **store** at `_MAX_FACTS = 100`, evicting by LRU with
+  a 30-day recency bonus for important facts, and discloses the eviction only to the log
+  (`logger.info("Evicted LRU fact: …")`, `:534`) — never to the model.
+- `context_assembler._fit_sections` (`wisp/context_assembler.py:598`) caps the **assembled prompt** at
+  6,000 tokens, and is the only one of the four that discloses what it dropped
+  (`[SECTION TRUNCATED: …]` plus the omitted-sections footer). `memory_block` is its one
+  truncate-rather-than-drop section.
+- A fifth renderer, `memory.format_memory_block` (`wisp/memory.py:435`), takes `include_all=True`, i.e.
+  **no cap at all**, and has **no production caller** — only `tests/test_memory.py`.
+
+**The two prompt-facing renderers disagree about precedence.** `format_cross_session_block` puts this
+workspace first and caps it separately (15/15/5). `memory_bullets` concatenates workspace then global,
+sorts **purely by `added`**, and takes the newest 8. The same fact can therefore be present in the system
+prompt and absent from the boot seed — decided by recency, with no rule saying which renderer wins.
+
+### Decision
+
+**R1 — One declared quantity.** The budget is a single named constant that every renderer reads and none
+redefines. The four current caps stop being independent literals.
+
+**R2 — The store owns it.** Eviction happens at write time in `memory.py`, extending the idiom `_MAX_FACTS`
+already establishes, so no fact reaches a renderer that cannot fit. The renderers keep no budget of their
+own.
+
+**R3 — Disclosure is a fact with provenance, never a task.** Where a cap bites, the block states what was
+omitted and on what grounds (`d8a7d45`'s rule). **No injected directive tells the model to repair the
+store.** A directive makes model compliance load-bearing for correctness, and a headless or autonomous turn
+cannot satisfy it — the store would stay broken with nothing reporting the failure.
+
+**R4 — The budget has a committed guard, not only a runtime truncation** (F75: an instrument that cannot be
+committed is not a re-runnable measurement).
+
+### Rejected alternatives
+
+- **The host-harness mechanism** — truncate the injected block, then attach an *"ACTION REQUIRED"*
+  directive telling the agent to consolidate the file. Rejected on three grounds. It creates a **second
+  authority over one fact** (the file's own stated cap and the harness's enforced cap), which is precisely
+  the drift that motivates this ADR: in the observed instance the file declared `~8 KB`, the harness
+  truncated at 12,023 bytes, and neither number was the other. It places an **imperative in the context at
+  instruction priority** — the surface ADR-0031/T1 classifies and refuses. And it makes correctness a
+  function of model compliance rather than of the harness.
+- **A fifth cap.** Four already exist. A fifth takes the count to five without closing the contradiction
+  between the four.
+- **Letting the model choose what to prune.** `_evict_one`'s LRU-with-importance-bonus is deterministic and
+  host-owned. Making pruning a model decision would grant the model authority over a durable record.
+
+### Consequences
+
+- **Nothing changes while this is `PROVISIONAL`.** This ADR edits no code.
+- `CURRENT_AUTHORITIES.md`'s header states the ADR range read from this log (`:15`), so this append
+  **stales that register**; it must be regenerated **after** this change is committed, per BOUNDARIES §6.
+
+### Known limits
+
+- **The quantity is not decided.** R1 names the property — one declared quantity — and not the unit. The
+  recommendation is **tokens**, the only unit the provider bills and the only one `_fit_sections` already
+  measures. The counter-argument is that the store cannot know a future prompt's budget, so a token cap at
+  write time is a guess about a number it does not own. Evidence that would settle it: the distribution of
+  rendered block sizes, measured against the 6,000-token assembly budget.
+- **R3's precedence rule is stated, not implemented.** The boot seed's recency ordering still wins at
+  turn 0.
+- **`format_memory_block`'s dead status is recorded, not repaired.** Deleting it is its own change —
+  reachability is a separate decision from budgeting.
+- **Three pre-existing stale range claims are deliberately not touched.** `CONTEXT.md:288` reads
+  `… ADR-0064` and `CONTEXT.md:2557` reads `… ADR-0068`, both already stale at 74; `CLAUDE.md:19`
+  enumerates the last five ADRs. This is **F97's class** — prose the pin guard cannot see. `CONTEXT.md` is
+  line-pinned (§5) and `CLAUDE.md` is the operator's uncommitted work (§4), so neither is repaired here.
+  Recorded and deferred rather than opportunistically fixed.
+
+**Reversal condition:** if the assembly layer is measured to need a quantity the store cannot compute, R2
+reopens and the budget moves to dispatch time. The finding itself — four owners, two precedence rules —
+stands either way.
+
+---
+
 ## Decision index
 
 | ADR | Title | Phase | Status |
@@ -7620,3 +7707,4 @@ The agent in that run was a stub standing in for a live model turn, which needs 
 | 0072 | The model states intents and reasons over deterministic instruments; the platform compiles intents into changes | The network agent, N2 (reasoning) | ACCEPTED (**R1** intents in, gNMI ops out, refusing intents that do not fit; nothing bypasses what-if/policy/apply. **R2** instruments report their own confidence. **R3** an optic is blamed only on its physical signature. **R4** disabling a BGP neighbor is declared intent. **R5** roles are wisp skills; precedence safety > availability > performance > efficiency; escalation triggers.) |
 | 0073 | The platform is one daemon; alerts become incidents that dispatch headless agent turns by autonomy tier | The network agent, N6 (closed loop) | ACCEPTED (**R1** one `serve` platform, wisp via `mcp --connect`. **R2** separate agent and operator tokens. **R3** debounced incidents, adoption of open alerts, cooldown. **R4** observe / diagnose / propose (wisp read_only) / act; the platform's gates never move.) |
 | 0074 | No approver, no yes: REST follows the agent path; the denial taxonomy gains NO_APPROVER and BUDGET_EXCEEDED by decision | Repair of local main | ACCEPTED (**R1** one predicate `approval_needed` on the agent path and REST. **R2** two statuses added by decision; ADR-0052's envelope route unchanged. **R3** every denial status is classified and terminal. **R4** the pin changes only by a recorded decision. Known limit: the prompt's denial list is not updated.) |
+| 0075 | The memory budget is one declared quantity, owned by the store and read by every renderer | Corpus maintenance (post-13) | PROVISIONAL (**R1** one declared quantity; the four current caps stop being independent literals. **R2** the store owns it, at write time, extending `_MAX_FACTS`'s idiom. **R3** disclosure is a fact with provenance, never a directive — the host-harness *"ACTION REQUIRED"* mechanism rejected on three grounds. **R4** a committed guard, not only a runtime truncation. **The quantity is undecided** — tokens recommended, and the evidence that would settle it named. Records four pre-existing stale range claims (F97's class) and repairs none.) |
