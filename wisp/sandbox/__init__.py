@@ -137,6 +137,26 @@ def docker_run_args(container_name: str, workspace: str, image: str,
     ]
 
 
+#: The container the agent's `run_bash` executes in.
+#:
+#: **It must have a Python that can run the project.** The default was ``ubuntu:22.04``, which ships
+#: no interpreter at all — so inside the sandbox `python3` was *command not found* while the prompt
+#: advertised ``Python: 3.12.8`` and suggested ``python -m pytest tests/ -x -q``. The suggested
+#: verification command therefore could not run in the environment the agent actually ran it in: the
+#: loop could never close, and the model read "command not found" as a failure of its own change
+#: rather than of the environment it was handed.
+#:
+#: ``python:3.11-slim`` satisfies the project's own ``requires-python = ">=3.11"`` and carries pip
+#: and bash. It has no git — neither did ``ubuntu:22.04``, so nothing regresses. Override with
+#: ``WISP_SANDBOX_IMAGE`` when a project needs a different toolchain.
+_DEFAULT_SANDBOX_IMAGE = "python:3.11-slim"
+
+
+def sandbox_image() -> str:
+    """The image for the Docker sandbox — ``WISP_SANDBOX_IMAGE`` or the default."""
+    return os.environ.get("WISP_SANDBOX_IMAGE", "").strip() or _DEFAULT_SANDBOX_IMAGE
+
+
 class DockerSandbox(SandboxProvider):
     """Runs commands inside a Docker container with resource limits.
 
@@ -144,10 +164,10 @@ class DockerSandbox(SandboxProvider):
     Falls back gracefully if Docker is unavailable.
     """
 
-    def __init__(self, workspace: str, image: str = "ubuntu:22.04",
+    def __init__(self, workspace: str, image: str | None = None,
                  memory: str = "2g", cpus: str = "2"):
         self.workspace = os.path.abspath(workspace)
-        self.image = image
+        self.image = image or sandbox_image()
         self.memory = memory
         self.cpus = cpus
         workspace_id = hashlib.sha256(
@@ -307,7 +327,9 @@ class NoopSandbox(SandboxProvider):
         # Parity with the tool path: LLM-generated commands must not see
         # credential env vars even when running unconfined on the host.
         from wisp.tools._utils_env import credential_free_env
-        env, _stripped = credential_free_env()
+        # Same as the PTY tier: the project's virtualenv first, so `python -m pytest` (the
+        # command the prompt suggests) resolves to the interpreter that has pytest.
+        env, _stripped = credential_free_env(workspace=self.workspace)
         workdir = resolve_sandbox_cwd(self.workspace, cwd)
         if workdir is None:
             return (-1, "", f"cwd escapes workspace: {cwd!r}")

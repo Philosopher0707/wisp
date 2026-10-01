@@ -98,7 +98,9 @@ class PtySandbox(SandboxProvider):
         danger = check_dangerous_command(command)
         if danger:
             return (-1, "", f"Dangerous command blocked: {danger}")
-        env, _stripped = credential_free_env()
+        # The workspace's virtualenv goes on PATH: the agent's `python`/`pytest` must be the
+        # PROJECT's, or the command the prompt suggests cannot run in the env it runs in.
+        env, _stripped = credential_free_env(workspace=self.workspace)
         workdir = resolve_sandbox_cwd(self.workspace, cwd)
         if workdir is None:
             return (-1, "", f"cwd escapes workspace: {cwd!r}")
