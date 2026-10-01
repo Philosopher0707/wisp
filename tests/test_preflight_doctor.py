@@ -348,3 +348,64 @@ class TestTheBuildSequenceCheck:
         result = self._run(self.REPO)
         assert result.latency_ms < 100, (
             f"took {result.latency_ms:.0f}ms — the check must not shell out")
+
+
+class TestTheDeepSandboxCheck:
+    """The slow half of `build_sequence`, asked for with `/doctor deep`.
+
+    `build_sequence` judges the sandbox image by *name*, because the pre-flight gives every check
+    100 ms and a Docker call costs seconds. A name catches a bare-OS base and nothing else: an image
+    called `wisp-sandbox:py312` could exist and still lack Python, lack the runner, or not exist.
+    This actually runs it. It is a **separate function**, not a check inside `run_preflight` — a
+    check that cannot finish in the budget is reported as "timed out", a permanent WARN that says
+    nothing about the real state.
+    """
+
+    @staticmethod
+    def _has_docker():
+        import shutil
+
+        return shutil.which("docker") is not None
+
+    def test_a_missing_image_fails(self):
+        """Runs in ~a second and needs no network, so it is a real check rather than a live test."""
+        import shutil
+
+        if not shutil.which("docker"):
+            pytest.skip("docker not on PATH")
+        from wisp.core.doctor import check_sandbox_image_deep
+
+        result = asyncio.run(check_sandbox_image_deep(image="wisp-nonexistent-image:zzz"))
+        assert result.status is CheckStatus.FAIL
+        assert result.details["returncode"] != 0
+
+    def test_an_image_with_python_but_no_runner_fails(self):
+        """The case a *name* cannot catch, and the reason this function exists.
+
+        `python:3.12-slim` is exactly what the code default is: it has an interpreter and no pytest.
+        `build_sequence` sees "python" in the name and is content. This runs it and finds the real
+        state — the prompt's suggested `python -m pytest` cannot run there.
+        """
+        import shutil
+
+        if not shutil.which("docker"):
+            pytest.skip("docker not on PATH")
+        from wisp.core.doctor import check_sandbox_image_deep
+
+        result = asyncio.run(check_sandbox_image_deep(image="python:3.12-slim", timeout_s=120))
+        if "docker" in result.message and "not on PATH" in result.message:
+            pytest.skip("docker daemon unavailable")
+        assert result.details["image"] == "python:3.12-slim"
+        assert result.status is CheckStatus.FAIL
+        assert "pytest" in result.message
+
+    def test_it_reports_the_image_it_checked(self):
+        """The name-based check cannot say *which* image answered; this one must."""
+        import shutil
+
+        if not shutil.which("docker"):
+            pytest.skip("docker not on PATH")
+        from wisp.core.doctor import check_sandbox_image_deep
+
+        result = asyncio.run(check_sandbox_image_deep(image="wisp-nonexistent-image:zzz"))
+        assert result.details["image"] == "wisp-nonexistent-image:zzz"

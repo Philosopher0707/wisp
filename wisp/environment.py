@@ -149,7 +149,10 @@ def format_environment_block(snap: EnvironmentSnapshot) -> str:
         machine = f" ({snap.machine})" if snap.machine else ""
         lines.append(f"- OS: {snap.os_name}{version}{machine}")
     if snap.python_version:
-        lines.append(f"- Python: {snap.python_version}")
+        # Labelled "host" on purpose. `run_bash` and `run_tests` execute in the sandbox container,
+        # which has its own interpreter — an unqualified "Python: 3.12.8" reads as "the Python you
+        # will get", and that is exactly what it is not.
+        lines.append(f"- Python (host): {snap.python_version}")
     if snap.shell:
         lines.append(f"- shell: {snap.shell}")
     if snap.git_branch:
@@ -161,4 +164,9 @@ def format_environment_block(snap: EnvironmentSnapshot) -> str:
         lines.append("- suggested verification commands:")
         for cmd in snap.verification_commands:
             lines.append(f"  - `{cmd}`")
+    # The executing tools do not run here. Said once, plainly, because the whole line above is a
+    # statement about the host — and an agent that reads it as "my environment" will run a command
+    # that does not exist where it runs.
+    lines.append("- `run_bash` and `run_tests` execute in a sandbox container when one is available; "
+                 "its interpreter and toolchain can differ from the above.")
     return "\n".join(lines)

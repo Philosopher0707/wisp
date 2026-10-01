@@ -146,10 +146,12 @@ def docker_run_args(container_name: str, workspace: str, image: str,
 #: loop could never close, and the model read "command not found" as a failure of its own change
 #: rather than of the environment it was handed.
 #:
-#: ``python:3.11-slim`` satisfies the project's own ``requires-python = ">=3.11"`` and carries pip
-#: and bash. It has no git — neither did ``ubuntu:22.04``, so nothing regresses. Override with
-#: ``WISP_SANDBOX_IMAGE`` when a project needs a different toolchain.
-_DEFAULT_SANDBOX_IMAGE = "python:3.11-slim"
+#: ``python:3.12-slim`` carries pip and bash and satisfies the project's ``requires-python``. It is
+#: pinned to the **same minor as the project's own interpreter**: the prompt advertises a Python
+#: version, and a sandbox on a different one makes that statement false for the environment
+#: ``run_bash`` actually executes in. It has no git — neither did ``ubuntu:22.04``, so nothing
+#: regresses. Override with ``WISP_SANDBOX_IMAGE`` when a project needs a different toolchain.
+_DEFAULT_SANDBOX_IMAGE = "python:3.12-slim"
 
 
 def sandbox_image() -> str:

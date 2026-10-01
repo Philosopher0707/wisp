@@ -11,7 +11,10 @@
 #  3. **It must NOT carry a copy of the source.** The real source arrives through
 #     `-v <workspace>:/workspace` at run time and wins on `sys.path`; a stale copy baked in here
 #     would shadow it. Hence deps-only, no `pip install -e .`.
-FROM python:3.11-slim
+# Pinned to the same minor as the project's own interpreter: the prompt advertises a Python
+# version, and a sandbox on a different one makes that statement false for the environment the
+# agent's `run_bash` actually executes in.
+FROM python:3.12-slim
 
 # The project's own test suite shells out to `git` (e.g. `collect_environment` reads the branch
 # and commit), so the sandbox needs it — without it those tests fail inside the container for a

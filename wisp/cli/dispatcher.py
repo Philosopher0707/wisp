@@ -276,7 +276,7 @@ class Dispatcher:
             ctx.emit("\n".join(lines))
             return CommandResult.CONSUMED
 
-        @self.register("doctor", "Show pre-flight / subsystem health", usage="/doctor")
+        @self.register("doctor", "Show pre-flight / subsystem health", usage="/doctor [deep]")
         def _doctor(ctx: ReplContext, args: str) -> CommandResult:
             report = ctx.runtime.get_doctor_report()
             if isinstance(report, dict):
@@ -286,6 +286,26 @@ class Dispatcher:
                     ctx.emit(f"  {check}")
             else:
                 ctx.emit(str(report))
+
+            if (args or "").strip().lower() in ("deep", "--deep", "-d"):
+                # The slow half. `build_sequence` judges the sandbox image by *name* because the
+                # pre-flight budget is 100 ms per check; this actually runs it. It cannot be a check
+                # inside `run_preflight` — one that cannot finish in the budget is reported as
+                # "timed out", a permanent WARN that says nothing about the real state.
+                from wisp.async_utils import run_sync_coro
+                from wisp.core.doctor import check_sandbox_image_deep
+
+                ctx.emit("")
+                ctx.emit("Deep checks — these run Docker, so they take seconds:")
+                workspace = (ctx.session or {}).get("workspace") if isinstance(ctx.session, dict) else None
+                try:
+                    result = run_sync_coro(check_sandbox_image_deep(workspace))
+                    ctx.emit(f"  {result.symbol} {result.name}: {result.message}")
+                    for key in ("image", "python", "pytest", "git"):
+                        if result.details.get(key):
+                            ctx.emit(f"      {key}: {result.details[key]}")
+                except Exception as exc:  # a deep check must never take the REPL down
+                    ctx.emit(f"  deep check could not run: {exc}")
             return CommandResult.CONSUMED
 
         @self.register("provider", "Show active provider and model", usage="/provider")

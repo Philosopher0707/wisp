@@ -70,6 +70,18 @@ class TestTheSandboxCanRunTheProjectsTests:
             "a bare OS image has no interpreter, so the suggested verification command cannot run")
         assert "python" in _DEFAULT_SANDBOX_IMAGE
 
+    def test_the_default_image_matches_the_projects_python_minor(self):
+        """The prompt advertises a Python version. A sandbox on a different minor makes that
+        statement false for the environment the executing tools actually run in — the agent reads
+        `Python: 3.12.8`, then `run_bash` gives it whatever the image has."""
+        import sys
+
+        from wisp.sandbox import _DEFAULT_SANDBOX_IMAGE
+
+        minor = ".".join(sys.version.split()[0].split(".")[:2])
+        assert minor in _DEFAULT_SANDBOX_IMAGE, (
+            f"the sandbox default is {_DEFAULT_SANDBOX_IMAGE!r} but this project runs {minor}")
+
     def test_the_image_is_configurable(self, monkeypatch):
         import wisp.sandbox as sandbox
 

@@ -840,6 +840,103 @@ async def _check_build_sequence(workspace: str | Path | None = None) -> CheckRes
         return CheckResult(name, commit, CheckStatus.FAIL, f"unexpected: {e}", latency, details)
 
 
+async def check_sandbox_image_deep(
+    workspace: str | Path | None = None,
+    image: str | None = None,
+    timeout_s: float = 30.0,
+) -> CheckResult:
+    """Actually **run** the sandbox image and ask it for an interpreter and a test runner.
+
+    The fast `build_sequence` check judges the image by its name, because `run_preflight` gives every
+    check a 100 ms budget and a Docker call costs seconds. A name is enough to catch a bare-OS base
+    and nothing else: an image called ``wisp-sandbox:py312`` could exist and still lack Python, or
+    lack the runner the prompt suggests, or not exist at all.
+
+    **A separate function, not a check inside `run_preflight`.** A check that cannot finish inside
+    the budget is reported as *"timed out"* — a permanent WARN that says nothing about the real
+    state. This is the slow half, run only when asked (`/doctor deep`).
+    """
+    import asyncio
+    import shutil
+
+    t0 = time.monotonic()
+    name = "sandbox_image_deep"
+    commit = "img-deep"
+    details: dict[str, Any] = {}
+    try:
+        from wisp.sandbox import sandbox_image
+
+        img = image or sandbox_image()
+        details["image"] = img
+
+        docker = shutil.which("docker")
+        details["docker"] = docker
+        if not docker:
+            return CheckResult(name, commit, CheckStatus.WARN,
+                               "docker is not on PATH — cannot verify the image",
+                               (time.monotonic() - t0) * 1000, details)
+
+        # Probe each binary separately and tag the output, so a failure names *which* tool is
+        # missing rather than reporting an exit code. The first version chained them with `&&` and
+        # said "failed (exit 1)" while the cause — `No module named pytest` — sat unread in stderr.
+        probe = ("echo \"PY=$(python3 --version 2>&1)\"; "
+                 "echo \"PT=$(python3 -m pytest --version 2>&1)\"; "
+                 "echo \"GT=$(git --version 2>&1)\"")
+        proc = await asyncio.create_subprocess_exec(
+            docker, "run", "--rm", "--network", "none", "--entrypoint", "sh", img, "-c", probe,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        try:
+            out_b, err_b = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
+        except asyncio.TimeoutError:
+            proc.kill()
+            return CheckResult(name, commit, CheckStatus.FAIL,
+                               f"the image did not answer within {timeout_s:.0f}s",
+                               (time.monotonic() - t0) * 1000, details)
+
+        out = (out_b or b"").decode("utf-8", "replace").strip()
+        err = (err_b or b"").decode("utf-8", "replace").strip()
+        details["stdout"] = out
+        details["stderr"] = err[:400]
+        details["returncode"] = proc.returncode
+        latency = (time.monotonic() - t0) * 1000
+
+        if proc.returncode != 0 and not out:
+            return CheckResult(
+                name, commit, CheckStatus.FAIL,
+                f"could not run {img} (exit {proc.returncode}) — the agent's run_bash would fail "
+                f"the same way: {(err or 'no output')[:160]}",
+                latency, details)
+
+        found = {}
+        for line in out.splitlines():
+            key, _, value = line.partition("=")
+            if key in ("PY", "PT", "GT"):
+                found[key] = value.strip()
+        details["python"] = found.get("PY", "")
+        details["pytest"] = found.get("PT", "")
+        details["git"] = found.get("GT", "")
+
+        missing = []
+        if not details["python"].startswith("Python"):
+            missing.append(f"python3 ({details['python'][:80] or 'absent'})")
+        # `.startswith("pytest")`, not `"pytest" in ...`: a *missing* runner answers
+        # `/usr/local/bin/python3: No module named pytest`, which contains the word. Checking for the
+        # word passed an image that has no pytest at all.
+        if not details["pytest"].lower().startswith("pytest"):
+            missing.append(f"the test runner ({details['pytest'][:80] or 'absent'})")
+        if missing:
+            return CheckResult(name, commit, CheckStatus.FAIL,
+                               f"{img} cannot run the prompt's suggested verification command — "
+                               f"missing {', '.join(missing)}",
+                               latency, details)
+        return CheckResult(name, commit, CheckStatus.OK,
+                           f"{details['python']} · {details['pytest']}", latency, details)
+    except Exception as e:
+        logger.debug("sandbox_image_deep check failed: %s", e, exc_info=True)
+        return CheckResult(name, commit, CheckStatus.FAIL, f"unexpected: {e}",
+                           (time.monotonic() - t0) * 1000, details)
+
+
 async def run_preflight(
     workspace: str | Path | None = None,
     config: Any | None = None,
