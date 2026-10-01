@@ -1141,3 +1141,42 @@ class TestAutonomousApproveOwnsNoDangerCheck:
         src = inspect.getsource(cli_mod.CLITransport.approve)
         assert "check_dangerous_command" not in src
         assert "wisp.tools" not in src
+
+
+# ═══════════════════════════════════════════════════════════════════
+# diff_max_lines: the terminal diff cap is config-driven (0 = unlimited).
+# The transport reads it via getattr-with-default so configs and test
+# doubles predating the setting keep the historical cap of 50.
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestDiffMaxLines:
+    @staticmethod
+    def _write_result(n_lines=60):
+        diff = "\n".join(f"+{i} line{i}" for i in range(1, n_lines + 1))
+        return json.dumps({
+            "status": "ok",
+            "data": f"✓ Wrote {n_lines} bytes to x.py",
+            "metadata": {"path": "x.py", "diff": diff},
+        })
+
+    def test_default_caps_diff_at_50(self):
+        t = CLITransport(_MockRuntime())
+        out = t._render_tool_result("write_file", self._write_result(), 7.0, 100)
+        assert "more lines" in out
+
+    def test_zero_renders_full_diff(self):
+        from types import SimpleNamespace
+
+        t = CLITransport(_MockRuntime(), config=SimpleNamespace(diff_max_lines=0))
+        out = t._render_tool_result("write_file", self._write_result(), 7.0, 100)
+        assert "more lines" not in out
+        assert "line60" in out
+
+    def test_explicit_cap_is_honoured(self):
+        from types import SimpleNamespace
+
+        t = CLITransport(_MockRuntime(), config=SimpleNamespace(diff_max_lines=10))
+        out = t._render_tool_result("write_file", self._write_result(), 7.0, 100)
+        assert "more lines" in out
+        assert "line60" not in out

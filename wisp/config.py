@@ -122,6 +122,13 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
         "description": "Show full tool output (when false, collapse to one-liners)",
         "env_var": "WISP_SHOW_TOOL_OUTPUT",
     },
+    "diff_max_lines": {
+        "type": int,
+        "default": 50,
+        "min": 0,
+        "description": "Max diff lines rendered in the terminal for write/edit tools (0 = unlimited)",
+        "env_var": "WISP_DIFF_MAX_LINES",
+    },
     "compact_mode": {
         "type": bool,
         "default": False,
@@ -772,6 +779,7 @@ class WispConfig:
     auto_approve: bool
     show_thinking: bool
     show_tool_output: bool
+    diff_max_lines: int
     compact_mode: bool
     verification_loop: bool
 
@@ -914,6 +922,12 @@ class WispConfig:
         # Show full tool output (when false, collapse to one-liners)
         object.__setattr__(self, "show_tool_output",
             _parse_bool(get_setting("show_tool_output", "true"), True)
+        )
+        # Max diff lines in terminal for write/edit tools (0 = unlimited).
+        # Default 50 preserves the historical cap; the transport reads it
+        # via getattr(config, "diff_max_lines", 50) so older doubles keep it.
+        object.__setattr__(self, "diff_max_lines",
+            _parse_int(get_setting("diff_max_lines", "50"), 50, 0)
         )
         # Minimal rendering mode — no boxes, flat output, good for pipes/narrow terminals
         object.__setattr__(self, "compact_mode",
