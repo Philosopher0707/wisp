@@ -1,4 +1,4 @@
-"""Tests for wisp.core.doctor — 6/6 pre-flight checks must pass.
+"""Tests for wisp.core.doctor — 7/7 pre-flight checks must pass.
 
 Exercises the doctor end-to-end via `run_preflight_sync`, plus targeted
 coverage of each subsystem check, the report aggregator, and the
@@ -31,7 +31,7 @@ from wisp.core.doctor import (
 # ── Top-level: 6/6 must be healthy ──────────────────────────────────
 
 
-class TestPreflightSixOfSix:
+class TestPreflightAllChecksPass:
     def test_all_five_checks_pass(self):
         report = run_preflight_sync(timeout_s=2.0)
         statuses = {c.name: c.status for c in report.checks}
@@ -41,7 +41,7 @@ class TestPreflightSixOfSix:
                 f"{name} did not pass: "
                 f"{next(c.message for c in report.checks if c.name == name)}"
             )
-        assert report.passed == 6
+        assert report.passed == 7
         assert report.failed == 0
         assert report.warnings == 0
         assert report.healthy is True
@@ -49,6 +49,7 @@ class TestPreflightSixOfSix:
     def test_check_names_contract(self):
         assert CHECK_NAMES == (
             "path_environment",
+            "build_sequence",
             "stream_hygiene",
             "tool_cache",
             "autonomous_policy",
@@ -59,7 +60,7 @@ class TestPreflightSixOfSix:
     def test_banner_healthy(self):
         report = run_preflight_sync(timeout_s=2.0)
         assert report.banner == format_banner(report)
-        assert "6/6" in report.banner
+        assert "7/7" in report.banner
         assert report.banner.startswith("✓")
 
     def test_detailed_contains_all_sections(self):
@@ -71,10 +72,10 @@ class TestPreflightSixOfSix:
     def test_report_to_dict_is_jsonable(self):
         report = run_preflight_sync(timeout_s=2.0)
         d = report.to_dict()
-        assert d["passed"] == 6
-        assert d["total"] == 6
+        assert d["passed"] == 7
+        assert d["total"] == 7
         assert d["healthy"] is True
-        assert len(d["checks"]) == 6
+        assert len(d["checks"]) == 7
 
     def test_last_report_stored(self):
         report = run_preflight_sync(timeout_s=2.0)
@@ -229,10 +230,10 @@ class TestBanner:
 class TestRunnerShielding:
     def test_timeout_budget_does_not_drop_results(self):
         report = run_preflight_sync(timeout_s=0.001)
-        assert report.total == 6
+        assert report.total == 7
         # Even with a 1 ms budget the structure survives; some checks may
-        # legitimately complete that fast, but we never get fewer than 6.
-        assert len(report.checks) == 6
+        # legitimately complete that fast, but we never get fewer than 7.
+        assert len(report.checks) == 7
 
     def test_total_duration_under_generous_budget(self):
         report = run_preflight_sync(timeout_s=2.0)
@@ -277,3 +278,73 @@ class TestNamespaceAlignment:
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+class TestTheBuildSequenceCheck:
+    """The chain that must hold before the agent can run the command its own prompt suggests.
+
+    Every link was broken on 2026-10-01 and each produced the same symptom — an agent that could not
+    verify its own work: no virtualenv; a `python` that resolved to a host interpreter with no pytest;
+    a sandbox image (`ubuntu:22.04`) with no interpreter at all, while `run_bash` executes *inside*
+    that container.
+    """
+
+    from pathlib import Path as _Path
+
+    REPO = _Path(__file__).resolve().parents[1]
+
+    @staticmethod
+    def _run(workspace, image=None):
+        import os
+
+        from wisp.core.doctor import _check_build_sequence
+
+        had = "WISP_SANDBOX_IMAGE" in os.environ
+        previous = os.environ.get("WISP_SANDBOX_IMAGE")
+        if image is not None:
+            os.environ["WISP_SANDBOX_IMAGE"] = image
+        try:
+            return asyncio.run(_check_build_sequence(str(workspace)))
+        finally:
+            if image is not None:
+                if had:
+                    os.environ["WISP_SANDBOX_IMAGE"] = previous
+                else:
+                    os.environ.pop("WISP_SANDBOX_IMAGE", None)
+
+    def test_it_is_registered_and_runs(self):
+        assert "build_sequence" in CHECK_NAMES
+        from wisp.core.doctor import run_preflight_sync
+
+        report = run_preflight_sync(timeout_s=2.0)
+        assert any(c.name == "build_sequence" for c in report.checks)
+
+    def test_ok_for_a_workspace_with_a_venv(self):
+        result = self._run(self.REPO, image="wisp-sandbox:py311")
+        assert result.status is CheckStatus.OK
+        assert result.details["python_is_project_venv"] is True
+        assert result.details["pytest"]
+
+    def test_a_bare_os_image_warns(self):
+        """`run_bash` executes inside the container, so a bare base means no interpreter at all."""
+        result = self._run(self.REPO, image="ubuntu:22.04")
+        assert result.status is CheckStatus.WARN
+        assert result.details["sandbox_image_is_bare_os"] is True
+
+    def test_a_project_image_is_not_flagged_as_bare(self):
+        """The check matches the *repository* part of the reference, so an image built from a bare
+        base under a project name is not flagged — and a name-based "contains python" test would
+        have missed `wisp-sandbox:py311` entirely."""
+        result = self._run(self.REPO, image="wisp-sandbox:py311")
+        assert result.details["sandbox_image_is_bare_os"] is False
+
+    def test_no_venv_fails(self, tmp_path):
+        result = self._run(tmp_path)
+        assert result.status is CheckStatus.FAIL
+        assert "no .venv" in result.message
+
+    def test_it_stays_inside_the_preflight_budget(self):
+        """Static on purpose: asking Docker costs seconds, and a check over the 100 ms budget is
+        reported as *timed out* — a permanent WARN that says nothing about the real state."""
+        result = self._run(self.REPO)
+        assert result.latency_ms < 100, (
+            f"took {result.latency_ms:.0f}ms — the check must not shell out")

@@ -141,6 +141,7 @@ class DoctorReport:
 
 CHECK_NAMES: Final[tuple[str, ...]] = (
     "path_environment",
+    "build_sequence",
     "stream_hygiene",
     "tool_cache",
     "autonomous_policy",
@@ -737,12 +738,114 @@ async def _check_boot_context() -> CheckResult:
                            f"unexpected: {e}", latency, details)
 
 
+#: Container bases that ship no interpreter. A sandbox built on one of these cannot run the command
+#: the prompt itself suggests (`python -m pytest`) — which is exactly what happened: the default was
+#: `ubuntu:22.04`, so `run_bash` inside the sandbox answered *python3: command not found* while the
+#: prompt advertised a Python and a test command.
+#:
+#: Matched against the repository part of the image reference, so a project image built *from* one of
+#: these (`wisp-sandbox:py311`) is not flagged — a name containing "python" would have missed it, and
+#: one containing "ubuntu" would have flagged it wrongly.
+_BARE_OS_IMAGE_REPOS: Final[tuple[str, ...]] = (
+    "ubuntu", "debian", "alpine", "busybox", "centos", "fedora", "rockylinux", "amazonlinux",
+)
+
+
+async def _check_build_sequence(workspace: str | Path | None = None) -> CheckResult:
+    """The chain that must hold before the agent can run the command its own prompt suggests.
+
+    Every link here was broken on 2026-10-01, and each produced the same symptom — an agent that
+    could not verify its own work:
+
+      1. the project has a virtualenv at all;
+      2. the agent's bash resolves ``python`` to *that* interpreter rather than to whatever the host
+         has (this machine's fallback is a managed 3.13.12, which has no pytest);
+      3. the sandbox image is not a bare OS — `run_bash` executes **inside the container**, so the
+         agent's toolchain is the image's, not the host's;
+      4. the runner the prompt suggests (``python -m pytest``) is resolvable on that PATH.
+
+    **Static on purpose.** `run_preflight` gives every check a 100 ms budget, and asking Docker
+    whether the image really carries an interpreter costs seconds — it would be permanently reported
+    as "timed out". So the image is judged by its repository name, and ``details`` says as much: that
+    is weak evidence, and still enough to catch the failure that actually happened.
+    """
+    t0 = time.monotonic()
+    name = "build_sequence"
+    commit = "build-seq"
+    details: dict[str, Any] = {}
+    try:
+        import shutil
+
+        from wisp.config import safe_getcwd
+        from wisp.tools._utils_env import credential_free_env
+
+        ws = str(Path(workspace).resolve()) if workspace else safe_getcwd()
+        details["workspace"] = ws
+
+        venv_bin = Path(ws) / ".venv" / "bin"
+        if not venv_bin.is_dir():
+            venv_bin = Path(ws) / ".venv" / "Scripts"
+        has_venv = venv_bin.is_dir()
+        details["venv"] = str(venv_bin) if has_venv else None
+
+        env, _ = credential_free_env(workspace=ws)
+        path = env.get("PATH", "")
+        python_bin = shutil.which("python3", path=path) or shutil.which("python", path=path)
+        pytest_bin = shutil.which("pytest", path=path)
+        python_is_project = bool(python_bin and has_venv and python_bin.startswith(str(venv_bin)))
+        details["python"] = python_bin
+        details["pytest"] = pytest_bin
+        details["python_is_project_venv"] = python_is_project
+
+        try:
+            from wisp.sandbox import sandbox_image
+
+            image = sandbox_image()
+        except Exception:
+            image = ""
+        repo = image.split("/")[-1].split(":")[0].lower()
+        bare = repo in _BARE_OS_IMAGE_REPOS
+        details["sandbox_image"] = image
+        details["sandbox_image_is_bare_os"] = bare
+        details["image_judged_by"] = "repository name (Docker costs more than the check budget)"
+
+        latency = (time.monotonic() - t0) * 1000
+        if not has_venv:
+            return CheckResult(name, commit, CheckStatus.FAIL,
+                               "no .venv in the workspace — the agent has no project interpreter",
+                               latency, details)
+        if not python_is_project:
+            return CheckResult(
+                name, commit, CheckStatus.FAIL,
+                f"the agent's bash resolves python to {python_bin or 'nothing'}, not the project's "
+                f"venv — the prompt's own verification command will not run there",
+                latency, details)
+        if bare:
+            return CheckResult(
+                name, commit, CheckStatus.WARN,
+                f"sandbox image {image!r} looks like a bare OS — run_bash executes inside it, so "
+                f"`python -m pytest` may not exist there",
+                latency, details)
+        if not pytest_bin:
+            return CheckResult(name, commit, CheckStatus.WARN,
+                               "pytest is not resolvable on the agent's PATH — the suggested "
+                               "verification command cannot run as written",
+                               latency, details)
+        return CheckResult(name, commit, CheckStatus.OK,
+                           f"python -> {Path(python_bin).parent.name}/ · image {image}",
+                           latency, details)
+    except Exception as e:
+        latency = (time.monotonic() - t0) * 1000
+        logger.debug("build_sequence check failed: %s", e, exc_info=True)
+        return CheckResult(name, commit, CheckStatus.FAIL, f"unexpected: {e}", latency, details)
+
+
 async def run_preflight(
     workspace: str | Path | None = None,
     config: Any | None = None,
     timeout_s: float = 0.1,
 ) -> DoctorReport:
-    """Run all 6 subsystem checks concurrently with 100 ms budget.
+    """Run all 7 subsystem checks concurrently with 100 ms budget.
 
     Args:
         workspace: Workspace to validate (defaults to safe_getcwd).
@@ -758,6 +861,7 @@ async def run_preflight(
 
     checks = [
         _check_path_environment(),
+        _check_build_sequence(workspace),
         _check_stream_hygiene(),
         _check_tool_cache(),
         _check_autonomous_policy(),
