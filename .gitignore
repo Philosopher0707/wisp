@@ -22,7 +22,8 @@ wheels/
 
 # Virtual environments
 venv/
-.venv/
+# `.venv` may be a symlink (to ~/.venvs/wisp); a trailing slash matches only a directory, not a symlink
+.venv
 
 # IDE
 .vscode/
