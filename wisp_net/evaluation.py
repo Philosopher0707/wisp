@@ -31,11 +31,13 @@ import json
 import os
 import re
 import shutil
+import site
 import subprocess
 import sys
 import tempfile
 import time
 from collections.abc import Iterable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -108,6 +110,7 @@ class Score:
     unknown_devices: list[str] = field(default_factory=list)
     wall_s: float = 0.0
     answer: str = ""
+    sample: int = 0
 
 
 def _is_net_call(name: str) -> bool:
@@ -167,14 +170,28 @@ def score(case: Case, result: Mapping[str, Any], model: str = "", wall_s: float 
 _BASE_ENV_KEYS = ("PATH", "LANG", "LC_ALL", "TMPDIR")
 
 
+def check_passthrough(passthrough: Iterable[str], environ: Mapping[str, str] | None = None) -> None:
+    """Refuse a variable that was asked for and is not set. Dropping it silently sends a run with no
+    credentials, and the 401 reads as a model failure. Only names are reported, never values."""
+    source = os.environ if environ is None else environ
+    missing = [name for name in passthrough if name not in source]
+    if missing:
+        raise ValueError("--pass-env names that are not set in the environment or ~/.config/wisp/.env: "
+                         + ", ".join(missing))
+
+
 def hermetic_env(home: Path, passthrough: Iterable[str] = (), environ: Mapping[str, str] | None = None) -> dict[str, str]:
     """A scrubbed environment: no credentials unless a variable is passed on purpose."""
     source = os.environ if environ is None else environ
+    passthrough = list(passthrough)
+    check_passthrough(passthrough, source)
     env = {k: source[k] for k in _BASE_ENV_KEYS if k in source}
     env.update({"HOME": str(home), "WISP_PERMISSION_MODE": "read_only", "WISP_STRICT_ENV": "1"})
+    # A temporary HOME moves `~/.local`, hiding `pip install --user` packages from the interpreter. Pin
+    # the real user base: it is where packages live, not where credentials do.
+    env["PYTHONUSERBASE"] = source.get("PYTHONUSERBASE") or site.getuserbase()
     for name in passthrough:
-        if name in source:
-            env[name] = source[name]
+        env[name] = source[name]
     return env
 
 
@@ -204,9 +221,20 @@ def prepare(root: Path, case: Case, repo: Path = REPO) -> tuple[Path, Path]:
     return home, workspace
 
 
-def run_case(case: Case, *, model: str, provider: str = "ollama", skill: str = "net-orchestrator",
+def run_case(case: Case, *, model: str, provider: str, skill: str = "net-orchestrator",
              wisp_cmd: list[str] | None = None, timeout_s: float = 600.0, passthrough: Iterable[str] = (),
-             keep: Path | None = None) -> Score:
+             keep: Path | None = None, sample: int = 0, label_sample: bool = False) -> Score:
+    """Run one case once. `label_sample` puts the sample number in the kept file names, so repeats of
+    the same case do not overwrite each other."""
+    score_ = _run_case(case, model=model, provider=provider, skill=skill, wisp_cmd=wisp_cmd,
+                       timeout_s=timeout_s, passthrough=passthrough, keep=keep,
+                       stem=f"{case.scenario}.s{sample}" if label_sample else case.scenario)
+    score_.sample = sample
+    return score_
+
+
+def _run_case(case: Case, *, model: str, provider: str, skill: str, wisp_cmd: list[str] | None,
+              timeout_s: float, passthrough: Iterable[str], keep: Path | None, stem: str) -> Score:
     cmd = list(wisp_cmd or ["wisp"])
     with tempfile.TemporaryDirectory(prefix="wisp-net-eval-") as tmp:
         root = Path(tmp)
@@ -225,8 +253,8 @@ def run_case(case: Case, *, model: str, provider: str = "ollama", skill: str = "
         wall = time.monotonic() - started
         if keep is not None:
             keep.mkdir(parents=True, exist_ok=True)
-            (keep / f"{case.scenario}.stdout.json").write_text(done.stdout)
-            (keep / f"{case.scenario}.stderr.txt").write_text(done.stderr)
+            (keep / f"{stem}.stdout.json").write_text(done.stdout)
+            (keep / f"{stem}.stderr.txt").write_text(done.stderr)
         try:
             result = json.loads(done.stdout)
         except ValueError:
@@ -236,19 +264,53 @@ def run_case(case: Case, *, model: str, provider: str = "ollama", skill: str = "
         return score(case, result, model=model, wall_s=wall)
 
 
-def run_eval(cases: Iterable[Case] = CASES, **kwargs: Any) -> list[Score]:
-    return [run_case(case, **kwargs) for case in cases]
+def run_eval(cases: Iterable[Case] = CASES, *, samples: int = 1, jobs: int = 1, **kwargs: Any) -> list[Score]:
+    """Run every case `samples` times, `jobs` at a time. Results come back in case-then-sample order.
+
+    Runs share nothing (each has a private HOME, workspace, MCP server and lab), so they are safe to
+    overlap; the limit is the provider's rate limit and the machine, not the harness.
+    """
+    if samples < 1:
+        raise ValueError(f"samples must be at least 1, got {samples}")
+    if jobs < 1:
+        raise ValueError(f"jobs must be at least 1, got {jobs}")
+    check_passthrough(kwargs.get("passthrough", ()))
+    plan = [(case, n) for case in cases for n in range(samples)]
+
+    def one(item: tuple[Case, int]) -> Score:
+        case, n = item
+        return run_case(case, sample=n, label_sample=samples > 1, **kwargs)
+
+    if jobs == 1:
+        return [one(item) for item in plan]
+    with ThreadPoolExecutor(max_workers=min(jobs, len(plan) or 1)) as pool:
+        return list(pool.map(one, plan))
+
+
+def pass_rates(scores: Iterable[Score]) -> dict[str, tuple[int, int]]:
+    """Per scenario: (passed, total), in first-seen order."""
+    rates: dict[str, tuple[int, int]] = {}
+    for s in scores:
+        passed, total = rates.get(s.scenario, (0, 0))
+        rates[s.scenario] = (passed + s.passed, total + 1)
+    return rates
 
 
 def summarize(scores: list[Score]) -> str:
+    sampled = len({s.sample for s in scores}) > 1
     lines = [f"{'scenario':<20} {'result':<6} {'net calls':>9} {'placeholders':>12} {'wall':>6}  why"]
     for s in scores:
         why = "; ".join(s.reasons)[:110] if s.reasons else ""
-        lines.append(f"{s.scenario:<20} {'PASS' if s.passed else 'FAIL':<6} {s.net_calls:>9} "
+        name = f"{s.scenario}#{s.sample}" if sampled else s.scenario
+        lines.append(f"{name:<20} {'PASS' if s.passed else 'FAIL':<6} {s.net_calls:>9} "
                      f"{s.placeholder_args:>12} {s.wall_s:>5.0f}s  {why}")
     passed = sum(s.passed for s in scores)
-    lines.append(f"\n{passed}/{len(scores)} passed"
-                 + (f" with {scores[0].model}" if scores else ""))
+    if sampled:
+        lines.append("")
+        lines += [f"{name:<20} {ok}/{n}" for name, (ok, n) in pass_rates(scores).items()]
+        lines.append(f"\n{passed}/{len(scores)} runs passed" + (f" with {scores[0].model}" if scores else ""))
+    else:
+        lines.append(f"\n{passed}/{len(scores)} passed" + (f" with {scores[0].model}" if scores else ""))
     return "\n".join(lines)
 
 

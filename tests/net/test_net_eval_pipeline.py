@@ -34,7 +34,7 @@ def wired(monkeypatch):
 
 
 def _run(case=CASE):
-    return ev.run_case(case, model="fake:1b", wisp_cmd=[sys.executable, "-m", "wisp"],
+    return ev.run_case(case, model="fake:1b", provider="ollama", wisp_cmd=[sys.executable, "-m", "wisp"],
                        passthrough=["WISP_OLLAMA_URL", "PYTHONPATH"], timeout_s=180)
 
 

@@ -1,6 +1,7 @@
 ---
 name: net-security-sentinel
 description: Security agent for the wisp-net network (segmentation, ACLs, threat containment). Use when a subtask is about anomalous traffic, a suspected compromised server, zone leakage, or ACL hygiene.
+inline-instructions: true
 ---
 
 # Security sentinel

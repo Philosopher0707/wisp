@@ -1582,7 +1582,8 @@ class WispAgentCore:
             for skill in skills:
                 lines.append(f"- {skill.name}: {skill.description}")
                 if skill.instructions:
-                    lines.append(f"  Instructions: {skill.instructions[:200]}")
+                    shown = skill.instructions if skill.inline_instructions else skill.instructions[:200]
+                    lines.append(f"  Instructions: {shown}")
             return "\n".join(lines)
         except Exception as e:
             logger.debug("Failed to build skills block: %s", e)

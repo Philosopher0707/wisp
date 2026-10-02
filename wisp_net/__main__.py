@@ -65,11 +65,13 @@ def main(argv: list[str] | None = None) -> int:
     inst.add_argument("--dest", default=str(Path.home() / ".agents" / "skills"))
     inst.add_argument("--force", action="store_true", help="replace skills that differ")
     ev = sub.add_parser("eval", help="score a real model against the scenarios (read-only, hermetic)")
-    ev.add_argument("--model", required=True, help="model name as the provider knows it")
-    ev.add_argument("--provider", default="ollama")
+    ev.add_argument("--model", help="model name as the provider knows it (default: WISP_MODEL)")
+    ev.add_argument("--provider", help="provider name (default: WISP_PROVIDER); there is no built-in default")
     ev.add_argument("--scenario", action="append", help="limit to this scenario (repeatable)")
     ev.add_argument("--skill", default="net-orchestrator")
     ev.add_argument("--timeout", type=float, default=600.0, help="seconds per scenario")
+    ev.add_argument("--samples", type=int, default=1, help="runs per scenario; with more than one, pass rates are reported")
+    ev.add_argument("--jobs", type=int, default=1, help="runs in flight at once (mind the provider's rate limit)")
     ev.add_argument("--pass-env", action="append", default=[], metavar="NAME",
                     help="environment variable to forward to wisp, e.g. OPENAI_API_KEY (default: none)")
     ev.add_argument("--wisp-cmd", default="wisp", help="how to start wisp")
@@ -205,17 +207,34 @@ def _install_skills(dest: Path, force: bool) -> int:
 def _eval(args: argparse.Namespace) -> int:
     import shlex
 
+    from wisp.user_env import load_user_env
     from wisp_net import evaluation
 
+    load_user_env()  # ~/.config/wisp/.env; exported variables win; this process only, never the child's HOME
+    provider = args.provider or os.environ.get("WISP_PROVIDER", "")
+    model = args.model or os.environ.get("WISP_MODEL", "")
+    for what, value, flag in (("provider", provider, "--provider"), ("model", model, "--model")):
+        if not value:
+            print(f"no {what}: pass {flag} or set WISP_{what.upper()} in the environment or ~/.config/wisp/.env",
+                  file=sys.stderr)
+            return 2
     known = {c.scenario: c for c in evaluation.CASES}
     wanted = args.scenario or list(known)
     unknown = [name for name in wanted if name not in known]
     if unknown:
         print(f"unknown scenario(s): {', '.join(unknown)}; choose from {', '.join(known)}", file=sys.stderr)
         return 2
-    scores = evaluation.run_eval([known[name] for name in wanted], model=args.model, provider=args.provider,
-                                 skill=args.skill, wisp_cmd=shlex.split(args.wisp_cmd), timeout_s=args.timeout,
-                                 passthrough=args.pass_env, keep=Path(args.keep) if args.keep else None)
+    if args.samples < 1 or args.jobs < 1:
+        print("--samples and --jobs must be at least 1", file=sys.stderr)
+        return 2
+    try:
+        scores = evaluation.run_eval([known[name] for name in wanted], samples=args.samples, jobs=args.jobs,
+                                     model=model, provider=provider, skill=args.skill,
+                                     wisp_cmd=shlex.split(args.wisp_cmd), timeout_s=args.timeout,
+                                     passthrough=args.pass_env, keep=Path(args.keep) if args.keep else None)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     print(evaluation.summarize(scores))
     if args.json:
         Path(args.json).write_text(evaluation.to_json(scores), encoding="utf-8")

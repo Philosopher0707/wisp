@@ -1,6 +1,7 @@
 ---
 name: net-predictive-diagnostics
 description: Hardware and link-health agent for the wisp-net network. Use when a subtask is about optics, receive power, FCS/CRC errors, interface flaps, or predicting a failure before it happens.
+inline-instructions: true
 ---
 
 # Predictive diagnostics

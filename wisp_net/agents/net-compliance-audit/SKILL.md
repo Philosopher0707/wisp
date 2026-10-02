@@ -1,6 +1,7 @@
 ---
 name: net-compliance-audit
 description: Configuration-drift and posture agent for the wisp-net network. Use when a subtask is about drift from the golden config, unauthorized changes, software advisories, or PCI/segmentation compliance.
+inline-instructions: true
 ---
 
 # Compliance audit

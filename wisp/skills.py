@@ -39,7 +39,7 @@ class Skill:
     """A parsed Warp-compatible skill from a SKILL.md file."""
 
     def __init__(self, name: str, description: str, instructions: str, triggers: list[str], file_path: Path,
-                 model_invocable: bool = True):
+                 model_invocable: bool = True, inline_instructions: bool = False):
         self.name = name
         self.description = description
         self.instructions = instructions
@@ -49,6 +49,9 @@ class Skill:
         # model-visible tool advertisement. Authorization is untouched —
         # this never grants anything, only withholds advertisement.
         self.model_invocable = model_invocable
+        # `inline-instructions: true` puts the whole body in the system prompt instead of the first 200
+        # characters. For skills a session cannot load through `skill__*` (read_only refuses it).
+        self.inline_instructions = inline_instructions
 
     def __repr__(self):
         return f"Skill(name='{self.name}', desc='{self.description[:50]}')"
@@ -159,6 +162,8 @@ def parse_skill(file_path: Path) -> Optional[Skill]:
         triggers=triggers,
         file_path=file_path,
         model_invocable=is_model_advertisable(visibility),
+        # A real boolean only, like `disable-model-invocation`: "true", 1 and the rest keep the cut.
+        inline_instructions=meta.get("inline-instructions") is True,
     )
 
 

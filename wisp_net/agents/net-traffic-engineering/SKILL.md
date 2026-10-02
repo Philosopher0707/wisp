@@ -1,6 +1,7 @@
 ---
 name: net-traffic-engineering
 description: Traffic-engineering agent for the wisp-net network (L3 routing, BGP, ECMP). Use when a subtask is about congestion, hot or imbalanced links, discards, or rerouting traffic.
+inline-instructions: true
 ---
 
 # Traffic engineering

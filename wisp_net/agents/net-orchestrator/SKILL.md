@@ -1,6 +1,7 @@
 ---
 name: net-orchestrator
 description: Coordinate autonomous operation of the network through the wisp-net MCP tools (mcp__net__*). Use when asked about the network's health, an alert, an outage, congestion, a security event, compliance, or a change to make on the network. Decomposes the goal, delegates to the domain agents (traffic engineering, security sentinel, predictive diagnostics, compliance audit), resolves their conflicts, and takes changes through verify → policy → apply.
+inline-instructions: true
 ---
 
 # Network orchestrator

@@ -77,12 +77,14 @@ injection and the lab clock (`lab_*` tools). They change the simulated world and
 Every other test here is deterministic. This is the one place a real model drives the real path (`wisp --print`, asking for the `net-orchestrator` skill, over the MCP server, in `read_only` via `WISP_PERMISSION_MODE`, against a lab whose fault has already developed) and is scored against ground truth.
 
 ```bash
-python -m wisp_net eval --model llama3.2:3b                                   # local, no key
+python -m wisp_net eval --provider ollama --model llama3.2:3b                  # local, no key
 python -m wisp_net eval --provider openai --model <name> --pass-env OPENAI_API_KEY --json scores.json
+python -m wisp_net eval --pass-env WISP_API_KEY --pass-env WISP_API_BASE                  # provider, model and key from ~/.config/wisp/.env
 python -m wisp_net eval --model <name> --scenario optic-degradation --keep runs/   # one scenario, keep raw output
+python -m wisp_net eval --model <name> --samples 5 --jobs 3 --json scores.json          # 5 runs per scenario, 3 at a time; prints a pass rate per scenario
 ```
 
-A run **passes** only if it finished without errors, made at least one `mcp__net__*` call (a right answer without evidence is a guess), named every ground-truth fact (device, interface or peer, cause), and never called an actuating tool. It also records placeholder arguments (`device1`, `port1`) and device names that do not exist in the lab. The environment is hermetic: a temporary HOME and workspace, no credentials unless you pass a variable with `--pass-env`, and an MCP server that declares only the read tools as read and has no `--lab-control`. `--warmup` (on `mcp`) starts the lab with the fault already developed so every run sees the same world.
+A run **passes** only if it finished without errors, made at least one `mcp__net__*` call (a right answer without evidence is a guess), named every ground-truth fact (device, interface or peer, cause), and never called an actuating tool. It also records placeholder arguments (`device1`, `port1`) and device names that do not exist in the lab. The environment is hermetic: a temporary HOME and workspace, no credentials unless you pass a variable with `--pass-env`, and an MCP server that declares only the read tools as read and has no `--lab-control`. There is no built-in provider: `--provider` and `--model` come from the flag, else `WISP_PROVIDER` / `WISP_MODEL` (the environment first, then `~/.config/wisp/.env`, which `eval` loads into its own process), else the command refuses. A `--pass-env` name that is set nowhere is refused before anything runs (it used to be dropped, and the run went out with no key); values are never printed. The real user base (`PYTHONUSERBASE`) is pinned so `pip install --user` packages stay importable under the temporary HOME. With `--samples N` kept files are named `<scenario>.s<N>.*`. `--warmup` (on `mcp`) starts the lab with the fault already developed so every run sees the same world.
 
 ### Baseline, 2026-09-29
 
@@ -92,6 +94,8 @@ A run **passes** only if it finished without errors, made at least one `mcp__net
 | `stealth/space-bunny-alpha` (OpenRouter) | **6/6** | 14–65 read calls per scenario (40–186 s). Every answer named the injected fault and cited the tool results behind it. None tried to change anything, and each declined to apply a fix itself (the change window, and confidence below the 0.85 policy threshold). |
 
 That second row is **one run per scenario of one model**, with unpinned sampling: it shows the loop works end to end with a capable model, not how often. The model is an unlisted OpenRouter "stealth" model, so others cannot reproduce it exactly; run the command above with a model you can name and add its row.
+
+**Guidance reaching the model (measured 2026-10-02):** the system prompt shows each skill's description and only the first 200 characters of its body (`wisp/core/stateless.py`, `_build_skills_block`); the full text is behind `skill__<name>`. The five net skills therefore opt in with `inline-instructions: true` (a real YAML boolean, fail-closed like `disable-model-invocation`), which puts their whole body (about 2K tokens together) in the prompt. Other skills keep the cut: removing it everywhere would add tens of thousands of tokens for anyone with many skills.
 
 **A gap this exposed:** `read_only` refuses the `skill__*` loader and every hand-off to other agents (`orchestrate_*`, `spawn`, `fanout`). The orchestrator skill tells a model to do both, so a read-only session (the watcher's diagnose and propose tiers) cannot load the skill's instructions or delegate to the domain agents. The capable model above improvised the same loop with the `mcp__net__*` tools, and the scorer records the refusals without failing the run, but the shipped skills are not actually reaching read-only sessions. Whether `skill__*` should be readable in `read_only` is a permission decision left to the operator.
 
