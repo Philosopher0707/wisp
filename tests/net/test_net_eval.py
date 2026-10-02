@@ -9,6 +9,8 @@ by ordinary tests.
 from __future__ import annotations
 
 import json
+import os
+import shlex
 import sys
 from pathlib import Path
 
@@ -20,6 +22,35 @@ from wisp_net.mcp_server import ACT_TOOLS, LAB_TOOLS, READ_TOOLS
 
 SCENARIOS = Path(ev.__file__).resolve().parent / "scenarios"
 OPTIC = next(c for c in CASES if c.scenario == "optic-degradation")
+
+
+def _cmd(*parts: object) -> str:
+    """`--wisp-cmd` is a string that the CLI splits with shlex, so the argv has to be quoted here.
+
+    An f-string like f"{sys.executable} {stub}" only survives when neither path has a space in it.
+    This repo lives under "iCloud Drive (Archive)", so `sys.executable` alone is enough to break it:
+    shlex.split() cuts the interpreter path at the first space and every stub run dies with
+    FileNotFoundError before it is ever launched.
+    """
+    return shlex.join(str(p) for p in parts)
+
+
+@pytest.fixture(autouse=True)
+def _private_user_env(tmp_path, monkeypatch):
+    """`wisp_net eval` loads `~/.config/wisp/.env` into `os.environ`. Point HOME at a temp dir and give the
+    test its own copy of the environment, so the developer's real file is not read and nothing leaks."""
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+    home = tmp_path / "userhome"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    for name in ("WISP_PROVIDER", "WISP_MODEL", "WISP_API_KEY", "WISP_API_BASE"):
+        monkeypatch.delenv(name, raising=False)
+    return home
+
+
+def _write_dotenv(home, text):
+    (home / ".config" / "wisp").mkdir(parents=True, exist_ok=True)
+    (home / ".config" / "wisp" / ".env").write_text(text)
 
 
 def _result(content, calls=("mcp__net__net_alerts",), ok=True, errors=()):
@@ -183,8 +214,15 @@ def test_the_environment_carries_no_credentials_unless_passed(tmp_path):
     assert env["HOME"] == str(tmp_path) and env["WISP_PERMISSION_MODE"] == "read_only"
     assert env["WISP_STRICT_ENV"] == "1" and env["PATH"] == "/usr/bin"
     assert not [k for k in env if "KEY" in k or "TOKEN" in k or k == "OLLAMA_HOST"]
-    passed = ev.hermetic_env(tmp_path, passthrough=["OPENAI_API_KEY", "NOT_SET"], environ=outer)
-    assert passed["OPENAI_API_KEY"] == "sk-secret" and "ANTHROPIC_API_KEY" not in passed and "NOT_SET" not in passed
+    passed = ev.hermetic_env(tmp_path, passthrough=["OPENAI_API_KEY"], environ=outer)
+    assert passed["OPENAI_API_KEY"] == "sk-secret" and "ANTHROPIC_API_KEY" not in passed
+
+
+def test_a_passthrough_name_that_is_not_set_is_refused_not_dropped(tmp_path):
+    with pytest.raises(ValueError, match="NOT_SET") as err:
+        ev.hermetic_env(tmp_path, passthrough=["OPENAI_API_KEY", "NOT_SET"],
+                        environ={"PATH": "/usr/bin", "OPENAI_API_KEY": "sk-secret"})
+    assert "sk-secret" not in str(err.value) and "OPENAI_API_KEY" not in str(err.value)
 
 
 def test_only_read_tools_are_declared_read(tmp_path):
@@ -247,21 +285,21 @@ def test_the_runner_drives_wisp_hermetically(tmp_path, monkeypatch):
 def test_a_timeout_is_a_failed_run_not_a_crash(tmp_path):
     hang = tmp_path / "hang.py"
     hang.write_text("import time; time.sleep(30)")
-    s = ev.run_case(OPTIC, model="m", wisp_cmd=[sys.executable, str(hang)], timeout_s=1.0)
+    s = ev.run_case(OPTIC, model="m", provider="ollama", wisp_cmd=[sys.executable, str(hang)], timeout_s=1.0)
     assert not s.passed and "timed out" in s.reasons[0]
 
 
 def test_output_that_is_not_json_is_a_failed_run(tmp_path):
     junk = tmp_path / "junk.py"
     junk.write_text("print('Traceback: boom')")
-    s = ev.run_case(OPTIC, model="m", wisp_cmd=[sys.executable, str(junk)])
+    s = ev.run_case(OPTIC, model="m", provider="ollama", wisp_cmd=[sys.executable, str(junk)])
     assert not s.passed and "without JSON" in s.reasons[0]
 
 
 def test_the_temporary_home_is_removed_afterwards(tmp_path):
     probe = tmp_path / "probe.py"
     probe.write_text("import json, os; print(json.dumps({'ok': True, 'content': os.environ['HOME'], 'tool_calls': []}))")
-    s = ev.run_case(OPTIC, model="m", wisp_cmd=[sys.executable, str(probe)])
+    s = ev.run_case(OPTIC, model="m", provider="ollama", wisp_cmd=[sys.executable, str(probe)])
     assert s.answer and not Path(s.answer).exists()
 
 
@@ -273,19 +311,219 @@ def test_cli_reports_and_sets_the_exit_code(tmp_path, capsys):
     stub = tmp_path / "stub_wisp.py"
     stub.write_text(STUB)
     out = tmp_path / "scores.json"
-    code = main(["eval", "--model", "m", "--scenario", "optic-degradation", "--wisp-cmd",
-                 f"{sys.executable} {stub}", "--json", str(out)])
+    code = main(["eval", "--provider", "ollama", "--model", "m", "--scenario", "optic-degradation", "--wisp-cmd",
+                 _cmd(sys.executable, stub), "--json", str(out)])
     text = capsys.readouterr().out
     assert code == 0 and "PASS" in text and "1/1 passed with m" in text
     assert json.loads(out.read_text())[0]["scenario"] == "optic-degradation"
     failing = tmp_path / "fail.py"
     failing.write_text("import json; print(json.dumps({'ok': True, 'content': 'no idea', 'tool_calls': []}))")
-    code = main(["eval", "--model", "m", "--scenario", "link-flap", "--wisp-cmd", f"{sys.executable} {failing}"])
+    code = main(["eval", "--provider", "ollama", "--model", "m", "--scenario", "link-flap", "--wisp-cmd",
+                 _cmd(sys.executable, failing)])
     assert code == 1 and "FAIL" in capsys.readouterr().out
 
 
 def test_cli_rejects_an_unknown_scenario(capsys):
     from wisp_net.__main__ import main
 
-    assert main(["eval", "--model", "m", "--scenario", "nope"]) == 2
+    assert main(["eval", "--provider", "ollama", "--model", "m", "--scenario", "nope"]) == 2
     assert "unknown scenario" in capsys.readouterr().err
+
+
+# ── repeated samples and parallel jobs ───────────────────────────────────────
+
+def test_run_eval_takes_n_samples_per_case_in_order(tmp_path):
+    stub = tmp_path / "stub_wisp.py"
+    stub.write_text(STUB)
+    scores = ev.run_eval([OPTIC], samples=3, model="m", provider="ollama", wisp_cmd=[sys.executable, str(stub)])
+    assert [s.sample for s in scores] == [0, 1, 2] and all(s.scenario == "optic-degradation" for s in scores)
+
+
+def test_parallel_jobs_return_the_same_order_as_serial(tmp_path):
+    stub = tmp_path / "stub_wisp.py"
+    stub.write_text(STUB)
+    cases = [c for c in CASES if c.scenario in {"optic-degradation", "link-flap"}]
+    kwargs = dict(samples=2, model="m", provider="ollama", wisp_cmd=[sys.executable, str(stub)])
+    serial = [(s.scenario, s.sample) for s in ev.run_eval(cases, jobs=1, **kwargs)]
+    parallel = [(s.scenario, s.sample) for s in ev.run_eval(cases, jobs=4, **kwargs)]
+    assert parallel == serial == [("optic-degradation", 0), ("optic-degradation", 1),
+                                  ("link-flap", 0), ("link-flap", 1)]
+
+
+def test_samples_must_be_positive():
+    with pytest.raises(ValueError, match="samples"):
+        ev.run_eval([OPTIC], samples=0, model="m", provider="ollama")
+    with pytest.raises(ValueError, match="jobs"):
+        ev.run_eval([OPTIC], jobs=0, model="m")
+
+
+def test_kept_output_of_repeated_samples_does_not_overwrite(tmp_path):
+    stub = tmp_path / "stub_wisp.py"
+    stub.write_text(STUB)
+    kept = tmp_path / "kept"
+    ev.run_eval([OPTIC], samples=2, model="m", provider="ollama", wisp_cmd=[sys.executable, str(stub)], keep=kept)
+    assert sorted(p.name for p in kept.glob("*.stdout.json")) == [
+        "optic-degradation.s0.stdout.json", "optic-degradation.s1.stdout.json"]
+
+
+def test_a_single_sample_keeps_the_original_file_names(tmp_path):
+    stub = tmp_path / "stub_wisp.py"
+    stub.write_text(STUB)
+    kept = tmp_path / "kept"
+    ev.run_eval([OPTIC], model="m", provider="ollama", wisp_cmd=[sys.executable, str(stub)], keep=kept)
+    assert (kept / "optic-degradation.stdout.json").exists()
+
+
+def _score(scenario, sample, passed):
+    return ev.Score(scenario, "m", passed, [] if passed else ["x"], sample=sample, wall_s=1.0)
+
+
+def test_summary_reports_a_pass_rate_per_scenario_when_sampled():
+    scores = [_score("a", 0, True), _score("a", 1, False), _score("a", 2, True), _score("b", 0, False),
+              _score("b", 1, False), _score("b", 2, False)]
+    text = ev.summarize(scores)
+    assert "2/3" in text and "0/3" in text and "2/6 runs passed" in text
+
+
+def test_summary_of_one_sample_per_case_keeps_the_original_format():
+    text = ev.summarize([_score("a", 0, True)])
+    assert "1/1 passed with m" in text and "runs passed" not in text
+
+
+def test_rates_are_computed_per_scenario():
+    rates = ev.pass_rates([_score("a", 0, True), _score("a", 1, False), _score("b", 0, True)])
+    assert rates == {"a": (1, 2), "b": (1, 1)}
+
+
+def test_cli_samples_and_jobs(tmp_path, capsys):
+    from wisp_net.__main__ import main
+
+    stub = tmp_path / "stub_wisp.py"
+    stub.write_text(STUB)
+    out = tmp_path / "scores.json"
+    code = main(["eval", "--provider", "ollama", "--model", "m", "--scenario", "optic-degradation", "--samples", "2", "--jobs", "2",
+                 "--wisp-cmd", _cmd(sys.executable, stub), "--json", str(out)])
+    assert code == 0 and "2/2 runs passed" in capsys.readouterr().out
+    assert [r["sample"] for r in json.loads(out.read_text())] == [0, 1]
+
+
+def test_cli_rejects_nonpositive_samples(capsys):
+    from wisp_net.__main__ import main
+
+    assert main(["eval", "--provider", "ollama", "--model", "m", "--samples", "0"]) == 2
+
+
+# ── the hermetic HOME must not hide the interpreter's own packages ───────────
+
+def test_the_hermetic_home_still_finds_user_site_packages(tmp_path):
+    """A temporary HOME moves `~/.local`, so packages installed with `pip install --user` vanish and
+    `wisp` dies on its first import. That looked like a model failure ("exited 1 without JSON")."""
+    import site
+    import subprocess
+
+    probe = "import site; print(site.getusersitepackages())"
+    env = ev.hermetic_env(tmp_path / "home")
+    seen = subprocess.run([sys.executable, "-c", probe], env=env, capture_output=True, text=True).stdout.strip()
+    assert seen == site.getusersitepackages()
+
+
+def test_an_explicit_user_base_is_respected(tmp_path):
+    env = ev.hermetic_env(tmp_path, environ={"PATH": "/bin", "PYTHONUSERBASE": "/opt/ub"})
+    assert env["PYTHONUSERBASE"] == "/opt/ub"
+
+
+def test_the_hermetic_home_still_carries_no_credentials(tmp_path):
+    env = ev.hermetic_env(tmp_path, environ={"PATH": "/bin", "OPENAI_API_KEY": "sk-x", "HOME": "/Users/real"})
+    assert "OPENAI_API_KEY" not in env and env["HOME"] == str(tmp_path)
+
+
+# ── no built-in provider; the key comes from ~/.config/wisp/.env ─────────────
+
+def test_run_case_has_no_default_provider():
+    with pytest.raises(TypeError, match="provider"):
+        ev.run_case(OPTIC, model="m")  # type: ignore[call-arg]
+
+
+def test_cli_without_a_provider_anywhere_is_refused(capsys):
+    from wisp_net.__main__ import main
+
+    assert main(["eval", "--model", "m", "--scenario", "optic-degradation"]) == 2
+    assert "provider" in capsys.readouterr().err
+
+
+def test_cli_without_a_model_anywhere_is_refused(capsys):
+    from wisp_net.__main__ import main
+
+    assert main(["eval", "--provider", "ollama", "--scenario", "optic-degradation"]) == 2
+    assert "model" in capsys.readouterr().err
+
+
+def test_cli_takes_provider_and_model_from_the_dotenv(tmp_path, _private_user_env, capsys):
+    from wisp_net.__main__ import main
+
+    _write_dotenv(_private_user_env, "WISP_PROVIDER=openrouter\nWISP_MODEL=vendor/some-model\n")
+    stub = tmp_path / "stub_wisp.py"
+    stub.write_text(STUB)
+    kept = tmp_path / "kept"
+    code = main(["eval", "--scenario", "optic-degradation", "--wisp-cmd", _cmd(sys.executable, stub),
+                 "--keep", str(kept)])
+    argv = json.loads((kept / "optic-degradation.stdout.json").read_text())["report"]["argv"]
+    assert code == 0
+    assert argv[argv.index("--provider") + 1] == "openrouter" and argv[argv.index("--model") + 1] == "vendor/some-model"
+
+
+def test_a_flag_beats_the_dotenv(tmp_path, _private_user_env):
+    from wisp_net.__main__ import main
+
+    _write_dotenv(_private_user_env, "WISP_PROVIDER=openrouter\nWISP_MODEL=from-file\n")
+    stub = tmp_path / "stub_wisp.py"
+    stub.write_text(STUB)
+    kept = tmp_path / "kept"
+    main(["eval", "--provider", "ollama", "--model", "from-flag", "--scenario", "optic-degradation",
+          "--wisp-cmd", _cmd(sys.executable, stub), "--keep", str(kept)])
+    argv = json.loads((kept / "optic-degradation.stdout.json").read_text())["report"]["argv"]
+    assert argv[argv.index("--provider") + 1] == "ollama" and argv[argv.index("--model") + 1] == "from-flag"
+
+
+def test_a_key_in_the_dotenv_reaches_wisp_only_when_passed_and_is_never_printed(tmp_path, _private_user_env, capsys):
+    from wisp_net.__main__ import main
+
+    secret = "sk-from-the-dotenv-file"
+    _write_dotenv(_private_user_env, f"WISP_API_KEY={secret}\n")
+    stub = tmp_path / "stub_wisp.py"
+    stub.write_text(STUB)
+    base = ["eval", "--provider", "ollama", "--model", "m", "--scenario", "optic-degradation",
+            "--wisp-cmd", _cmd(sys.executable, stub)]
+    for extra, expected in (([], False), (["--pass-env", "WISP_API_KEY"], True)):
+        kept = tmp_path / f"kept{expected}"
+        assert main(base + extra + ["--keep", str(kept)]) == 0
+        report = json.loads((kept / "optic-degradation.stdout.json").read_text())["report"]
+        assert ("WISP_API_KEY" in report["env_keys"]) is expected
+    captured = capsys.readouterr()
+    assert secret not in captured.out + captured.err
+
+
+def test_the_environment_beats_the_dotenv(tmp_path, _private_user_env, monkeypatch):
+    from wisp_net.__main__ import main
+
+    _write_dotenv(_private_user_env, "WISP_PROVIDER=from-file\n")
+    monkeypatch.setenv("WISP_PROVIDER", "from-environment")
+    stub = tmp_path / "stub_wisp.py"
+    stub.write_text(STUB)
+    kept = tmp_path / "kept"
+    main(["eval", "--model", "m", "--scenario", "optic-degradation", "--wisp-cmd",
+          _cmd(sys.executable, stub), "--keep", str(kept)])
+    argv = json.loads((kept / "optic-degradation.stdout.json").read_text())["report"]["argv"]
+    assert argv[argv.index("--provider") + 1] == "from-environment"
+
+
+def test_a_pass_env_name_that_is_nowhere_is_refused_before_anything_runs(tmp_path, capsys):
+    from wisp_net.__main__ import main
+
+    stub = tmp_path / "stub_wisp.py"
+    stub.write_text(STUB)
+    kept = tmp_path / "kept"
+    code = main(["eval", "--provider", "ollama", "--model", "m", "--scenario", "optic-degradation",
+                 "--pass-env", "WISP_API_KEY", "--wisp-cmd", _cmd(sys.executable, stub), "--keep", str(kept)])
+    err = capsys.readouterr().err
+    assert code == 2 and "WISP_API_KEY" in err and not kept.exists()
