@@ -277,11 +277,32 @@ class SubagentRunner:
 
         # Emit start event
         if progress_callback:
+            # The renderer shows each subagent's real authority surface
+            # (wisp-desktop SubagentPanel). Derive it with the *same* helper
+            # that populates `session_dict["allowed_tools"]` further down, so
+            # what the UI displays is the enforcement input itself and cannot
+            # drift from what the child's executor is governed by.
+            #
+            # `unbounded` is NOT derived from the length of this list. A child
+            # inherits the parent's permission mode and has no approval handler
+            # of its own, so it is never unbounded in the `Principal.capabilities
+            # is None` sense -- the truthful claim is that its surface equals
+            # the full registry only when the mode does not narrow it.
+            _start_mode = str(
+                getattr(child_cfg, "permission_mode", "auto_edit") or "auto_edit"
+            )
+            _start_capabilities = _effective_child_tools(contract.tools, _start_mode)
+            _start_unbounded = _start_mode.strip().lower() == "full"
             await self._emit(
                 progress_callback,
                 contract.name,
                 EventKind.TASK_STARTED,
-                {"role": contract.role, "description": contract.task},
+                {
+                    "role": contract.role,
+                    "description": contract.task,
+                    "capabilities": _start_capabilities,
+                    "unbounded": _start_unbounded,
+                },
             )
 
         try:

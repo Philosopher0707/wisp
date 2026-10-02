@@ -100,6 +100,50 @@ export interface ContextResponse {
   files_found: string[];
 }
 
+/** One entry from the unfiltered tool registry. */
+export interface CapabilityTool {
+  name: string;
+  [key: string]: unknown;
+}
+
+/**
+ * The principal as the server sees it. Mirrors `_principal_view` in
+ * wisp/server/routes/capabilities.py -- credential_handle is omitted there
+ * by design and must not appear here.
+ */
+export interface CapabilityPrincipal {
+  id: string;
+  kind: string;
+  os_user: string;
+  workspace: string;
+  profile: string;
+  org_id?: string | null;
+  parent_principal_id?: string | null;
+  unbounded: boolean;
+}
+
+/**
+ * GET /api/capabilities -- the effective tool surface for the active principal.
+ *
+ * WARNING: `unbounded` here is the INVERSE of the same-named field on the
+ * subagent_start event. At principal level, `capabilities is None` means the
+ * principal is UNRESTRICTED (capabilities.py:107); at subagent level, null
+ * means the backend never reported a surface. Never render one with the
+ * component built for the other.
+ */
+export interface CapabilityResponse {
+  principal: CapabilityPrincipal;
+  tools: CapabilityTool[];
+  tool_count: number;
+  registry_count: number;
+  authority_note: string;
+  // NOTE: there is deliberately NO top-level `unbounded`. The endpoint's
+  // return dict carries only principal/tools/tool_count/registry_count/
+  // authority_note; the boolean lives at `principal.unbounded`. Declaring it
+  // here would type-check while reading `undefined` at runtime, which is
+  // falsy and would render every unrestricted principal as bounded.
+}
+
 interface ApiClient {
   fetchSessions: () => Promise<SessionSummary[]>;
   fetchSession: (id: string) => Promise<Message[]>;
@@ -135,6 +179,12 @@ interface ApiClient {
   // Context
   fetchContext: () => Promise<ContextResponse>;
   updateContext: (content: string) => Promise<boolean>;
+  /**
+   * Returns `null` when the surface could not be read. `null` here means
+   * UNKNOWN, and the caller must render it as unknown -- not as zero tools
+   * and not as unrestricted.
+   */
+  fetchCapabilities: () => Promise<CapabilityResponse | null>;
 }
 
 export interface FileItem {
@@ -549,6 +599,16 @@ export function useApi(serverUrl: string, apiKey: string): ApiClient {
     }
   }, [apiFetch, authParams]);
 
+  const fetchCapabilities = useCallback(async (): Promise<CapabilityResponse | null> => {
+    try {
+      return await apiFetch('/api/capabilities') as CapabilityResponse;
+    } catch {
+      // Fail closed to "unknown". A failed read must never be coerced into
+      // an empty tool list, which would read as maximum restriction.
+      return null;
+    }
+  }, [apiFetch]);
+
   const updateContext = useCallback(async (content: string): Promise<boolean> => {
     try {
       const data = await apiFetch(`/api/context${authParams}`, {
@@ -569,7 +629,7 @@ export function useApi(serverUrl: string, apiKey: string): ApiClient {
       fetchPlugins, installPlugin, uninstallPlugin, togglePlugin, searchMarketplace,
       fetchMCPServers, addMCPServer, removeMCPServer, testMCPServer,
       fetchHooks, addHook, removeHook, testHook, fetchHookLogs,
-      fetchContext, updateContext,
+      fetchContext, updateContext, fetchCapabilities,
     }),
     [
       fetchSessions, fetchSession, deleteSession, renameSession, fetchModels, fetchFiles,
@@ -578,7 +638,7 @@ export function useApi(serverUrl: string, apiKey: string): ApiClient {
       fetchPlugins, installPlugin, uninstallPlugin, togglePlugin, searchMarketplace,
       fetchMCPServers, addMCPServer, removeMCPServer, testMCPServer,
       fetchHooks, addHook, removeHook, testHook, fetchHookLogs,
-      fetchContext, updateContext,
+      fetchContext, updateContext, fetchCapabilities,
     ],
   );
 }

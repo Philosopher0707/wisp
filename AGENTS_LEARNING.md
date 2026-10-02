@@ -5,6 +5,10 @@ one lesson per `##` section, the search words in the heading and first line, evi
 after every milestone or phase** (see `CLAUDE.md`, "Knowledge base"). Prefer editing a lesson to adding a
 duplicate. Session state and open work live in `docs/sessions/2026-09-29-network-agent/CONTEXT.md`.
 
+> **Provenance:** this file predates the commit that first tracked it. `ccf6d01` (2026-10-02) added the shlex
+> and failure-set lessons and committed the whole file as new, so `git log --diff-filter=A` attributes every
+> earlier lesson here to that commit. The lessons above the shlex one are from the 2026-09-28/29 session.
+
 ## State: what was built and merged, and the live evaluation score (2026-09-29)
 
 Search: state, PRs merged, what did the model score, live evaluation, baseline, 6/6, 0/6, capable model, results.
@@ -77,8 +81,13 @@ Evidence: commit `6d04edd`; reverting the helper to `" ".join` re-killed exactly
 Search: full suite, baseline comparison, failure set, diff, stash, blame, whose bug.
 After fixing 6 tests in `tests/net`, the full suite still reported 21 failures. Counting matched (21 vs 21) but
 that is not proof: sort the two `FAILED` lists and `diff` them so the *sets* are compared, not the totals. Here
-they were byte-identical with and without the change, which is what moves a failure from "possibly mine" to
-"pre-existing". Compare exact test ids, and run the baseline on the same files rather than the whole suite twice.
+they were byte-identical with and without the change — which proves **"not caused by this change"**, and *only*
+that. It does **not** prove "pre-existing at HEAD": both runs used the same dirty tree (13 modified, 63
+untracked), and six of the failing test files were themselves untracked — absent at HEAD, so they *cannot* fail
+there. To earn "pre-existing", compare against `origin/main` or a clean worktree — and if you use a worktree, put
+it somewhere **without a space in the path**: this checkout's space is itself a variable (6 net-eval tests turn
+on it), so a no-space worktree *understates* failures for that class. Compare exact test ids, and run the
+baseline on the same files rather than the whole suite twice.
 
 ## Lesson: anything the host executes must be unwritable by the agent, at the lowest layer
 

@@ -72,3 +72,42 @@ describe('appReducer', () => {
     expect(Object.is(next, baseState)).toBe(true)
   })
 })
+
+describe('SUBAGENT_START authority reporting', () => {
+  const baseState = createInitialState()
+
+  const start = (capabilities: string[] | null, unbounded: boolean) =>
+    appReducer(baseState, {
+      type: 'SUBAGENT_START',
+      id: 'sub-1',
+      name: 'coder',
+      description: 'd',
+      capabilities,
+      unbounded,
+    }).subagentTasks[0]
+
+  // A narrowed child and an unreported child are DIFFERENT facts. If the
+  // store ever collapses `null` into `[]`, the UI would show a confident
+  // "0 tools" for an agent whose authority was simply never sent — reading
+  // as maximally restricted when the truth is unknown.
+  it('keeps unreported authority distinct from an empty capability list', () => {
+    expect(start(null, false).capabilities).toBeNull()
+    expect(start([], false).capabilities).toEqual([])
+  })
+
+  // The whole point of the explicit boolean: a shortened list is NARROWED,
+  // which is the opposite of unbounded. Storing them independently is what
+  // stops the UI from reading "few tools" as "few restrictions".
+  it('stores unbounded independently of capability count', () => {
+    expect(start(['read_file'], false).unbounded).toBe(false)
+    expect(start(['read_file', 'list_files'], false).unbounded).toBe(false)
+    expect(start(['a', 'b'], true).unbounded).toBe(true)
+  })
+
+  it('defaults a new task to running with the reported authority intact', () => {
+    const task = start(['read_file', 'write_file'], false)
+    expect(task.status).toBe('running')
+    expect(task.capabilities).toEqual(['read_file', 'write_file'])
+    expect(task.unbounded).toBe(false)
+  })
+})

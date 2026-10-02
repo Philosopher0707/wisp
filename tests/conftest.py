@@ -81,6 +81,51 @@ def _isolate_workspace_trust_file():
 
 
 @pytest.fixture(scope="session", autouse=True)
+def _isolate_memory_store():
+    """Point the cross-session memory store at a throwaway for the whole session.
+
+    `WISP_CONFIG_DIR` is `Path.home() / ".config" / "wisp"`, computed at import time and
+    bound *by value* into every module that does `from wisp.config import WISP_CONFIG_DIR`
+    (`memory`, `agent_memory`, `planner`). Patching it inside a single test is therefore too
+    late: `test_importance_should_not_be_immortal` monkeypatches `wisp.memory.WISP_CONFIG_DIR`
+    and still wrote into the developer's real `~/.config/wisp/memory.json` — 2 global facts
+    ("stale important", "newest fact") and 20 pytest-tmp workspace keys had accumulated
+    there. Same class as the trust-file leak above, fixed the same way. Live E2E runs keep
+    the ambient store.
+    """
+    if os.environ.get("WISP_E2E_LIVE") == "1":
+        yield
+        return
+    import wisp.agent_memory as am_mod
+    import wisp.config as cfg_mod
+    import wisp.memory as mem_mod
+
+    try:
+        import wisp.planner as plan_mod
+    except Exception:  # optional module
+        plan_mod = None
+
+    scratch = Path(tempfile.mkdtemp(prefix="wisp-cfg-"))
+    patched: list[tuple[object, str, object]] = []
+
+    def _patch(module, attr, value):
+        if module is not None and hasattr(module, attr):
+            patched.append((module, attr, getattr(module, attr)))
+            setattr(module, attr, value)
+
+    for mod in (cfg_mod, mem_mod, am_mod, plan_mod):
+        _patch(mod, "WISP_CONFIG_DIR", scratch)
+    # `agent_memory` derives a second constant from it at import time.
+    _patch(am_mod, "AGENT_MEMORY_DIR", scratch / "agent_memory")
+    try:
+        yield
+    finally:
+        for module, attr, value in patched:
+            setattr(module, attr, value)
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+@pytest.fixture(scope="session", autouse=True)
 def _neutralize_server_auth():
     """Force server dev-mode (no auth) for the unit-test session.
 

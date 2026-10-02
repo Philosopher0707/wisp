@@ -3,6 +3,8 @@ import { useAppState } from '../../state/context.js';
 import { useApi, type GitStatus } from '../../hooks/useApi.js';
 import { User, Folder, Square, Code2, Download, GitBranch } from '../../icons/index.js';
 import { IconButton } from '../common/IconButton.js';
+import { PrincipalCapabilityChip } from '../PrincipalCapabilityChip.js';
+import type { CapabilityResponse } from '../../hooks/useApi.js';
 import './TopBar.css';
 
 const STATUS_LABELS: Record<string, string> = {
@@ -32,6 +34,21 @@ export const TopBar: React.FC = () => {
   const api = useApi(state.serverUrl, state.apiKey);
   const [git, setGit] = useState<GitStatus | null>(null);
   const [sandboxType, setSandboxType] = useState<string>('host');
+  // `null` is a real third state, not a loading placeholder: it means the
+  // server could not be read, and the chip renders that as unknown.
+  const [caps, setCaps] = useState<CapabilityResponse | null | undefined>(undefined);
+
+  // Re-read the surface when the server or credential changes: a chip
+  // that survives a re-login would keep showing the PREVIOUS principal's
+  // authority, which is the most dangerous thing this component could do.
+  useEffect(() => {
+    let cancelled = false;
+    setCaps(undefined);
+    api.fetchCapabilities()
+      .then((d) => { if (!cancelled) setCaps(d); })
+      .catch(() => { if (!cancelled) setCaps(null); });
+    return () => { cancelled = true; };
+  }, [api]);
 
   // Fetch git status when workspace changes
   useEffect(() => {
@@ -117,6 +134,7 @@ export const TopBar: React.FC = () => {
           <span className={`topbar-sandbox-dot topbar-sandbox-dot--${sandboxType}`} />
           {sandboxType === 'docker' ? 'Docker' : 'Host'}
         </span>
+        <PrincipalCapabilityChip data={caps ?? null} loading={caps === undefined} />
         <span
           className={`topbar-status topbar-status--${state.connection}`}
           title={STATUS_LABELS[state.connection] || state.connection}

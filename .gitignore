@@ -103,3 +103,7 @@ workspace/
 
 # Brainstorm drafts & visual companion sessions
 .superpowers/
+
+# Agent scratch (session debris — never project source)
+/.scratch*
+/_*.txt

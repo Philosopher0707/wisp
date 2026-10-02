@@ -145,3 +145,42 @@
 @keyframes sa-spin {
   to { transform: rotate(360deg); }
 }
+
+/* ── Capability summary ──────────────────────────────────────────────
+   Three visually distinct states. The colours are not decoration: an
+   unreported authority and a narrowed authority are different facts, and
+   they must not be given the same treatment or the user cannot tell
+   "restricted" from "we don't know". */
+.subagent-caps {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+/* Full unrestricted surface. */
+.subagent-caps-unbounded {
+  color: var(--danger, #d9534f);
+  background: rgba(217, 83, 79, 0.12);
+  border: 1px solid rgba(217, 83, 79, 0.3);
+}
+
+/* A real, narrowed list — fewer tools means LESS authority. */
+.subagent-caps-narrowed {
+  color: var(--text-secondary, #8b949e);
+  background: rgba(139, 148, 158, 0.1);
+  border: 1px solid rgba(139, 148, 158, 0.25);
+}
+
+/* Backend reported nothing. Deliberately muted and dashed, never green:
+   "unknown" must not read as "fine". */
+.subagent-caps-unknown {
+  color: var(--text-tertiary, #6e7681);
+  background: transparent;
+  border: 1px dashed rgba(110, 118, 129, 0.45);
+  font-style: italic;
+}
