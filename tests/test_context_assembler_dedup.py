@@ -58,3 +58,18 @@ class TestCrossSourceDedup:
 
         assert "main.py" in result
         assert "utils.py" in result
+
+    def test_indented_code_block_lines_preserved(self):
+        """Indented code blocks are kept even when they name an indexed file."""
+        assembler = ContextAssembler()
+        index = "app.py\n"
+        repo = "## Repo Map\n\n    app.py\n"
+
+        result = assembler.build(
+            workspace="/tmp",
+            default_system="SYS",
+            code_index_summary=index,
+            repo_map=repo,
+        )
+
+        assert "    app.py" in result
