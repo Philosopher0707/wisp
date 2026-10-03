@@ -232,8 +232,9 @@ class ImmutableAuditTrail:
 
     def _init_table(self) -> None:
         """Ensure the audit_log table exists with hash-chain trigger."""
-        conn = self._store._get_conn()
-        conn.executescript("""
+        import sqlite3 as _sqlite3
+
+        _ddl = """
             CREATE TABLE IF NOT EXISTS audit_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp REAL NOT NULL,
@@ -247,7 +248,23 @@ class ImmutableAuditTrail:
                 entry_hash TEXT NOT NULL DEFAULT ''
             );
             CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_log(timestamp);
-        """)
+        """
+        try:
+            self._store._get_conn().executescript(_ddl)
+        except _sqlite3.DatabaseError as e:
+            # A DB that passed the store's own init can still be corrupt in
+            # the audit_log pages. Quarantine via the store (one authority
+            # for DB health) and retry once on the fresh file.
+            markers = ("malformed", "corrupt", "not a database")
+            quarantine = getattr(self._store, "_quarantine_corrupt_db", None)
+            if quarantine is None or not any(m in str(e).lower() for m in markers):
+                raise
+            quarantine()
+            store_init = getattr(self._store, "_ensure_initialized", None)
+            if callable(store_init):
+                self._store._initialized = False
+                store_init()
+            self._store._get_conn().executescript(_ddl)
 
     def record_decision(
         self,
