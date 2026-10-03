@@ -215,6 +215,12 @@ def _args_preview(args: dict) -> str:
 
 
 _FULL_OUTPUT_TOOLS: set[str] = {
+    # Shell tools: the payload arrives already collapsed by
+    # agent/tools/runner.py (head lines + collapse badge + "Full output ->"
+    # pointer). Re-truncating it here to 3 lines gave the human strictly less
+    # than the model and cut the pointer that names the complete logfile.
+    "run_bash",
+    "run_tests",
     "plan_task",
     "mark_step_done",
     "update_plan",

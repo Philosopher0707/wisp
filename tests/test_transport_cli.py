@@ -1180,3 +1180,72 @@ class TestDiffMaxLines:
         out = t._render_tool_result("write_file", self._write_result(), 7.0, 100)
         assert "more lines" in out
         assert "line60" not in out
+
+
+class TestShellToolOutputReachesHuman:
+    """The shell tools' payload must not be truncated a second time.
+
+    ``agent/tools/runner.py`` already collapses a long shell payload to head
+    lines + a collapse badge + a ``Full output -> <logfile>`` pointer. When the
+    tool is absent from ``_FULL_OUTPUT_TOOLS`` the transport collapses it again
+    to three lines, which drops both the badge and the pointer: the human saw
+    strictly less than the model, with no way to reach the rest.
+    """
+
+    def _transport(self):
+        from types import SimpleNamespace
+
+        t = CLITransport(_MockRuntime(), config=SimpleNamespace(diff_max_lines=0))
+        t.show_tool_output = True
+        t._turn_number = 1
+        return t
+
+    def _payload(self, n_lines: int = 10) -> str:
+        lines = "\n".join(f"line-{i}" for i in range(1, n_lines + 1))
+        return lines + "\n… +40 more [press 'e' or /expand]\n[✓ Full output → .agent/logs/run_x.log]"
+
+    @pytest.mark.parametrize("tool", ["run_bash", "run_tests"])
+    def test_shell_tool_payload_is_not_previewed(self, tool):
+        """Every collapsed line the runner emitted reaches the human."""
+        out = self._transport()._render_tool_result(
+            tool, self._payload(), 120.0, 100
+        )
+        for i in range(1, 11):
+            assert f"line-{i}" in out, f"line-{i} was truncated away for {tool}"
+
+    @pytest.mark.parametrize("tool", ["run_bash", "run_tests"])
+    def test_full_output_pointer_survives(self, tool):
+        """The pointer naming the complete logfile must not be cut off."""
+        out = self._transport()._render_tool_result(
+            tool, self._payload(), 120.0, 100
+        )
+        assert "Full output" in out
+        assert ".agent/logs/run_x.log" in out
+
+    def test_collapse_badge_survives(self):
+        """The collapse badge is the human's cue that output was elided."""
+        out = self._transport()._render_tool_result(
+            "run_bash", self._payload(), 120.0, 100
+        )
+        assert "more" in out
+
+    def test_human_sees_at_least_what_the_model_saw(self):
+        """The invariant that was broken: human lines >= model lines."""
+        payload = self._payload()
+        out = self._transport()._render_tool_result("run_bash", payload, 120.0, 100)
+        model_lines = len(payload.splitlines())
+        assert len(out.splitlines()) >= model_lines
+
+    def test_compact_mode_still_suppresses_the_body(self):
+        """show_tool_output=False keeps the old terse behaviour."""
+        t = self._transport()
+        t.show_tool_output = False
+        out = t._render_tool_result("run_bash", self._payload(), 120.0, 100)
+        assert out is None or "line-1" not in out
+
+    def test_unrelated_tool_still_gets_the_preview(self):
+        """The set stays targeted: a plain string tool is still truncated."""
+        out = self._transport()._render_tool_result(
+            "some_other_tool", "\n".join(f"x{i}" for i in range(50)), 120.0, 100
+        )
+        assert "x40" not in out
