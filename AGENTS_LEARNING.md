@@ -341,5 +341,12 @@ environment block. Measured on this repo (clean HOME): ~6.5k tokens, ~2k of them
   and memory), while 53 `skill__*` tools still ship 10,197 tokens of schema on every request. The prompt that explains the
   menu is gone and the menu is paid for anyway. Global skill directories (`~/.agents`, `~/.claude`) are what flood it.
 - **~30% of the prompt is never budgeted** (tools block 1489 tokens on its own).
-Open: fix the accounting after #60 merges (RED test first: the probe is the test); decide how global skills should reach wisp.
+Status (2026-10-05): **accounting fixed in PR #64** (cumulative, done in characters on the one ruler, separators, compact
+header and note inside the budget, every cut or dropped section named in the note; the 1000-token case now gives 989). A
+first draft returned an empty prompt for a budget smaller than the truncation header, which an existing test caught; the
+first critical section now keeps a minimal slice. **Global skills now load from `~/.agents/skills` only** (same PR): that took
+this HOME from 56 to 50 skills because `~/.agents/skills` itself holds 47, so the menu is still ~9.3k tokens and is still dropped,
+now with a note. Compact forms measured on the same 47 skills: 8,840 tokens (current), 5,440 (name plus description), 2,289
+(description cut to 120 chars), 389 (name only). The user chose to trim `~/.agents/skills` by hand instead of changing the format.
+Still open: ~30% of the prompt is appended after budgeting; `config.skill_dirs` is a dormant setting.
 

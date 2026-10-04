@@ -55,7 +55,7 @@ What wisp does better than plateform: the hash covers every field, a corrupt lin
 ## Status (updated 2026-10-04)
 
 - **W1 fixed** in PR https://github.com/Philosopher0707/wisp/pull/61 (head re-read under `flock`; RED-first; 337 audit-touching
-  tests pass; on a copy of the live log 200 concurrent appends added 0 broken links). Awaiting the human's merge.
+  tests pass; on a copy of the live log 200 concurrent appends added 0 broken links). **Merged** as PR #61 (`aa078f1`).
 - plateform is now role `archive` in `wisp.fleet.toml`.
 - **Still open:** W2 (truncation) and W3 (unkeyed chain) need a keyed MAC plus an external witness; harvest item 2
   (approval bound to a checkpoint id and the approved content to a digest) is not started; the live log's 14
