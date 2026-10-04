@@ -192,6 +192,28 @@ def _neutralize_server_rate_limit():
         deps_mod.get_rate_limiter = saved
 
 
+@pytest.fixture(autouse=True)
+def _dispose_sandbox_containers():
+    """Remove the Docker containers a test's sandbox started.
+
+    `get_router` and `get_sandbox` cache providers process-wide, keyed by
+    workspace. Every test with a fresh `tmp_path` or `temp_workspace` that
+    runs a shell command therefore started its own `sleep infinity`
+    container, and nothing disposed of it: 185 `wisp-sandbox-*` containers
+    had accumulated on one machine. Only modules the test already imported
+    are touched, so tests that never reach a sandbox pay nothing.
+    """
+    yield
+    import sys
+
+    router_mod = sys.modules.get("wisp.sandbox.router")
+    if router_mod is not None and router_mod._routers:
+        router_mod.reset_router()
+    sandbox_mod = sys.modules.get("wisp.sandbox")
+    if sandbox_mod is not None and sandbox_mod._app_sandbox is not None:
+        sandbox_mod.reset_sandbox()
+
+
 @pytest.fixture
 def auto_edit_hard_deny_witness(monkeypatch):
     """Re-impose an AUTO_EDIT hard deny on the four git/gh writes, as a test witness.
