@@ -451,7 +451,13 @@ class MarketplaceRegistry:
                 zf.extractall(extract_dir)
         else:
             with tarfile.open(tmp_file, "r:*") as tf:
-                tf.extractall(extract_dir)
+                # filter="data" is REQUIRED, not stylistic. Without it, an archive member
+                # named "../../.ssh/authorized_keys" (or an absolute path) is written
+                # OUTSIDE extract_dir -- remote code execution for anyone who installs
+                # from a hostile marketplace. Python 3.12 defaults this to "data", but
+                # we support >=3.11 and 3.11.0-3.11.3 have no such default; passing it
+                # explicitly makes the protection independent of interpreter version.
+                tf.extractall(extract_dir, filter="data")
 
         # If the archive has a single top-level directory, use that
         entries = list(extract_dir.iterdir())
