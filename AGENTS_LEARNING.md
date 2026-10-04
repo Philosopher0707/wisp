@@ -283,3 +283,26 @@ Search: tail, zshrc, api key, plaintext, secrets, env file, never cat, grep -c, 
 `tail ~/.zshrc` printed a plaintext API key line into the session. To learn whether a setting exists, use `grep -c`
 or `grep -o '^[A-Z_]*='` (names only), never `cat`/`tail` on a shell rc file or a `.env`.
 
+## Lesson: two nested deadlines that differ by milliseconds lose the partial result under load (2026-10-04)
+
+Search: asyncio.timeout, nested timeout, deadline, same tick, double cancel, partial round, CI only, busy loop, backstop.
+`SubagentRunner.run` wrapped `_run_agent` in `asyncio.timeout(timeout_seconds)` while the execution loop inside used
+`asyncio.timeout(remaining)` with `remaining = start + timeout_seconds - now`. The two deadlines differed only by the
+setup time. When the event loop was busy past both, their timers fired in the same tick and both cancelled the task;
+the inner `__aexit__` then did not convert its cancellation to `TimeoutError`, and the outer backstop won with an empty
+round ("Timed out after 1.5s - no tool calls were made"). That is why `test_timeout_preserves_partial_round` failed in
+CI at 0.2 s and again at 1.5 s but passed locally: it was not setup latency, and a 30,000-file workspace did not change
+it. Reproduced deterministically with a blocking `time.sleep` standing in for the busy loop. Fix: the outer backstop is
+`timeout_seconds + 2 s`. Rule: when a result must survive a deadline, the handler that preserves it needs a deadline
+strictly earlier than any backstop, by a margin larger than scheduling jitter.
+
+## Lesson: a test that cannot fail under its own mutation is not a test (2026-10-04)
+
+Search: mutation, test weakness, structural assertion, wall clock, per_session_locks, serialised, passes anyway, positive control.
+`test_per_session_locks` asserted that two 50 ms turns finished in under 90 ms; CI took 113 ms. I rewrote it to require
+both turns to be in flight at once. The first draft still **passed** when I made every session share one lock: the
+starved turn timed out, the runtime turned that into an error event, and a non-empty result satisfied the assertions.
+Strengthened to require real `content` events and no `error` events, plus a control that one session id is never
+concurrent; the mutation then fails in 3.4 s. Always run the mutation, and give a test that waits an outer timeout so it
+fails fast instead of hanging.
+
