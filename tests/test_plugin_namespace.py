@@ -9,7 +9,7 @@ fail and the last two fail too (namespacing is inert end-to-end).
 
 import pytest
 
-from wisp.plugins.namespace import NamespaceManager, CORE_TOOL_PREFIXES
+from wisp.plugins.namespace import NamespaceManager
 
 
 class TestResolveRejectsForgedPrefixes:
