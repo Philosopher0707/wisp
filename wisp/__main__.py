@@ -1104,6 +1104,7 @@ _SUBCOMMAND_HELP: dict[str, str] = {
     "progress": 'Usage: wisp progress\n\nShow current plan progress.',
     "diagnose": 'Usage: wisp diagnose <file|->\n\nDiagnose an error from a file or stdin.',
     "locks": 'Usage: wisp locks\n\nShow active file locks in the workspace.',
+    "fleet": 'Usage: wisp fleet <status|doctor> [--manifest FILE] [--json] [--strict] [--fetch]\n\nRead-only git status over every repo in wisp.fleet.toml; doctor also lists repos under the scan roots that the manifest omits.',
     "changes": 'Usage: wisp changes\n\nShow changes made in this session.',
     "acp": 'Usage: wisp acp\n\nRun Wisp as an ACP external agent (Zed editor integration).',
     "server": (
@@ -1148,7 +1149,7 @@ _SUBCOMMAND_NAMES = frozenset({
     "completion", "release",
     "git", "plan", "progress", "diagnose",
     "locks", "changes", "acp", "server", "compact", "swarm", "agents", "graph",
-    "bench", "converge",
+    "bench", "converge", "fleet",
 })
 
 
@@ -1479,6 +1480,10 @@ def main():
             from wisp.benchmark.cli import run_bench
             sys.exit(run_bench(rest))
 
+        def _do_fleet():
+            from wisp.fleet import run_fleet
+            sys.exit(run_fleet(rest))
+
         def _do_converge():
             from wisp.autonomous_cli import run_converge
             sys.exit(run_converge(rest, model=flags_model or None,
@@ -1520,6 +1525,7 @@ def main():
             "graph": _do_graph,
             "bench": _do_bench,
             "converge": _do_converge,
+            "fleet": _do_fleet,
         }
         return _run_with_config_error_handling(_SUBCOMMAND_TABLE[first])
 
