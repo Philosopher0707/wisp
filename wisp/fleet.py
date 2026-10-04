@@ -337,8 +337,12 @@ def _suffix(s: RepoStatus, p: Problem) -> str:
 
 
 def run_fleet(argv: list[str]) -> int:
+    if argv and argv[0] == "ci":  # CI status has its own flags and needs `gh`, so it lives in its own module
+        from wisp.fleet_ci import run_ci
+
+        return run_ci(argv[1:])
     parser = argparse.ArgumentParser(prog="wisp fleet", description="Read-only status over the repos in wisp.fleet.toml.")
-    parser.add_argument("action", choices=["status", "doctor", "workers"])
+    parser.add_argument("action", choices=["status", "doctor", "workers", "ci"])
     parser.add_argument("--manifest", help=f"path to {MANIFEST_NAME}")
     parser.add_argument("--json", action="store_true", help="machine-readable output")
     parser.add_argument("--strict", action="store_true", help="exit 1 when any repo has a problem")

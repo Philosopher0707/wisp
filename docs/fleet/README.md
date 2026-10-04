@@ -11,6 +11,8 @@ wisp fleet status                       # one table: branch, dirty, unpushed, no
 wisp fleet doctor --strict              # status plus git repos under the scan roots that the manifest omits; exit 1 on any problem
 wisp fleet status --json                # machine-readable
 wisp fleet status --fetch               # git fetch each repo first (updates remote refs only)
+wisp fleet ci                           # open-PR and default-branch CI for every GitHub repo (needs `gh`; read-only)
+wisp fleet ci --watch 30 --timeout 1800 # re-check every 30 s until nothing is pending; exit 0 green, 1 red, 4 timed out
 wisp fleet workers                      # print the MCP servers the manifest declares (writes nothing)
 wisp fleet workers --write ~/.config/wisp/mcp.json   # merge them into an existing MCP config
 ```
@@ -19,7 +21,7 @@ Run it as `.venv/bin/python -m wisp fleet ...` (or `~/.venvs/wisp/bin/python -m 
 that cannot import the package fails without saying why.
 
 Exit codes: `0` ok (or problems found without `--strict`), `1` problems with `--strict`, `2` unreadable manifest or
-bad arguments.
+bad arguments, `3` (`ci` only) `gh` not on PATH, `4` (`ci --watch` only) still pending at the timeout.
 
 ## The manifest
 
@@ -56,6 +58,23 @@ A manifest must have **exactly one** `orchestrator`, unique names, valid roles a
 | `dirty` | uncommitted paths |
 | `stash` | stashes exist |
 | `missing` / `not-a-repo` | the manifest points at a path that is absent or has no `.git` |
+
+## CI status (`wisp fleet ci`)
+
+For every repo whose `origin` is on GitHub it lists each open PR with its checks folded into one state, and the latest
+run per workflow on the default branch. Both matter: a red default branch makes every PR's CI red, and it must not hide
+behind an empty PR list.
+
+| State | Meaning |
+|---|---|
+| `pass` | every check succeeded (skipped and neutral count as success) |
+| `fail` | any check failed, timed out, was cancelled, or needs action; names are listed |
+| `pending` | nothing failed yet but some checks have not finished |
+| `none` | no checks exist. Never reads as passing |
+| `error` / `skipped` | `gh` could not be read for that repo (counts as red) / no remote, or not a GitHub repo |
+
+`--watch SECONDS` re-checks until nothing is pending and stops at once on a failure; `--strict` exits 1 on any failure
+or unreadable repo. It never merges, re-runs, comments or pushes. Repos are queried in parallel (18 repos in about 9 s).
 
 ## Workers
 
