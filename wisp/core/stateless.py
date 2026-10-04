@@ -348,6 +348,22 @@ def validate_tool_message_provenance(
     return None
 
 
+#: Tool-name prefixes an *unrestricted* subagent is not handed. The skills menu is deliberately omitted from a
+#: subagent's prompt, so its `skill__*` tools were schemas for names the child never sees listed, re-sent on every
+#: provider call (47 tools and 9,017 tokens on one real HOME). A subagent with an explicit tool list is unaffected.
+_SUBAGENT_EXCLUDED_TOOL_PREFIXES: tuple[str, ...] = ("skill__",)
+
+
+def _tool_schema_name(schema: Any) -> str:
+    """A provider tool schema's name, whichever shape (OpenAI function, or flat) carries it."""
+    if isinstance(schema, dict):
+        fn = schema.get("function")
+        if isinstance(fn, dict) and fn.get("name"):
+            return str(fn["name"])
+        return str(schema.get("name", ""))
+    return ""
+
+
 @dataclass
 class WispAgentCore:
     """Stateless turn engine."""
@@ -1274,20 +1290,19 @@ class WispAgentCore:
 
     def _provider_tools(self, session: dict[str, Any]) -> list[dict[str, Any]]:
         """The tool schemas this session's provider calls carry: built-in plus extensions, narrowed to a role's
-        allowed subset (``session["allowed_tools"]``) and then by the capability partition, when that is on."""
+        allowed subset (``session["allowed_tools"]``) and then by the capability partition, when that is on.
+
+        An unrestricted subagent (a subagent prompt and no explicit list) also loses the parent's skill menu
+        tools; see ``_SUBAGENT_EXCLUDED_TOOL_PREFIXES``."""
         tools = self._get_tool_schemas()
         allowed = session.get("allowed_tools")
+        allowed_set: set[str] | None = None
         if isinstance(allowed, (list, tuple, set)) and "all" not in {str(a).lower() for a in allowed}:
             allowed_set = {str(a) for a in allowed}
-
-            def _schema_name(t: Any) -> str:
-                if isinstance(t, dict):
-                    fn = t.get("function")
-                    if isinstance(fn, dict) and fn.get("name"):
-                        return str(fn["name"])
-                return str(t.get("name", "")) if isinstance(t, dict) else ""
-
-            tools = [t for t in tools if _schema_name(t) in allowed_set]
+        if allowed_set is not None:
+            tools = [t for t in tools if _tool_schema_name(t) in allowed_set]
+        elif session.get("subagent_system_prompt"):
+            tools = [t for t in tools if not _tool_schema_name(t).startswith(_SUBAGENT_EXCLUDED_TOOL_PREFIXES)]
 
         # 13-I2 capability partition: host-owned visibility filter over
         # provider-bound schemas. Flag OFF (default) preserves the exact
@@ -1447,7 +1462,10 @@ class WispAgentCore:
             )
             static_prompt = assembler.build(ctx)
 
-            tools_block = self._build_tools_block(allowed_set)
+            tools_block = self._build_tools_block(
+                allowed_set,
+                _SUBAGENT_EXCLUDED_TOOL_PREFIXES if is_subagent and allowed_set is None else (),
+            )
             if tools_block:
                 static_prompt += "\n\n" + tools_block
 
@@ -1888,7 +1906,8 @@ class WispAgentCore:
             logger.debug("Failed to get relevant files: %s", e)
         return ""
 
-    def _build_tools_block(self, allowed_set: set[str] | None = None) -> str:
+    def _build_tools_block(self, allowed_set: set[str] | None = None,
+                           exclude_prefixes: tuple[str, ...] = ()) -> str:
         """Generate the prompt's tool menu from live registries.
 
         Single source of truth: TOOL_SCHEMAS plus whatever extensions
@@ -1896,6 +1915,9 @@ class WispAgentCore:
         is announced automatically; renaming one cannot leave a phantom
         name behind (the previous hardcoded dict drifted exactly this
         way — it advertised 'spawn_subagent', which never existed).
+
+        *exclude_prefixes* drops tools by name prefix (an unrestricted subagent's skill tools, which its
+        provider call does not carry either).
 
         When *allowed_set* is given (role-restricted subagents), only those
         tools are advertised — otherwise the prompt lists tools the model
@@ -1923,6 +1945,8 @@ class WispAgentCore:
             if not name or name in seen:
                 continue
             if allowed_set is not None and name not in allowed_set:
+                continue
+            if exclude_prefixes and name.startswith(exclude_prefixes):
                 continue
             seen.add(name)
             entries.append((name, first))
