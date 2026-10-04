@@ -128,6 +128,10 @@ def _child_verdict(*, saw_done: bool, saw_fatal_error: bool, error_message: str,
 logger = logging.getLogger(__name__)
 
 
+#: How much later the outer backstop deadline is than the mid-turn deadline (see `SubagentRunner.run`).
+_OUTER_DEADLINE_GRACE_S = 2.0
+
+
 class FirstTokenTimeout(asyncio.TimeoutError):
     """Provider accepted the request but streamed nothing within budget.
 
@@ -306,7 +310,10 @@ class SubagentRunner:
             )
 
         try:
-            async with asyncio.timeout(contract.timeout_seconds):
+            # The mid-turn deadline inside the execution loop is the one that keeps the partial round; this outer
+            # one is the backstop. It must sit measurably later: set equal, a busy loop expires both in the same
+            # tick, both cancel the task, and the backstop wins with an empty round.
+            async with asyncio.timeout(contract.timeout_seconds + _OUTER_DEADLINE_GRACE_S):
                 result_dict = await self._run_agent(
                     contract,
                     child_cfg,

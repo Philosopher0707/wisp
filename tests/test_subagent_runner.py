@@ -541,6 +541,31 @@ class TestRunnerRun:
         assert "finding: auth bypass in login.py" in result.output
         assert "[TIMED OUT]" in result.output
 
+    async def test_partial_round_survives_when_both_deadlines_expire_in_one_loop_tick(self, config, contract):
+        """The inner (mid-turn) and outer deadlines differ only by the setup time. When the event loop is busy
+        past both, their timers fire in the same tick and both cancel the task, so the inner handler never sees
+        a timeout and the analysis already produced is lost. A loaded CI runner does exactly this; here a
+        blocking sleep stands in for it, so the test is deterministic."""
+        import time
+
+        contract.timeout_seconds = 0.3
+        runner = SubagentRunner(config, Path("/tmp"))
+
+        class BusyLoopCore(FakeCore):
+            async def turn(self, session_dict, task):
+                yield {"type": "content", "text": "finding: auth bypass in login.py"}
+                time.sleep(0.6)  # blocks the loop past both deadlines
+                await asyncio.sleep(5)
+                yield {"type": "done"}
+
+        with patch("wisp.providers.factory.ProviderFactory") as mock_factory:
+            mock_factory.return_value.from_config.return_value = MagicMock()
+            with patch("wisp.core.engine.WispAgentCore", BusyLoopCore):
+                result = await runner.run(contract, "/tmp", "prompt")
+
+        assert result.timed_out is True
+        assert "finding: auth bypass in login.py" in result.output, result.output
+
     async def test_crash_emits_failed_event(self, runner, contract):
         events = []
 
