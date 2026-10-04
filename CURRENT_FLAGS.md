@@ -14,7 +14,7 @@
 > `CURRENT_FINDINGS.md` (every recorded finding and its status), `CURRENT_OPEN_ITEMS.md`
 > (what is open). All four are derived; none may decide.
 >
-> Generated 2026-09-25 at `5245f46` · **26 switches** (23 `bool` settings in `WispConfig` + 3 read from the environment) · **11 ON**, 15 OFF.
+> Generated 2026-09-25 at `34e3de7` · **26 switches** (23 `bool` settings in `WispConfig` + 3 read from the environment) · **11 ON**, 15 OFF.
 
 ---
 
@@ -24,7 +24,7 @@
 |---|---|---|---|---|---|---|---|
 | `durable_runs` | `WISP_DURABLE_RUNS` | **ON** | `wisp/composition.py:339` | persist a durable `RunRecord` per turn and give `BackgroundAgentManager` its SQLite store | — | ADR-0002 | — |
 | `session_event_fidelity` | `WISP_SESSION_EVENT_FIDELITY` | **ON** | `wisp/core/runtime.py:649` | journal `assistant_message` / `tool_call` / `tool_result` so replay can reconstruct a turn | — | ADR-0002 | — |
-| `turn_spans` | `WISP_TURN_SPANS` | **ON** | `wisp/composition.py:359`, `wisp/core/runtime.py:1440` | emit a trace span per turn and per tool call | — | ADR-0002 | — |
+| `turn_spans` | `WISP_TURN_SPANS` | **ON** | `wisp/composition.py:369`, `wisp/core/runtime.py:1440` | emit a trace span per turn and per tool call | — | ADR-0002 | — |
 | `turn_journal` | `WISP_TURN_JOURNAL` | **ON** | `wisp/core/runtime.py:651` | journal each tool exchange the moment it closes, so a crash mid-turn keeps it | — | ADR-0010 | — |
 | `proposal_boundary` | `WISP_PROPOSAL_BOUNDARY` | **ON** | `wisp/core/runtime.py:658` | record a `ToolRequest` proposal and a `ToolResult` outcome for every call, rejections included | — | ADR-0011 | tests/test_proposal_boundary_records.py |
 | `record_verdict` | `WISP_RECORD_VERDICT` | **OFF** | `wisp/core/runtime.py:664` | record a completion verdict (PASS/FAIL/INCONCLUSIVE) at turn end — **records only** | — | ADR-0016 | tests/test_verdict_layer_recorded.py |
@@ -82,7 +82,7 @@ a decision, and this page introduces none.
    apply to them, and a test double cannot opt out by setting an attribute.
 2. **`verification_loop` has two consumption sites on the turn path**
    (`wisp/core/stateless.py:530` and `:1301`) and `turn_spans` has two
-   (`wisp/composition.py:359`, `wisp/core/runtime.py:1440`). ADR-0002 says *"read at the
+   (`wisp/composition.py:369`, `wisp/core/runtime.py:1440`). ADR-0002 says *"read at the
    consumption site"* — **plural sites are consistent with the rule**, so this is
    recorded as a fact rather than a violation. It is worth stating because the brief for
    this mission paraphrases the rule as *"read once, at the composition point"*, which
