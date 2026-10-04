@@ -26,6 +26,9 @@ SKILL_DIR_NAMES = [
     ".github/skills",
     ".copilot/skills",
     ".factory/skills",
+    # Where `capture_resolved_skill` writes. It was missing here, so auto-captured skills were written and never
+    # loaded back.
+    ".wisp/skills/auto",
 ]
 
 GLOBAL_SKILL_DIRS = [

@@ -11,6 +11,7 @@ capture surface, and a global matches how stateless.py shares its assembler.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from collections import deque
@@ -25,6 +26,26 @@ logger = logging.getLogger(__name__)
 # (payloads, not parameters).
 _VOLATILE_ARG_KEYS = {"content", "text", "old", "new", "error_output", "result"}
 _MAX_DIGEST_VALUE = 60
+
+
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+_MAX_DESCRIPTION = 200
+
+
+def _one_line(text: object, limit: int = 400) -> str:
+    """Collapse to one printable line. Task text and tool arguments are untrusted: a newline in either would
+    let it add frontmatter keys, close the frontmatter early, or append body lines to a skill that later reaches
+    the system prompt, so no whitespace or control character survives."""
+    return " ".join(_CONTROL_CHARS.sub(" ", str(text)).split())[:limit]
+
+
+def _yaml_description(description: str, fallback: str) -> str:
+    """A description as a YAML double-quoted scalar. A plain scalar breaks on ``: `` (every default description
+    contains one), and JSON string syntax is valid YAML, so it also round-trips through ``yaml.safe_load``."""
+    # `parse_skill` finds the end of the frontmatter with `content.split("---", 2)`, a substring split and not a
+    # line match, so a `---` anywhere in the description would end the frontmatter early. Shorten any run.
+    text = re.sub(r"-{3,}", "--", _one_line(description, _MAX_DESCRIPTION))
+    return json.dumps(text or fallback, ensure_ascii=False)
 
 
 def _digest_args(args: dict[str, Any] | None) -> dict[str, str]:
@@ -47,10 +68,11 @@ class CapturedStep:
     args: dict[str, str] = field(default_factory=dict)
 
     def describe(self) -> str:
+        tool = _one_line(self.tool, 100)
         if not self.args:
-            return self.tool
-        arg_str = ", ".join(f"{k}: {v}" for k, v in self.args.items())
-        return f"{self.tool} ({arg_str})"
+            return tool
+        arg_str = ", ".join(f"{_one_line(k, 100)}: {_one_line(v)}" for k, v in self.args.items())
+        return f"{tool} ({arg_str})"
 
 
 @dataclass
@@ -198,7 +220,7 @@ def _render_new(slug: str, description: str, steps: list[CapturedStep]) -> str:
     lines = [
         "---",
         f"name: {slug}",
-        f"description: {description.strip() or f'Captured {slug} workflow'}",
+        f"description: {_yaml_description(description, f'Captured {slug} workflow')}",
         "triggers:",
         f"  - {slug}",
         "wisp_captures: 1",
@@ -295,7 +317,7 @@ def _merge_into(
     lines = [
         "---",
         f"name: {slug}",
-        f"description: {(description.strip() or existing['description'])}",
+        f"description: {_yaml_description(description, existing['description'])}",
         "triggers:",
         f"  - {slug}",
         f"wisp_captures: {existing['captures'] + 1}",
