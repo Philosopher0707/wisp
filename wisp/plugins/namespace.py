@@ -52,6 +52,7 @@ class NamespaceManager:
     def __init__(self, reserved_prefixes: set[str] | None = None):
         self._reserved = reserved_prefixes or CORE_TOOL_PREFIXES
         self._tool_to_plugin: dict[str, str] = {}
+        self._namespaces: set[str] = set()
 
     def prefix_tool_name(self, plugin_name: str, tool_name: str) -> str:
         """Add plugin namespace prefix to a tool name.
@@ -70,11 +71,9 @@ class NamespaceManager:
         if tool_name in self._reserved:
             return tool_name
 
-        # Check if any reserved prefix matches the start
-        for prefix in self._reserved:
-            if tool_name == prefix or tool_name.startswith(f"{prefix}_"):
-                return tool_name
-
+        # Reserved names are matched exactly. A near-miss such as
+        # "search_files" is a distinct tool, not the core "search" tool,
+        # and must still be namespaced.
         prefixed = f"{plugin_name}{_NS_SEPARATOR}{tool_name}"
         self._tool_to_plugin[prefixed] = plugin_name
         return prefixed
@@ -95,9 +94,9 @@ class NamespaceManager:
         parts = prefixed_name.split(_NS_SEPARATOR, 1)
         if len(parts) == 2:
             candidate_ns, original = parts
-            if candidate_ns in self._tool_to_plugin.get(
-                prefixed_name, ""
-            ) or self._is_known_namespace(candidate_ns):
+            if self._tool_to_plugin.get(prefixed_name) == candidate_ns or (
+                self._is_known_namespace(candidate_ns)
+            ):
                 return (candidate_ns, original)
 
         return (None, prefixed_name)
@@ -146,6 +145,9 @@ class NamespaceManager:
         """
         if not self.validate_namespace(namespace):
             raise ValueError(f"Namespace '{namespace}' is invalid or already taken")
+        if namespace in self._namespaces:
+            raise ValueError(f"Namespace '{namespace}' is already registered")
+        self._namespaces.add(namespace)
 
     def register_plugin(self, manifest: PluginManifest) -> None:
         """Register all tool names from a plugin under its namespace.
@@ -182,6 +184,6 @@ class NamespaceManager:
 
     def _is_known_namespace(self, namespace: str) -> bool:
         """Check if a namespace string has been registered."""
-        return namespace in set(
+        return namespace in self._namespaces or namespace in set(
             self._tool_to_plugin.values()
         )
