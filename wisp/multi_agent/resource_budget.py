@@ -11,6 +11,10 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 
+#: The meter's ruler: characters per token. One constant so tool results and streamed output are counted alike.
+CHARS_PER_TOKEN = 4
+
+
 @dataclass
 class ResourceBudget:
     """Resource limits for a single subagent execution.
@@ -24,6 +28,7 @@ class ResourceBudget:
 
     _tokens_used: int = field(default=0, repr=False)
     _tool_calls: int = field(default=0, repr=False)
+    _pending_chars: int = field(default=0, repr=False)
     _started_at: float = field(default=0.0, repr=False)
     _exhausted: bool = field(default=False, repr=False)
     _exhausted_reason: str = field(default="", repr=False)
@@ -47,12 +52,23 @@ class ResourceBudget:
         self._started_at = time.monotonic()
         self._tokens_used = 0
         self._tool_calls = 0
+        self._pending_chars = 0
         self._exhausted = False
         self._exhausted_reason = ""
 
     def record_tokens(self, count: int) -> None:
         """Record token consumption. Returns True if budget remains."""
         self._tokens_used += count
+
+    def record_text(self, text: str) -> None:
+        """Record text at ``CHARS_PER_TOKEN`` characters per token, carrying the remainder.
+
+        Streaming providers send many tiny deltas; flooring each one (``len(delta) // 4``) counts every delta shorter
+        than a token as zero, so a long stream would cost nothing. The remainder is carried instead.
+        """
+        self._pending_chars += len(text)
+        whole, self._pending_chars = divmod(self._pending_chars, CHARS_PER_TOKEN)
+        self._tokens_used += whole
 
     def record_tool_call(self) -> None:
         """Record a tool call. Returns True if budget remains."""
