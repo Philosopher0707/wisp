@@ -334,6 +334,9 @@ class SubagentRunner:
                 session_id=session["id"],
                 files_changed=result_dict.get("files_changed", []),
                 iterations_used=result_dict.get("iterations_used", 0),
+                # A mid-run deadline keeps its retryable meaning even though
+                # the partial round now survives inside output.
+                timed_out=result_dict.get("timed_out", False),
             )
 
             # Token estimation
@@ -585,101 +588,124 @@ class SubagentRunner:
             if remaining <= 0:
                 raise asyncio.TimeoutError("contract deadline reached")
 
-            async with asyncio.timeout(remaining):
-                child_start = time.monotonic()
-                last_event_at = child_start
-                first_event_seen = False
-                # The confirmation gate is structural now: a mutating tool with no
-                # approver is DENIED rather than executed. A subagent's
-                # authorisation is its contract's `auto_approve`, which
-                # `_build_child_config` already sets — so the child states its
-                # authorisation explicitly instead of inheriting a fall-through.
-                # A contract with `auto_approve=False` now gets DENIED for a
-                # write, which is the correct reading: it was never authorised.
-                stream = core.turn(session_dict, contract.task)
-                try:
-                    # First-token deadline: wait_for cancels the pending
-                    # __anext__ on stall; the generator is closed below so
-                    # the provider bridge thread stops with it.
-                    first_event = await asyncio.wait_for(
-                        stream.__anext__(), timeout=self.FIRST_TOKEN_DEADLINE_S
-                    )
-                except asyncio.TimeoutError as exc:
-                    await stream.aclose()
-                    raise FirstTokenTimeout(self.FIRST_TOKEN_DEADLINE_S) from exc
-
-                async def _with_first(first, rest):
-                    yield first
-                    async for ev in rest:
-                        yield ev
-
-                async for event in _with_first(first_event, stream):
-                    now = time.monotonic()
-                    etype = event.get("type")
-                    if not first_event_seen:
-                        first_event_seen = True
-                        # Where a dying child's budget goes: latency to
-                        # first token vs time lost mid-turn.
-                        logger.info(
-                            "Subagent %s first event (%s) after %.1fs — task=%d chars, msgs=%d",
-                            contract.name, etype, now - child_start,
-                            len(contract.task or ""),
-                            len(session_dict.get("messages", [])),
+            # A deadline that fires mid-turn must NOT discard the analysis
+            # the child already produced (same rule as _run_via_runtime).
+            # Only TimeoutError is caught — turn-unwind cancellation is
+            # CancelledError and still propagates.
+            timed_out_mid_run = False
+            try:
+                async with asyncio.timeout(remaining):
+                    child_start = time.monotonic()
+                    last_event_at = child_start
+                    first_event_seen = False
+                    # The confirmation gate is structural now: a mutating tool with no
+                    # approver is DENIED rather than executed. A subagent's
+                    # authorisation is its contract's `auto_approve`, which
+                    # `_build_child_config` already sets — so the child states its
+                    # authorisation explicitly instead of inheriting a fall-through.
+                    # A contract with `auto_approve=False` now gets DENIED for a
+                    # write, which is the correct reading: it was never authorised.
+                    stream = core.turn(session_dict, contract.task)
+                    try:
+                        # First-token deadline: wait_for cancels the pending
+                        # __anext__ on stall; the generator is closed below so
+                        # the provider bridge thread stops with it.
+                        first_event = await asyncio.wait_for(
+                            stream.__anext__(), timeout=self.FIRST_TOKEN_DEADLINE_S
                         )
-                    elif etype == "tool_call":
-                        logger.info(
-                            "Subagent %s tool %s at %.1fs (+%.1fs since prev)",
-                            contract.name, event.get("name", "?"),
-                            now - child_start, now - last_event_at,
-                        )
-                    last_event_at = now
-                    if etype == "content":
-                        # Streaming providers emit many small deltas; the
-                        # report is their concatenation, not the last chunk.
-                        output_text += event.get("text", "")
-                        if output_text.strip():
-                            last_nonempty_round = output_text
-                    elif etype == "tool_call":
-                        engine_iterations += 1
-                        budget.record_tool_call()
-                        name = event.get("name", "")
-                        args = event.get("arguments", {})
-                        arg_preview = self._compact_args(args)
-                        tool_calls_log.append({"name": name, "args_preview": arg_preview})
-                        budget_error = budget.check() or ""
-                        if budget_error:
-                            logger.warning(
-                                "Subagent %s budget exhausted: %s",
-                                contract.name, budget_error,
+                    except asyncio.TimeoutError as exc:
+                        await stream.aclose()
+                        raise FirstTokenTimeout(self.FIRST_TOKEN_DEADLINE_S) from exc
+
+                    async def _with_first(first, rest):
+                        yield first
+                        async for ev in rest:
+                            yield ev
+
+                    async for event in _with_first(first_event, stream):
+                        now = time.monotonic()
+                        etype = event.get("type")
+                        if not first_event_seen:
+                            first_event_seen = True
+                            # Where a dying child's budget goes: latency to
+                            # first token vs time lost mid-turn.
+                            logger.info(
+                                "Subagent %s first event (%s) after %.1fs — task=%d chars, msgs=%d",
+                                contract.name, etype, now - child_start,
+                                len(contract.task or ""),
+                                len(session_dict.get("messages", [])),
                             )
-                            break
-                        # Content after a tool call belongs to the next
-                        # round — pre-action narration is not the answer.
-                        output_text = ""
-                    elif etype == "tool_result":
-                        result_data = event.get("result", "")
-                        if isinstance(result_data, str):
-                            budget.record_tokens(len(result_data) // 4)
-                        budget_error = budget.check() or ""
-                        if budget_error:
-                            logger.warning(
-                                "Subagent %s budget exhausted: %s",
-                                contract.name, budget_error,
+                        elif etype == "tool_call":
+                            logger.info(
+                                "Subagent %s tool %s at %.1fs (+%.1fs since prev)",
+                                contract.name, event.get("name", "?"),
+                                now - child_start, now - last_event_at,
                             )
-                            break
-                    elif etype == "done":
-                        saw_done = True
-                    elif etype == "error":
-                        # Only a fatal error fails the turn (ADR-0044); a
-                        # recoverable one must not abandon the child mid-turn.
-                        error_message = str(_event_field(event, "message") or "turn failed")
-                        if not _event_field(event, "recoverable", True):
-                            saw_fatal_error = True
+                        last_event_at = now
+                        if etype == "content":
+                            # Streaming providers emit many small deltas; the
+                            # report is their concatenation, not the last chunk.
+                            output_text += event.get("text", "")
+                            if output_text.strip():
+                                last_nonempty_round = output_text
+                        elif etype == "tool_call":
+                            engine_iterations += 1
+                            budget.record_tool_call()
+                            name = event.get("name", "")
+                            args = event.get("arguments", {})
+                            arg_preview = self._compact_args(args)
+                            tool_calls_log.append({"name": name, "args_preview": arg_preview})
+                            budget_error = budget.check() or ""
+                            if budget_error:
+                                logger.warning(
+                                    "Subagent %s budget exhausted: %s",
+                                    contract.name, budget_error,
+                                )
+                                break
+                            # Content after a tool call belongs to the next
+                            # round — pre-action narration is not the answer.
+                            output_text = ""
+                        elif etype == "tool_result":
+                            result_data = event.get("result", "")
+                            if isinstance(result_data, str):
+                                budget.record_tokens(len(result_data) // 4)
+                            budget_error = budget.check() or ""
+                            if budget_error:
+                                logger.warning(
+                                    "Subagent %s budget exhausted: %s",
+                                    contract.name, budget_error,
+                                )
+                                break
+                        elif etype == "done":
+                            saw_done = True
+                        elif etype == "error":
+                            # Only a fatal error fails the turn (ADR-0044); a
+                            # recoverable one must not abandon the child mid-turn.
+                            error_message = str(_event_field(event, "message") or "turn failed")
+                            if not _event_field(event, "recoverable", True):
+                                saw_fatal_error = True
+            except asyncio.TimeoutError:
+                timed_out_mid_run = True
+                error_message = error_message or (
+                    f"contract deadline reached after {contract.timeout_seconds:.0f}s")
 
             success, output_text, error = _child_verdict(
                 saw_done=saw_done, saw_fatal_error=saw_fatal_error,
                 error_message=error_message, budget_error=budget_error,
                 output_text=output_text, last_nonempty_round=last_nonempty_round)
+            if timed_out_mid_run and not budget_error:
+                # Keep the partial round: the parent synthesizes from
+                # findings, and a bare "[INCOMPLETE]" throws the attempt away.
+                note = (f"[TIMED OUT] contract deadline reached after "
+                        f"{contract.timeout_seconds:.0f}s")
+                if tool_calls_log:
+                    last_tool = tool_calls_log[-1].get("name", "none") \
+                        if isinstance(tool_calls_log[-1], dict) else "none"
+                    note += (f" — made {len(tool_calls_log)} tool calls"
+                             f" — last tool: {last_tool}")
+                partial = last_nonempty_round.strip()
+                output_text = f"{partial}\n{note}" if partial else note
+                error = error or note
             return {
                 "success": success,
                 "output": output_text,
@@ -687,6 +713,7 @@ class SubagentRunner:
                 "files_changed": self._extract_files_changed(output_text) if success else [],
                 "iterations_used": engine_iterations,
                 "messages": session_dict.get("messages", []),
+                "timed_out": timed_out_mid_run,
             }
         finally:
             pass  # Provider is cached for reuse — do not close
@@ -762,56 +789,79 @@ class SubagentRunner:
         if remaining <= 0:
             raise asyncio.TimeoutError("contract deadline reached")
 
-        async with asyncio.timeout(remaining):
-            async for event in self._agent_runtime.run_turn(runtime_session, contract.task):
-                etype = event.get("type")
-                if etype == "content":
-                    # Streaming providers emit many small deltas; the
-                    # report is their concatenation, not the last chunk.
-                    output_text += event.get("text", "")
-                    if output_text.strip():
-                        last_nonempty_round = output_text
-                elif etype == "tool_call":
-                    engine_iterations += 1
-                    budget.record_tool_call()
-                    name = event.get("name", "")
-                    args = event.get("arguments", {})
-                    arg_preview = self._compact_args(args)
-                    tool_calls_log.append({"name": name, "args_preview": arg_preview})
-                    budget_error = budget.check() or ""
-                    if budget_error:
-                        logger.warning(
-                            "Subagent %s budget exhausted: %s",
-                            contract.name, budget_error,
-                        )
-                        break
-                    # Content after a tool call belongs to the next
-                    # round — pre-action narration is not the answer.
-                    output_text = ""
-                elif etype == "tool_result":
-                    result_data = event.get("result", "")
-                    if isinstance(result_data, str):
-                        budget.record_tokens(len(result_data) // 4)
-                    budget_error = budget.check() or ""
-                    if budget_error:
-                        logger.warning(
-                            "Subagent %s budget exhausted: %s",
-                            contract.name, budget_error,
-                        )
-                        break
-                elif etype == "done":
-                    saw_done = True
-                elif etype == "error":
-                    # Only a fatal error fails the turn (ADR-0044); a
-                    # recoverable one must not abandon the child mid-turn.
-                    error_message = str(_event_field(event, "message") or "turn failed")
-                    if not _event_field(event, "recoverable", True):
-                        saw_fatal_error = True
+        # A deadline that fires mid-turn must NOT discard the analysis the
+        # child already produced: fall through to the verdict with the
+        # partial round intact. Only TimeoutError is caught — turn-unwind
+        # cancellation is CancelledError and still propagates.
+        timed_out_mid_run = False
+        try:
+            async with asyncio.timeout(remaining):
+                async for event in self._agent_runtime.run_turn(runtime_session, contract.task):
+                    etype = event.get("type")
+                    if etype == "content":
+                        # Streaming providers emit many small deltas; the
+                        # report is their concatenation, not the last chunk.
+                        output_text += event.get("text", "")
+                        if output_text.strip():
+                            last_nonempty_round = output_text
+                    elif etype == "tool_call":
+                        engine_iterations += 1
+                        budget.record_tool_call()
+                        name = event.get("name", "")
+                        args = event.get("arguments", {})
+                        arg_preview = self._compact_args(args)
+                        tool_calls_log.append({"name": name, "args_preview": arg_preview})
+                        budget_error = budget.check() or ""
+                        if budget_error:
+                            logger.warning(
+                                "Subagent %s budget exhausted: %s",
+                                contract.name, budget_error,
+                            )
+                            break
+                        # Content after a tool call belongs to the next
+                        # round — pre-action narration is not the answer.
+                        output_text = ""
+                    elif etype == "tool_result":
+                        result_data = event.get("result", "")
+                        if isinstance(result_data, str):
+                            budget.record_tokens(len(result_data) // 4)
+                        budget_error = budget.check() or ""
+                        if budget_error:
+                            logger.warning(
+                                "Subagent %s budget exhausted: %s",
+                                contract.name, budget_error,
+                            )
+                            break
+                    elif etype == "done":
+                        saw_done = True
+                    elif etype == "error":
+                        # Only a fatal error fails the turn (ADR-0044); a
+                        # recoverable one must not abandon the child mid-turn.
+                        error_message = str(_event_field(event, "message") or "turn failed")
+                        if not _event_field(event, "recoverable", True):
+                            saw_fatal_error = True
+        except asyncio.TimeoutError:
+            timed_out_mid_run = True
+            error_message = error_message or (
+                f"contract deadline reached after {contract.timeout_seconds:.0f}s")
 
         success, output_text, error = _child_verdict(
             saw_done=saw_done, saw_fatal_error=saw_fatal_error,
             error_message=error_message, budget_error=budget_error,
             output_text=output_text, last_nonempty_round=last_nonempty_round)
+        if timed_out_mid_run and not budget_error:
+            # Keep the partial round: the parent synthesizes from findings,
+            # and a bare "[INCOMPLETE]" throws the whole attempt away.
+            note = (f"[TIMED OUT] contract deadline reached after "
+                    f"{contract.timeout_seconds:.0f}s")
+            if tool_calls_log:
+                last_tool = tool_calls_log[-1].get("name", "none") \
+                    if isinstance(tool_calls_log[-1], dict) else "none"
+                note += (f" — made {len(tool_calls_log)} tool calls"
+                         f" — last tool: {last_tool}")
+            partial = last_nonempty_round.strip()
+            output_text = f"{partial}\n{note}" if partial else note
+            error = error or note
         return {
             "success": success,
             "output": output_text,
@@ -819,6 +869,7 @@ class SubagentRunner:
             "files_changed": self._extract_files_changed(output_text) if success else [],
             "iterations_used": engine_iterations,
             "messages": runtime_session.get("messages", []),
+            "timed_out": timed_out_mid_run,
         }
 
     def close(self) -> None:
