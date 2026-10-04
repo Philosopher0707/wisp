@@ -306,3 +306,16 @@ Strengthened to require real `content` events and no `error` events, plus a cont
 concurrent; the mutation then fails in 3.4 s. Always run the mutation, and give a test that waits an outer timeout so it
 fails fast instead of hanging.
 
+
+## Lesson: skill capture passed 143 tests and the auto half did nothing (2026-10-04)
+
+Search: skill capture, auto skill, auto_skill_capture, discover_skills, .wisp/skills/auto, SKILL.md, YAML, frontmatter, injection, write-only, round trip.
+Auto-capture on a RESOLVED turn wrote `.wisp/skills/auto/<slug>/SKILL.md`, a directory `discover_skills` never scanned; and
+every file it wrote was invalid YAML (`description: Auto-captured RESOLVED workflow: <task>` has a `: ` in a plain scalar),
+so `parse_skill` returned None. The tests asserted the *path written* and used colon-free descriptions. A third defect hid
+behind the first two: task text and tool arguments went into the file verbatim, and `parse_skill` ends the frontmatter
+with a substring `split("---")`, so a newline or a `---` could add keys or close the frontmatter. Fixing "not loaded"
+alone would have created a persistent prompt-injection path, so all three were fixed together (PR #63). Rules: test a
+write-then-read **round trip** and the real consumer (`discover_skills`, `SkillExtension.tools()`), not the write alone;
+use a description with a colon, a newline and `---`; and when a feature is dormant, ask what the dormancy is hiding before
+you wake it. Still open: `parse_skill`'s substring split is a hazard for hand-written skills.
