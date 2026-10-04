@@ -441,6 +441,56 @@ class BackgroundAgentManager:
             if include_finished or e.status not in _TERMINAL
         ]
 
+    def _progress_note(self, entry: BackgroundAgentEntry) -> str:
+        """Latest sign of life for a running agent. Never raises.
+
+        A wait that expires (or a result polled mid-run) must still tell the
+        parent what the worker was last doing — a bare id says nothing and
+        reads as a lost agent.
+        """
+        try:
+            events = self.telemetry.transcript(entry.id, last_n=5)
+        except Exception:
+            return ""
+        for ev in reversed(events):
+            if getattr(ev, "kind", "") in ("progress", "started"):
+                text = str(getattr(ev, "text", "") or "").strip()
+                if text:
+                    return f"{ev.kind}: {text[:160]}"
+        if events:
+            text = str(getattr(events[-1], "text", "") or "").strip()
+            if text:
+                return text[:160]
+        return ""
+
+    def progress(self, agent_id: str) -> dict[str, Any]:
+        """Live sign-of-life for a running agent; {} when unknown or settled."""
+        entry = self._entries.get(agent_id)
+        if entry is None or entry.status in _TERMINAL:
+            return {}
+        return {
+            "elapsed_seconds": round(entry.elapsed(), 1),
+            "turns": entry.turns,
+            "progress": self._progress_note(entry),
+        }
+
+    def unknown_agent_error(self, agent_id: str) -> str:
+        """Unknown ids must still say what happened — entries are in-memory,
+        so a restart (or an interrupted turn in a new process) drops them
+        while the durable row may survive. Consult it before shrugging."""
+        base = f"Unknown agent_id '{agent_id}' (no live entry)"
+        if self._run_store is None:
+            return base + " — relaunch the task; entries do not survive restarts"
+        try:
+            rec = self._run_store.get(agent_id)
+        except Exception:
+            return base
+        if rec is None:
+            return base + " — relaunch the task"
+        state = getattr(rec.status, "value", rec.status)
+        return (f"{base}; durable row is {state} — entries do not survive "
+                "restarts, relaunch the task to run it again")
+
     def snapshot(self, entry: BackgroundAgentEntry) -> dict[str, Any]:
         snap: dict[str, Any] = {
             "agent_id": entry.id,
@@ -476,17 +526,24 @@ class BackgroundAgentManager:
         }
 
     async def result(self, agent_id: str, wait_seconds: float = DEFAULT_WAIT_SECONDS) -> dict[str, Any]:
-        """Snapshot an agent, optionally blocking until it finishes."""
+        """Snapshot an agent, optionally blocking until it finishes.
+
+        A still-running agent reports live progress (elapsed, turns, last
+        sign of life) — never a bare status the parent cannot act on.
+        """
         entry = self._entries.get(agent_id)
         if entry is None:
-            return {"ok": False, "error": f"Unknown agent_id '{agent_id}'"}
+            return {"ok": False, "error": self.unknown_agent_error(agent_id)}
         wait_seconds = min(max(0.0, float(wait_seconds)), MAX_WAIT_SECONDS)
         if wait_seconds > 0 and entry.status not in _TERMINAL:
             try:
                 await asyncio.wait_for(entry.done.wait(), timeout=wait_seconds)
             except asyncio.TimeoutError:
                 pass
-        return {"ok": True, **self.snapshot(entry)}
+        snap = self.snapshot(entry)
+        if entry.status not in _TERMINAL:
+            snap["progress"] = self.progress(agent_id)
+        return {"ok": True, **snap}
 
     # ── Continuation ──────────────────────────────────────────────────
 

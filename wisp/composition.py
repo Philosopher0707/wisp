@@ -297,6 +297,16 @@ class CompositionRoot:
         # One shared ring set: blocking fanout children (orchestrator) and
         # background agents (manager) are visible in the same monitor (GH#10).
         self.subagent_orchestrator.worker_telemetry = self.background_agents.telemetry
+        # Park runs abandoned by dead processes (stale RUNNING → PAUSED).
+        # recover() existed with no production caller, so a restart left
+        # every in-flight background run dangling with a live lease while
+        # collection answered "Unknown agent_id" — timed out and nothing.
+        try:
+            recovered = self.background_agents.recover()
+            if any(recovered.values()):
+                logger.info("background agents recovered at boot: %s", recovered)
+        except Exception:
+            logger.debug("background agent recovery failed", exc_info=True)
 
         # ADR-0057: the REST approval bridge. A REST request for an
         # executable-config action (`hooks.create`, `mcp.add_server`,
