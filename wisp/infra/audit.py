@@ -17,6 +17,11 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
+try:
+    import fcntl
+except ImportError:  # Windows has no fcntl; appends then fall back to the in-memory head
+    fcntl = None  # type: ignore[assignment]
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_AUDIT_PATH = Path.home() / ".config" / "wisp" / "audit.jsonl"
@@ -114,23 +119,62 @@ class AuditTrail:
             "key": key,
             "old_value": self._redact_value(key or "", old_value),
             "new_value": self._redact_value(key or "", new_value),
-            "_prev_hash": self._last_hash,
         }
         if metadata:
             entry["metadata"] = self._redact_value("metadata", metadata)
 
-        payload = json.dumps(entry, sort_keys=True, separators=(",", ":"))
-        entry["_hash"] = hashlib.sha256(payload.encode()).hexdigest()
-        self._last_hash = entry["_hash"]
-        self._entry_count += 1
-
         try:
-            with self._path.open("a", encoding="utf-8") as fh:
-                fh.write(json.dumps(entry, separators=(",", ":")) + "\n")
+            with self._path.open("a+b") as fh:
+                if fcntl is not None:
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+                try:
+                    # The head is read from the file under the lock. The CLI, the server and the tests all
+                    # append to this one log, so an in-memory head is only a hint: chaining onto it forks the
+                    # chain and `verify` then reports tampering in a log nobody edited.
+                    entry["_prev_hash"] = self._read_head(fh) if fcntl is not None else self._last_hash
+                    payload = json.dumps(entry, sort_keys=True, separators=(",", ":"))
+                    entry["_hash"] = hashlib.sha256(payload.encode()).hexdigest()
+                    fh.seek(0, os.SEEK_END)
+                    fh.write((json.dumps(entry, separators=(",", ":")) + "\n").encode("utf-8"))
+                    fh.flush()
+                finally:
+                    if fcntl is not None:
+                        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
         except Exception:
             logger.exception("Audit log write failed for action=%s", action)
+            return ""
 
+        self._last_hash = entry["_hash"]
+        self._entry_count += 1
         return entry["_hash"]
+
+    @staticmethod
+    def _read_head(fh: Any) -> str:
+        """The `_hash` of the last parseable entry in an open file, or "" for an empty log.
+
+        Reads backwards in blocks, so the cost does not grow with the log. Caller holds the exclusive lock.
+        A corrupt trailing line is skipped here but stays in the file, so `verify` still reports it.
+        """
+        fh.seek(0, os.SEEK_END)
+        size = fh.tell()
+        window = 8192
+        while True:
+            start = max(0, size - window)
+            fh.seek(start)
+            lines = fh.read(size - start).split(b"\n")
+            if start > 0:
+                lines = lines[1:]  # the first piece may be cut mid-line
+            for raw in reversed(lines):
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    return str(json.loads(raw).get("_hash", ""))
+                except (ValueError, AttributeError):
+                    continue
+            if start == 0:
+                return ""
+            window *= 4
 
     def verify(self) -> Optional[int]:
         """Verify the entire audit chain.
