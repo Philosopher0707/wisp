@@ -40,9 +40,12 @@ path = "~/workspace/general purpose"
 role = "runtime"
 
 [[repo]]
+# Archived 2026-10-04 after the invariant review (docs/reviews/2026-10-04-plateform-invariant-review.md):
+# its audit chain and approval gate fail the same probes wisp does, and it has P2-P4 defects. Nothing in it should
+# run in production. Still to harvest: bind an approval to a checkpoint id and the approved content to a digest.
 name = "plateform"
 path = "~/active/plateform"
-role = "runtime"
+role = "archive"
 
 [[repo]]
 name = "always-on-worker"

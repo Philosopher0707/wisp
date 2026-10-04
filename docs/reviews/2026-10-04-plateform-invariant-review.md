@@ -52,6 +52,12 @@ What wisp does better than plateform: the hash covers every field, a corrupt lin
 - Decide separately whether to re-anchor the chain after the fix (a new epoch entry), so `verify` can pass again
   without erasing history.
 
-## Not done
+## Status (updated 2026-10-04)
 
-No fix has been applied. No plateform code was changed. The live audit log was only read.
+- **W1 fixed** in PR https://github.com/Philosopher0707/wisp/pull/61 (head re-read under `flock`; RED-first; 337 audit-touching
+  tests pass; on a copy of the live log 200 concurrent appends added 0 broken links). Awaiting the human's merge.
+- plateform is now role `archive` in `wisp.fleet.toml`.
+- **Still open:** W2 (truncation) and W3 (unkeyed chain) need a keyed MAC plus an external witness; harvest item 2
+  (approval bound to a checkpoint id and the approved content to a digest) is not started; the live log's 14
+  historical breaks are untouched, and whether to anchor a new epoch so `verify` can pass again is a human decision.
+- No plateform code was changed.
