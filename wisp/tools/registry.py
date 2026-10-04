@@ -848,7 +848,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "lsp_diagnostics",
-            "description": "Run language server diagnostics on a file to find errors and warnings. Supports .py (py_compile), .ts/.tsx (tsc), .js/.jsx (eslint), .rs (cargo check), .go (go vet). Use after writing code to catch errors.",
+            "description": "Syntax check for .py (syntax errors only — not undefined names or types; ruff/mypy are never invoked) or linter diagnostics for .ts/.tsx (tsc), .js/.jsx (eslint), .rs (cargo check), .go (go vet). Use after writing code to catch syntax errors.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1087,9 +1087,6 @@ def _build_tool_metadata(name: str, args: dict, result: str) -> dict:
                 except (ValueError, IndexError):
                     pass
                 break
-
-    elif name == "write_file" and "path" in args:
-        meta["bytes_written"] = len(args.get("content", ""))
 
     elif name == "edit_file":
         old_text = args.get("old_text", "")

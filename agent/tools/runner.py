@@ -33,6 +33,7 @@ __all__ = ["RunResult", "run_bash_with_sink", "install_sink", "uninstall_sink", 
 
 LOG_DIR = ARTIFACT_DIR
 _SANITIZE_RE = re.compile(r"[^a-zA-Z0-9._-]+")
+MAX_KEPT_LOGS = int(os.getenv("WISP_MAX_KEPT_LOGS", "100"))
 
 
 @dataclass
@@ -79,7 +80,25 @@ def _write_artifacts(cmd: str, stdout: str, stderr: str, exit_code: int, duratio
             tmp.replace(p)
         except Exception:
             p.write_text(body, encoding="utf-8", errors="replace")
+    _prune_old_logs()
     return run_path, last_path
+
+
+def _prune_old_logs() -> None:
+    """Best-effort rotation: keep the newest MAX_KEPT_LOGS run_*.log files.
+
+    Never breaks the tool path — a prune failure is silently ignored.
+    last_command.log is always kept.
+    """
+    try:
+        runs = sorted(LOG_DIR.glob("run_*.log"), key=lambda p: p.stat().st_mtime)
+        for stale in runs[:-MAX_KEPT_LOGS] if len(runs) > MAX_KEPT_LOGS else []:
+            try:
+                stale.unlink()
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 
 async def run_bash_with_sink(

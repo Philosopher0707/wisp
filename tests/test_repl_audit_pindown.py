@@ -536,24 +536,19 @@ def test_subagent_request_stays_single_agent(tmp_path):
 
 # ── Environment assumptions ─────────────────────────────────────────────
 
-def test_lsp_py_uses_running_interpreter(tmp_path, monkeypatch):
-    import sys
-
+def test_lsp_py_syntax_check_has_no_side_effects(tmp_path, monkeypatch):
     from wisp.tools import lsp as lsp_mod
 
-    seen = {}
-
-    class _R:
-        stdout = ""
-        stderr = ""
-        returncode = 0
-
+    calls = []
     monkeypatch.setattr("subprocess.run",
-                        lambda cmd, **kw: seen.update(cmd=cmd) or _R())
+                        lambda cmd, **kw: calls.append(cmd) or (_ for _ in ()).throw(
+                            AssertionError("py syntax check must not spawn subprocesses")))
     (tmp_path / "a.py").write_text("x = 1\n")
-    lsp_mod.tool_lsp_diagnostics("a.py", str(tmp_path))
-    assert seen["cmd"][0] == sys.executable  # not ambient python3 (version skew)
-    assert seen["cmd"][1:3] == ["-m", "py_compile"]
+    assert lsp_mod.tool_lsp_diagnostics("a.py", str(tmp_path)) == "✓ No syntax errors."
+    assert calls == []
+    assert not (tmp_path / "__pycache__").exists()  # no bytecode artifacts
+    (tmp_path / "b.py").write_text("def broken(:\n")
+    assert lsp_mod.tool_lsp_diagnostics("b.py", str(tmp_path)).startswith("[Syntax error]")
 
 
 def test_prompt_warns_about_bare_python3():

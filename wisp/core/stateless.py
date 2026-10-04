@@ -1685,7 +1685,7 @@ class WispAgentCore:
 
             # Detect file extensions in the project
             ext_to_linter = {
-                ".py": "py_compile / ruff / mypy",
+                ".py": "py_compile syntax check (syntax errors only)",
                 ".ts": "tsc --noEmit",
                 ".tsx": "tsc --noEmit",
                 ".js": "eslint",
@@ -1725,7 +1725,9 @@ class WispAgentCore:
                 return ""
 
             lines.append("## Available Code Checks")
-            lines.append("After writing or editing a file, these checks are auto-run. Write code that passes them:")
+            lines.append("After writing or editing a file, a syntax check + affected tests auto-run. "
+                         "A passing check stays silent — silence means it ran and passed, not that it was skipped. "
+                         "ruff/mypy are never auto-run; invoke them via run_bash if installed. Write code that passes them:")
             for ext in sorted(detected):
                 linter = ext_to_linter.get(ext, "unknown")
                 lines.append(f"- **{ext}** files: `{linter}`")
@@ -1737,6 +1739,10 @@ class WispAgentCore:
                 binary = fast_ext_to_check.get(ext)
                 if binary and shutil.which(binary):
                     available.append(f"`{binary}`")
+            if ".py" in detected:
+                for binary in ("ruff", "mypy"):
+                    if shutil.which(binary) and f"`{binary}`" not in available:
+                        available.append(f"`{binary}`")
             if available:
                 lines.append(f"\nInstalled: {', '.join(available)}")
 
