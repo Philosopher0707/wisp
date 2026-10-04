@@ -76,6 +76,20 @@ role = "agent"
 name = "gump"
 path = "~/active/gump"
 role = "agent"
+# MCP shim with no `label` tool (the human decision on a fix) and no `run` tool (arbitrary sandbox commands).
+# GUMP_ENV_FILE supplies the DSN and model key, so no secret is written into this manifest or mcp.json.
+# GUMP_WORKSPACE is unset on purpose: gump_fix needs the human to name the one repo it may work on.
+[repo.worker]
+command = ["/Library/Frameworks/Python.framework/Versions/3.12/bin/python3", "-m", "gump.mcp_server"]
+timeout_seconds = 120
+[repo.worker.env]
+GUMP_ENV_FILE = "~/active/gump/.env"
+PYTHONPATH = "~/active/gump/src"
+[repo.worker.tool_risk]
+gump_verify = "read"
+gump_trajectory = "read"
+gump_task = "read"
+gump_fix = "exec"
 
 [[repo]]
 name = "hank-mas"
