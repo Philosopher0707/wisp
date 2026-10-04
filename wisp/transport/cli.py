@@ -49,7 +49,7 @@ from wisp.approval_state import ApprovalSessionState, SessionPolicy
 from wisp.infra.security import redact_sensitive_tool_args
 from wisp.core.events import AgentEvent, EventType
 from wisp.terminal_width import (
-    is_accessible, get_output_mode, wrap_text_wide,
+    is_accessible, get_output_mode,
     status_symbols,
     OutputMode,
 )
@@ -400,6 +400,64 @@ def _preview_lines(text: str, max_lines: int = 3, max_line_width: int = 200) -> 
     if len(lines) > max_lines:
         shown.append(dim(f"  … +{len(lines) - max_lines} more"))
     return "\n".join(shown)
+
+
+def _full_lines(text: str) -> str:
+    """Every line, dimmed and indented — no count cap, no truncation marker.
+
+    The human terminal renders everything the event carries; width is left
+    to the terminal's own wrapping so no content is ever cut. (Model-side
+    caps upstream are a separate, context-protecting concern.)
+    """
+    if not text:
+        return ""
+    if not isinstance(text, str):
+        text = _coerce_tool_data(text)
+    lines = text.split("\n")
+    while lines and lines[-1].strip() == "":
+        lines.pop()
+    if not lines:
+        return ""
+    return "\n".join(dim(f"  {line}") for line in lines)
+
+
+_LOG_POINTER_RE = re.compile(r"\.agent/logs/[\w.\-]+\.log")
+
+
+def _resolve_full_output(text: str, workspace: str = "") -> str:
+    """Swap a collapsed sink preview for the complete log on disk.
+
+    The run_bash sink ships the model a ~10-line preview plus a pointer
+    (``[✓ Full output → .agent/logs/run_….log]``); the human terminal
+    shows everything, so read the artifact the pointer names. Best-effort:
+    unreadable/missing → the preview stands.
+    """
+    if not text:
+        return text
+    m = _LOG_POINTER_RE.search(text)
+    if not m:
+        return text
+    rel = m.group(0)
+    candidates = [rel]
+    if workspace:
+        candidates.append(str(Path(workspace) / rel))
+    for cand in candidates:
+        try:
+            return Path(cand).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+    return text
+
+
+def _transport_workspace(transport: Any) -> str:
+    """Best-effort workspace for resolving relative log pointers."""
+    config = getattr(transport, "config", None)
+    try:
+        if isinstance(config, dict):
+            return str(config.get("workspace", "") or "")
+        return str(getattr(config, "workspace", "") or "")
+    except Exception:
+        return ""
 
 
 def _detect_language(path: str) -> str:
@@ -1532,6 +1590,16 @@ class CLITransport(Transport):
             self._flush_content(stdout, width)
             name = ev.data.get("name", "")
             args = ev.data.get("arguments", {})
+            if name == "run_bash" and get_output_mode() != OutputMode.MINIMAL:
+                # The human sees the exact command, all lines of it — the
+                # spinner label below stays a collapsed live row.
+                cmd = str((args or {}).get("command", "") or "")
+                if cmd.strip():
+                    cmd_lines = cmd.strip("\n").split("\n")
+                    stdout.write(dim(f"  $ {cmd_lines[0]}") + "\n")
+                    for cont in cmd_lines[1:]:
+                        stdout.write(dim(f"    {cont}") + "\n")
+                    stdout.flush()
             label = f"{name} {_args_preview(args)}"
             spinner = self._get_spinner()
             spinner.start(label)
@@ -1768,10 +1836,10 @@ class CLITransport(Transport):
             except ImportError:
                 pass
 
-        # Full-output tools (non-edit): preserve multi-line formatting
-        _MAX_SHOW = 30
+        # Full-output tools (non-edit): the human terminal renders everything
+        # — resolve sink previews to their on-disk logs, then show all lines.
         if name in _FULL_OUTPUT_TOOLS and not is_edit_tool:
-            output_str = result_text
+            output_str = _resolve_full_output(result_text, _transport_workspace(self))
             if not self.show_tool_output:
                 line_count = output_str.count("\n") + 1
                 return f"{_build_header(icon, name, duration_str)}{dim(f' — {line_count} lines')}"
@@ -1779,30 +1847,19 @@ class CLITransport(Transport):
             # Light framing: thin dim rule + indented output (no heavy box, no emoji)
             label_str = f"{name} output"
             rule = _rule("-", label_str, style_fn=dim, width=width)
-            inner_w = width - 4
-            # Cap before wrapping: only the first _MAX_SHOW lines can ever
-            # render, so a 5MB minified-JSON dump must not pay full wrap
-            # cost. The x3 margin covers worst-case wide-char blowup.
-            _WRAP_INPUT_CAP = _MAX_SHOW * max(1, inner_w) * 3
-            wrapped = wrap_text_wide(output_str.strip()[:_WRAP_INPUT_CAP], inner_w)
-            # Cap floods: show first N wrapped lines, summarize the rest.
-            if len(wrapped) > _MAX_SHOW:
-                indented = "\n".join(dim(f"  {line}") for line in wrapped[:_MAX_SHOW])
-                indented += "\n" + dim(f"  … +{len(wrapped) - _MAX_SHOW} more lines")
-            else:
-                indented = "\n".join(dim(f"  {line}") for line in wrapped)
+            indented = _full_lines(output_str)
             if skip_header:
                 return indented
             header = _build_header(icon, name, duration_str)
             return f"{header}\n{rule}\n{indented}"
 
-        # Regular / compact tool results
+        # Regular / compact tool results: every line, no truncation marker.
         if not self.show_tool_output:
             if skip_header:
                 return None
             return _build_header(icon, name, duration_str)
 
-        preview = _preview_lines(result_text)
+        preview = _full_lines(result_text)
         if skip_header:
             return preview
         header = _build_header(icon, name, duration_str)

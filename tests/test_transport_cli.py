@@ -658,21 +658,23 @@ class TestBoundedToolRender:
         t._phase = "understand"
         return t
 
-    def test_huge_single_line_output_stays_bounded(self):
+    def test_huge_single_line_output_renders_fully_and_fast(self):
         import io
         import time
 
         out = io.StringIO()
         t = self._transport(out)
-        huge = '{"data": "' + "x" * (5 * 1024 * 1024) + '"}'
+        payload = "x" * (5 * 1024 * 1024)
+        huge = '{"data": "' + payload + '"}'
         ev = {"type": "tool_result", "name": "web_search", "success": True,
               "duration_ms": 5.0, "result": huge}
         t0 = time.perf_counter()
         t._render_event(out, ev)
         dt = time.perf_counter() - t0
-        assert dt < 0.25, f"rendering 5MB output took {dt*1000:.0f}ms"
+        assert dt < 2.0, f"rendering 5MB output took {dt*1000:.0f}ms"
         text = out.getvalue()
-        assert "+ more lines" in text or "more lines" in text
+        assert payload in text  # nothing cut
+        assert "more lines" not in text
 
     def test_small_output_byte_identical_to_golden(self):
         import io
@@ -1243,9 +1245,95 @@ class TestShellToolOutputReachesHuman:
         out = t._render_tool_result("run_bash", self._payload(), 120.0, 100)
         assert out is None or "line-1" not in out
 
-    def test_unrelated_tool_still_gets_the_preview(self):
-        """The set stays targeted: a plain string tool is still truncated."""
+    def test_unrelated_tool_renders_fully_too(self):
+        """No tool is truncated for the human terminal anymore."""
         out = self._transport()._render_tool_result(
             "some_other_tool", "\n".join(f"x{i}" for i in range(50)), 120.0, 100
         )
-        assert "x40" not in out
+        assert "x40" in out
+        assert "more lines" not in out
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Human terminal shows everything: full bash command at call time,
+# complete tool output at result time (sink previews resolve to disk).
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestHumanSeesEverything:
+    def _transport(self, out):
+        t = CLITransport.__new__(CLITransport)
+        for k, v in dict(config=None, _content_buffer=[], _thinking_buffer=[],
+                         _spinner=None, _progress=ProgressTracker(),
+                         _in_thinking=False, _in_content=False,
+                         show_tool_output=True, _turn_number=1,
+                         _last_block_was_tool=False,
+                         _phase="understand").items():
+            setattr(t, k, v)
+        t._out, t._err = out, io.StringIO()
+        return t
+
+    def test_tool_call_prints_full_bash_command(self):
+        import io as _io
+
+        out = _io.StringIO()
+        t = self._transport(out)
+        cmd = "python -m pytest tests/test_transport_cli.py -q -x --tb=short"
+        t._render_event(out, {"type": "tool_call", "name": "run_bash",
+                              "arguments": {"command": cmd}})
+        text = out.getvalue()
+        assert cmd in text  # not the 60-char spinner preview
+        assert "$" in text
+
+    def test_tool_call_prints_multiline_command_intact(self):
+        import io as _io
+
+        out = _io.StringIO()
+        t = self._transport(out)
+        t._render_event(out, {"type": "tool_call", "name": "run_bash",
+                              "arguments": {"command": "cd /tmp\nls -la\necho done"}})
+        text = out.getvalue()
+        assert "cd /tmp" in text and "echo done" in text
+
+    def test_long_result_has_no_truncation_marker(self):
+        import io as _io
+
+        out = _io.StringIO()
+        t = self._transport(out)
+        body = "\n".join(f"line {i}" for i in range(200))
+        t._render_event(out, {"type": "tool_result", "name": "run_bash",
+                              "success": True, "duration_ms": 90.0,
+                              "result": body})
+        text = out.getvalue()
+        assert "line 0" in text and "line 199" in text
+        assert "more lines" not in text and "more]" not in text
+
+    def test_sink_preview_resolves_to_disk_log(self, tmp_path, monkeypatch):
+        import io as _io
+
+        log = tmp_path / ".agent" / "logs"
+        log.mkdir(parents=True)
+        full = "\n".join(f"output row {i}" for i in range(50))
+        (log / "run_x.log").write_text(full)
+        monkeypatch.chdir(tmp_path)
+        out = _io.StringIO()
+        t = self._transport(out)
+        preview = ("row0\n… +49 more [press 'e' or /expand — .agent/logs/run_x.log]\n"
+                   "[✓ Full output → .agent/logs/run_x.log]")
+        t._render_event(out, {"type": "tool_result", "name": "run_bash",
+                              "success": True, "duration_ms": 90.0,
+                              "result": preview})
+        text = out.getvalue()
+        assert "output row 0" in text and "output row 49" in text
+
+    def test_missing_log_falls_back_to_preview(self, tmp_path, monkeypatch):
+        import io as _io
+
+        monkeypatch.chdir(tmp_path)
+        out = _io.StringIO()
+        t = self._transport(out)
+        preview = "partial\n[✓ Full output → .agent/logs/run_gone.log]"
+        t._render_event(out, {"type": "tool_result", "name": "run_bash",
+                              "success": True, "duration_ms": 90.0,
+                              "result": preview})
+        assert "partial" in out.getvalue()
