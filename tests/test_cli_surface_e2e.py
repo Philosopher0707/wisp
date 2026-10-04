@@ -437,8 +437,20 @@ class TestGroup4Interactive:
         try:
             pty_read_until(fd, b"wisp", PTY_TIMEOUT)
             os.write(fd, b"/help\n")
-            out = pty_read_until(fd, b"Available commands", PTY_TIMEOUT)
-            assert b"Available commands" in out
+            # The interactive REPL routes slash commands through the Dispatcher
+            # (wisp/cli/repl.py), whose help prints "Built-in commands:". The older
+            # "Available commands:" header still exists, but only on the legacy
+            # `wisp.commands.dispatch` path that `wisp repl` no longer takes — asserting
+            # it here pinned a dead string rather than the behaviour under test.
+            #
+            # Anchor on the trailing usage hint, which only the Dispatcher's help body
+            # emits — the terminal's echo of the typed "/help" would satisfy a bare
+            # "/help" match before the command had rendered anything, and pty_read_until
+            # returns the instant its marker appears, so a later line can be unread.
+            out = pty_read_until(fd, b"for one command", PTY_TIMEOUT)
+            text = strip_ansi(out)
+            assert "Built-in commands" in text
+            assert "/help <name>" in text
             os.write(fd, b"exit\n")
             out += pty_drain(fd, total_s=3.0)
         finally:

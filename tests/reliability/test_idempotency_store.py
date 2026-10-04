@@ -11,7 +11,6 @@ used for a different body"*.
 """
 from __future__ import annotations
 
-import pathlib
 
 import pytest
 
