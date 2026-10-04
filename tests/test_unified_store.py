@@ -254,3 +254,87 @@ class TestMemoryPersistence:
         facts = store.list_memory()
         assert len(facts) == 1
         assert facts[0]["content"] == "new fact"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 6. Corruption recovery (malformed DB must not crash boot)
+# ═══════════════════════════════════════════════════════════════════
+
+class TestCorruptionRecovery:
+    """A malformed workspace DB quarantines to backup + fresh init (no raise)."""
+
+    def test_malformed_db_is_quarantined_not_raised(self, tmp_path):
+        from wisp.infra.store import UnifiedStore
+
+        db = tmp_path / "wisp.db"
+        db.write_bytes(b"not a sqlite database, just garbage" * 64)
+
+        store = UnifiedStore(db)
+        store._ensure_initialized()  # must not raise
+
+        assert store.healthy()
+        backups = list(tmp_path.glob("wisp.db.corrupt-*"))
+        assert backups, "corrupt file must be preserved as a backup"
+        conn = store._get_conn()
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+        session = _TestSession(id="sess-recovered").to_dict()
+        store.save_session(session)
+        assert store.load_session("sess-recovered") is not None
+
+    def test_malformed_table_page_quarantines_with_backup(self, tmp_path):
+        """Old-schema DB + corrupt data page: 'malformed' on index build heals."""
+        import sqlite3 as _sqlite3
+
+        from wisp.infra.store import UnifiedStore
+
+        db = tmp_path / "wisp.db"
+        conn = _sqlite3.connect(str(db))
+        conn.execute(
+            "CREATE TABLE sessions (id TEXT PRIMARY KEY, model TEXT NOT NULL, "
+            "workspace TEXT NOT NULL, messages TEXT NOT NULL DEFAULT '[]', "
+            "compaction_history TEXT NOT NULL DEFAULT '[]', "
+            "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+        )
+        for i in range(5):
+            conn.execute(
+                "INSERT INTO sessions VALUES "
+                f"('s{i}','m','w','[]','[]','t','2026-05-2{i}T00:00:00')"
+            )
+        conn.commit()
+        conn.close()
+
+        raw = bytearray(db.read_bytes())
+        assert len(raw) >= 8192
+        for i in range(4096, 8192):  # trash a data page, keep header intact
+            raw[i] = (raw[i] + 77) % 256
+        db.write_bytes(bytes(raw))
+
+        store = UnifiedStore(db)
+        store._ensure_initialized()  # must not raise
+
+        assert store.healthy()
+        backups = list(tmp_path.glob("wisp.db.corrupt-*"))
+        assert backups, "corrupt file must be preserved as a backup"
+        assert store._get_conn().execute(
+            "PRAGMA integrity_check").fetchone()[0] == "ok"
+
+
+# 7. The sidecars hold committed-but-uncheckpointed transactions: set aside, never deleted
+def test_dropping_sidecars_preserves_their_contents_for_salvage(tmp_path):
+    """A WAL can hold committed transactions the main file does not have yet. Deleting it to "heal" the
+    store is irreversible data loss, so it must be moved aside under the same corrupt-<epoch> naming."""
+    from wisp.infra.store import UnifiedStore
+
+    store = UnifiedStore(tmp_path / "wisp.db")
+    payloads = {"-wal": b"committed frames", "-shm": b"index", "-journal": b"rollback"}
+    for suffix, data in payloads.items():
+        (tmp_path / f"wisp.db{suffix}").write_bytes(data)
+
+    store._drop_sidecars()
+
+    for suffix, data in payloads.items():
+        assert not (tmp_path / f"wisp.db{suffix}").exists(), f"{suffix} must be out of the way"
+        kept = list(tmp_path.glob(f"wisp.db{suffix}.corrupt-*"))
+        assert len(kept) == 1, f"{suffix} must be preserved, not deleted"
+        assert kept[0].read_bytes() == data

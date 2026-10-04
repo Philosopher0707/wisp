@@ -105,6 +105,40 @@ class TestTheSandboxCanRunTheProjectsTests:
         assert DockerSandbox(str(tmp_path), image="x:y").image == "x:y"
 
 
+class TestSandboxNetwork:
+    """Egress is fail-closed (`none`) unless the operator opens it explicitly."""
+
+    def test_default_is_none(self, tmp_path, monkeypatch):
+        from wisp.sandbox import DockerSandbox, docker_run_args, sandbox_network
+
+        monkeypatch.delenv("WISP_SANDBOX_NETWORK", raising=False)
+        assert sandbox_network() == "none"
+        args = docker_run_args("c", str(tmp_path), "img", "2g", "2")
+        assert args[args.index("--network") + 1] == "none"
+        assert DockerSandbox(str(tmp_path)).network == "none"
+
+    def test_operator_can_open_it(self, tmp_path, monkeypatch):
+        from wisp.sandbox import DockerSandbox, docker_run_args, sandbox_network
+
+        monkeypatch.setenv("WISP_SANDBOX_NETWORK", "bridge")
+        assert sandbox_network() == "bridge"
+        args = docker_run_args("c", str(tmp_path), "img", "2g", "2",
+                               DockerSandbox(str(tmp_path)).network)
+        assert args[args.index("--network") + 1] == "bridge"
+
+    def test_blank_falls_back_to_none(self, monkeypatch):
+        import wisp.sandbox as sandbox
+
+        monkeypatch.setenv("WISP_SANDBOX_NETWORK", "   ")
+        assert sandbox.sandbox_network() == "none"
+
+    def test_an_explicit_network_still_wins(self, tmp_path, monkeypatch):
+        from wisp.sandbox import DockerSandbox
+
+        monkeypatch.setenv("WISP_SANDBOX_NETWORK", "bridge")
+        assert DockerSandbox(str(tmp_path), network="mynet").network == "mynet"
+
+
 class TestTheAgentBashGetsTheProjectsInterpreter:
     """Without the workspace's virtualenv on PATH, the scrubbed PATH resolves `python3` to whatever
     the host happens to have — on this machine the managed 3.13.12, **which has no pytest** — so the

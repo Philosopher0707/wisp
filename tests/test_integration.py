@@ -458,7 +458,10 @@ class TestIntegrationToolMetadata:
     def test_metadata_write_file(self):
         meta = _build_tool_metadata("write_file", {"path": "foo.py", "content": "hello"}, "ok")
         assert meta["path"] == "foo.py"
-        assert meta["bytes_written"] == 5
+        # bytes_written must NOT come from args: on an error path nothing was
+        # written, so arg-derived metadata would be fabricated. The success
+        # path carries the real (byte-length) value in the tool's own metadata.
+        assert "bytes_written" not in meta
 
     def test_metadata_edit_file(self):
         meta = _build_tool_metadata("edit_file", {"path": "foo.py", "old_text": "abc", "new_text": "xyz"}, "ok")

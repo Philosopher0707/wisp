@@ -615,3 +615,74 @@ class TestPersistSkipCounter:
         rstore.create(RunRecord(run_id="bg-dup-1", status=RunState.QUEUED))
         mgr._persist_create(entry, entry.contract)  # duplicate id -> swallowed
         assert mgr.persist_stats() == {"persist_skipped_total": 1}
+
+
+class TestTimeoutReturnsSomething:
+    """A timed-out (or vanished) auditor must still tell the parent
+    something actionable — never a bare id or a shrug."""
+
+    @pytest.mark.asyncio
+    async def test_wait_expiry_reports_live_progress(self):
+        import json
+
+        from wisp.tools.subagent_tools import SubagentDeps, wait as wait_tool
+
+        orch = FakeOrchestrator(delay=30.0)
+        mgr = BackgroundAgentManager(orch)
+        try:
+            ids = [(await mgr.launch(_contract(task=f"audit {i}")))["agent_id"]
+                   for i in range(3)]
+            deps = SubagentDeps(
+                resolve_manager=lambda: mgr,
+                tool_error=lambda t, e: json.dumps(
+                    {"status": "error", "tool": t, "data": e}),
+            )
+            out = json.loads(await wait_tool(
+                deps, {"agent_ids": ids, "timeout_seconds": 0.2}))
+            assert len(out["data"]["still_running"]) == 3
+            for row in out["data"]["still_running"]:
+                assert row["elapsed_seconds"] >= 0.0
+                assert row["turns"] == 1
+                assert row["progress"]  # sign of life, not a bare id
+        finally:
+            for a in mgr.list(include_finished=False):
+                mgr.cancel(a["agent_id"])
+
+    @pytest.mark.asyncio
+    async def test_result_on_running_carries_progress(self):
+        orch = FakeOrchestrator(delay=30.0)
+        mgr = BackgroundAgentManager(orch)
+        try:
+            launch = await mgr.launch(_contract())
+            await asyncio.sleep(0.2)  # let the worker task reach _run_entry
+            snap = await mgr.result(launch["agent_id"])
+            assert snap["status"] == STATUS_RUNNING
+            assert "result" not in snap
+            assert snap["progress"]["elapsed_seconds"] >= 0.0
+            assert snap["progress"]["turns"] == 1
+        finally:
+            mgr.cancel(launch["agent_id"])
+
+    @pytest.mark.asyncio
+    async def test_unknown_agent_without_store_says_relaunch(self):
+        mgr = BackgroundAgentManager(FakeOrchestrator())
+        snap = await mgr.result("bg-nope")
+        assert snap["ok"] is False
+        assert "relaunch" in snap["error"]
+
+    @pytest.mark.asyncio
+    async def test_unknown_agent_with_store_names_durable_row(self, tmp_path):
+        from wisp.infra.store import UnifiedStore
+        from wisp.runs.store import SQLiteRunStore
+
+        store = SQLiteRunStore(UnifiedStore(tmp_path / "w.db"))
+        orch = FakeOrchestrator(delay=30.0)
+        mgr = BackgroundAgentManager(orch, run_store=store)
+        try:
+            launch = await mgr.launch(_contract())
+            fresh = BackgroundAgentManager(FakeOrchestrator(), run_store=store)
+            snap = await fresh.result(launch["agent_id"])
+            assert snap["ok"] is False
+            assert "durable row is running" in snap["error"]
+        finally:
+            mgr.shutdown_pending()

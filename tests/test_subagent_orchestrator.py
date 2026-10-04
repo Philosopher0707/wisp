@@ -1816,6 +1816,41 @@ class TestFirstTokenDeadline:
         assert result.success
         assert "recovered" in result.output
 
+    def test_first_token_stall_is_reported_as_one_not_as_a_contract_deadline(self, tmp_path, monkeypatch):
+        """FirstTokenTimeout subclasses asyncio.TimeoutError. The mid-run deadline handler catches
+        TimeoutError, so without an explicit re-raise it swallows a first-token stall and reports
+        "contract deadline reached after Ns": the wrong cause, for a provider that streamed nothing."""
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        from wisp.config import WispConfig
+        from wisp.multi_agent.task import SubagentContract
+
+        cfg = WispConfig().replace(workspace=str(tmp_path))
+        o = SubagentOrchestrator(config=cfg, workspace=tmp_path)
+        monkeypatch.setattr(o._runner.__class__, "FIRST_TOKEN_DEADLINE_S", 0.5)
+
+        class _SilentCore:
+            def __init__(self, **kwargs):
+                pass
+
+            async def turn(self, session_dict, task):
+                await asyncio.sleep(600)
+                yield {"type": "done"}
+
+        contract = SubagentContract(
+            name="s", task="t", timeout_seconds=60, max_retries=0, worktree_isolated=False,
+        )
+        with patch("wisp.core.engine.WispAgentCore", _SilentCore), \
+             patch("wisp.tools.context.get_turn_deadline", return_value=None), \
+             patch.object(o, "_resolve_worktree", new=AsyncMock(return_value=None)), \
+             patch.object(o, "_fire_subagent_hook", new=AsyncMock()):
+            result = asyncio.run(o.run(contract))
+
+        assert not result.success
+        assert "FIRST TOKEN TIMEOUT" in result.output, result.output
+        assert "contract deadline" not in (result.error or ""), result.error
+
     def test_healthy_stream_unaffected_by_deadline(self, tmp_path):
         import asyncio
         from unittest.mock import AsyncMock, patch

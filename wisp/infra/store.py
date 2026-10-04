@@ -23,6 +23,12 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
+# Substrings of sqlite3 error messages that mean the file itself is damaged
+# (as opposed to a SQL bug). "database disk image is malformed" is raised as
+# sqlite3.DatabaseError — NOT OperationalError — so a handler that only
+# catches OperationalError lets a corrupt workspace DB crash boot.
+_CORRUPTION_MARKERS = ("malformed", "corrupt", "not a database")
+
 
 class UnifiedStore:
     """Single SQLite store for sessions, runs, events, and memory."""
@@ -32,6 +38,74 @@ class UnifiedStore:
         self._lock = threading.RLock()
         self.name = "store"
         self._initialized = False
+
+    @staticmethod
+    def _is_corruption_error(exc: BaseException) -> bool:
+        """True when *exc* signals a damaged DB file rather than a SQL bug."""
+        return isinstance(exc, sqlite3.DatabaseError) and any(
+            marker in str(exc).lower() for marker in _CORRUPTION_MARKERS
+        )
+
+    def _close_thread_conns(self) -> None:
+        """Close any cached thread-local connection (stale handle on a renamed file)."""
+        local = getattr(self, "_local", None)
+        conn = getattr(local, "conn", None) if local is not None else None
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            try:
+                self._local.conn = None
+            except Exception:
+                pass
+
+    def _drop_sidecars(self) -> None:
+        """Set the WAL/SHM/journal sidecars aside so the main file can be reopened without them.
+
+        They are moved to ``<name>.corrupt-<epoch>``, not deleted: a WAL holds committed transactions that
+        have not been checkpointed into the main file, so deleting it can silently lose recent sessions.
+        Moved aside, the frames stay available to `sqlite3 <db> ".recover"`.
+        """
+        import time as _time
+
+        self._close_thread_conns()
+        stamp = int(_time.time())
+        for suffix in ("-wal", "-shm", "-journal"):
+            sidecar = self.db_path.with_name(self.db_path.name + suffix)
+            try:
+                if sidecar.exists():
+                    sidecar.rename(sidecar.with_name(f"{sidecar.name}.corrupt-{stamp}"))
+            except (PermissionError, OSError):
+                pass
+
+    def _quarantine_corrupt_db(self) -> Path | None:
+        """Move the damaged DB aside (preserved for manual salvage) + drop WAL sidecars.
+
+        Returns the backup path, or None when there was no file to move.
+        """
+        import time as _time
+
+        self._drop_sidecars()
+        if not self.db_path.exists():
+            return None
+        backup = self.db_path.with_name(
+            f"{self.db_path.name}.corrupt-{int(_time.time())}"
+        )
+        try:
+            self.db_path.rename(backup)
+            logger.warning(
+                "UnifiedStore: quarantined corrupt database %s to %s — "
+                "starting fresh; recover sessions with `sqlite3 <backup> \".recover\"`",
+                self.db_path, backup,
+            )
+            return backup
+        except (PermissionError, OSError) as e:
+            logger.warning(
+                "UnifiedStore: cannot quarantine corrupt database %s (%s)",
+                self.db_path, e,
+            )
+            return None
 
     def _ensure_initialized(self) -> None:
         """Lazy init: create parent dirs and schema on first connection."""
@@ -47,17 +121,64 @@ class UnifiedStore:
             try:
                 self._init_schema()
                 self._initialized = True
-            except (PermissionError, OSError, sqlite3.OperationalError) as e:
-                import tempfile
-                fallback = Path(tempfile.gettempdir()) / "wisp_fallback.db"
-                logger.warning(
-                    "UnifiedStore: cannot open %s (%s) — falling back to %s",
-                    self.db_path, e, fallback
-                )
-                self.db_path = fallback
-                self.db_path.parent.mkdir(parents=True, exist_ok=True)
-                self._init_schema()
-                self._initialized = True
+                return
+            except sqlite3.DatabaseError as e:
+                if self._is_corruption_error(e):
+                    # WAL-only corruption is the common case (crash/iCloud
+                    # sync mid-checkpoint): reopening without the sidecars
+                    # often heals it. They are set aside, not deleted, so
+                    # frames the main file lacks stay recoverable.
+                    self._drop_sidecars()
+                    try:
+                        self._init_schema()
+                        self._initialized = True
+                        logger.warning(
+                            "UnifiedStore: recovered %s by setting its WAL sidecars aside",
+                            self.db_path,
+                        )
+                        return
+                    except sqlite3.Error as retry_e:
+                        # Boot must never crash on a sqlite error: a retry
+                        # that still fails falls through to the temp
+                        # fallback below. Quarantine first when the retry
+                        # still reports file corruption.
+                        if self._is_corruption_error(retry_e):
+                            self._quarantine_corrupt_db()
+                            try:
+                                self._init_schema()
+                                self._initialized = True
+                                return
+                            except sqlite3.Error as retry_e2:
+                                logger.warning(
+                                    "UnifiedStore: fresh init after quarantine "
+                                    "failed (%s) — falling back",
+                                    retry_e2,
+                                )
+                        else:
+                            logger.warning(
+                                "UnifiedStore: init retry on %s failed (%s) — "
+                                "falling back",
+                                self.db_path, retry_e,
+                            )
+                    except (PermissionError, OSError):
+                        pass
+                elif not isinstance(e, sqlite3.OperationalError):
+                    raise
+                # sqlite3.OperationalError (non-corruption) falls through to
+                # the temp fallback below — the pre-existing behaviour.
+            except (PermissionError, OSError):
+                pass
+            import tempfile
+            fallback = Path(tempfile.gettempdir()) / "wisp_fallback.db"
+            logger.warning(
+                "UnifiedStore: cannot open %s — falling back to %s",
+                self.db_path, fallback
+            )
+            self._close_thread_conns()
+            self.db_path = fallback
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+            self._init_schema()
+            self._initialized = True
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(

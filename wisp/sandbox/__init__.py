@@ -122,11 +122,11 @@ def _git_metadata_overlays(workspace: str) -> list[str]:
 
 
 def docker_run_args(container_name: str, workspace: str, image: str,
-                    memory: str, cpus: str) -> list[str]:
+                     memory: str, cpus: str, network: str = "none") -> list[str]:
     """The exact `docker run` argv for the sandbox container (pure, so it is testable)."""
     return [
         "docker", "run", "-d", "--name", container_name,
-        "--network", "none",
+        "--network", network or "none",
         f"--memory={memory}",
         f"--cpus={cpus}",
         "-v", f"{workspace}:/workspace",
@@ -157,6 +157,17 @@ _DEFAULT_SANDBOX_IMAGE = "python:3.12-slim"
 def sandbox_image() -> str:
     """The image for the Docker sandbox — ``WISP_SANDBOX_IMAGE`` or the default."""
     return os.environ.get("WISP_SANDBOX_IMAGE", "").strip() or _DEFAULT_SANDBOX_IMAGE
+
+
+def sandbox_network() -> str:
+    """The Docker network for the sandbox — ``WISP_SANDBOX_NETWORK`` or ``"none"``.
+
+    Fail-closed by default: no egress. Set to ``bridge`` (or a named network)
+    when the agent legitimately needs the network, e.g. installing
+    dependencies. Blank falls back to ``"none"``. Like the image override,
+    this is the operator's explicit choice, so no warning is emitted.
+    """
+    return os.environ.get("WISP_SANDBOX_NETWORK", "").strip() or "none"
 
 
 #: The **one** vocabulary for "the operator does not want confinement".
@@ -242,11 +253,12 @@ class DockerSandbox(SandboxProvider):
     """
 
     def __init__(self, workspace: str, image: str | None = None,
-                 memory: str = "2g", cpus: str = "2"):
+                 memory: str = "2g", cpus: str = "2", network: str | None = None):
         self.workspace = os.path.abspath(workspace)
         self.image = image or sandbox_image()
         self.memory = memory
         self.cpus = cpus
+        self.network = network or sandbox_network()
         workspace_id = hashlib.sha256(
             self.workspace.encode("utf-8", errors="surrogateescape")
         ).hexdigest()
@@ -286,7 +298,7 @@ class DockerSandbox(SandboxProvider):
                        capture_output=True, timeout=10)
 
         cmd = docker_run_args(self.container_name, self.workspace, self.image,
-                              self.memory, self.cpus)
+                              self.memory, self.cpus, self.network)
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             if result.returncode != 0:

@@ -5,7 +5,6 @@ and symbol listing via language servers.
 """
 
 import logging
-import sys
 
 from wisp.tools._utils import (
     _resolve_path,
@@ -29,15 +28,35 @@ def _get_lsp_server(path: str, workspace: str, lsp_manager=None):
     return (server, full_path)
 
 
+def _python_syntax_check(full_path) -> str:
+    """Syntax-only check with no side effects (compile() writes no __pycache__)."""
+    try:
+        source = full_path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return f"Error: cannot read {full_path}: {exc}"
+    try:
+        compile(source, str(full_path), "exec")
+    except SyntaxError as exc:
+        return f"[Syntax error]\n  {full_path}:{exc.lineno}:{exc.offset}: {exc.msg}"
+    return "✓ No syntax errors."
+
+
 def tool_lsp_diagnostics(path: str, workspace: str = ".") -> str:
-    """Run language server diagnostics on a file to find errors and warnings."""
+    """Syntax check (Python) or linter diagnostics (other languages) for a file.
+
+    NOTE: for .py this is a *syntax-only* check via compile() — it catches
+    SyntaxError but NOT undefined names, type errors, or attribute errors.
+    Nothing here invokes ruff/mypy. No files are written (no __pycache__).
+    """
     full_path = _resolve_path(path, workspace)
     if not full_path.exists():
         return f"Error: file not found: {path}"
     ext = full_path.suffix.lower()
 
+    if ext == ".py":
+        return _python_syntax_check(full_path)
+
     linters = {
-        ".py": [sys.executable, "-m", "py_compile"],
         ".ts": ["npx", "tsc", "--noEmit"],
         ".tsx": ["npx", "tsc", "--noEmit"],
         ".js": ["npx", "eslint"],

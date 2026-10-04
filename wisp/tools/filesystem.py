@@ -102,10 +102,11 @@ def tool_write_file(path: str = "", workspace: str = "", content: str = "", file
             f"be created or modified by agent tools to prevent privilege escalation."
         )
 
-    # Size check
-    if len(content) > _MAX_WRITE_SIZE:
+    # Size check (bytes on the wire, not chars)
+    byte_len = len(content.encode("utf-8"))
+    if byte_len > _MAX_WRITE_SIZE:
         raise ToolError(
-            f"Content too large: {len(content)} bytes "
+            f"Content too large: {byte_len} bytes "
             f"(max write: {_MAX_WRITE_SIZE / 1024 / 1024:.0f} MB)"
         )
 
@@ -132,7 +133,7 @@ def tool_write_file(path: str = "", workspace: str = "", content: str = "", file
 
         full_path.parent.mkdir(parents=True, exist_ok=True)
         _safe_write_text(path, workspace, content, encoding="utf-8")
-        logger.info("Wrote %d bytes to %s", len(content), path)
+        logger.info("Wrote %d bytes to %s", byte_len, path)
 
         # ── Collaborative editing: record change ──
         tracker = _change_tracker_ctx.get()
@@ -172,11 +173,11 @@ def tool_write_file(path: str = "", workspace: str = "", content: str = "", file
 
     return {
         "status": "ok",
-        "data": f"✓ Wrote {len(content)} bytes to {path}",
+        "data": f"✓ Wrote {byte_len} bytes to {path}",
         "metadata": {
             "path": path,
-            "size": len(content),
-            "bytes_written": len(content),
+            "size": byte_len,
+            "bytes_written": byte_len,
             "diff": diff,
         },
     }

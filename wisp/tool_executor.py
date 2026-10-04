@@ -2371,9 +2371,10 @@ class ToolExecutor:
             lint_result = await asyncio.to_thread(
                 tool_lsp_diagnostics, path=file_path, workspace=workspace
             )
-            if lint_result and "No issues found" not in lint_result \
-               and "No diagnostics available" not in lint_result \
-               and not lint_result.startswith("Error:"):
+            if lint_result and "No syntax errors" not in lint_result \
+                and "No issues found" not in lint_result \
+                and "No diagnostics available" not in lint_result \
+                and not lint_result.startswith("Error:"):
                 feedback_parts.append(f"[Lint: {lint_result.strip()[:500]}]")
         except Exception:
             pass

@@ -148,7 +148,7 @@ Threat model (`docs/THREAT-MODEL.md`): the developer is trusted; **model output,
 
 | Layer | Control |
 |-------|---------|
-| **Sandbox** | `run_bash` routes through `get_sandbox()`: Docker (network-none, memory/CPU-capped, workspace-mounted) when the daemon is reachable, else host execution with a loud per-call `UNCONFINED` warning. `WISP_SANDBOX=off` forces host mode explicitly. |
+| **Sandbox** | `run_bash` routes through `get_sandbox()`: Docker (network-none by default — `WISP_SANDBOX_NETWORK=bridge` opens egress — memory/CPU-capped, workspace-mounted) when the daemon is reachable, else host execution with a loud per-call `UNCONFINED` warning. `WISP_SANDBOX=off` forces host mode explicitly. |
 | **Authority** | `ToolExecutor` is the only action path; layered `authorize()` denies closed-gate with the controlling layer named. Hook-controlled dirs (`.wisp/hooks/`) are un-writable by agent tools. |
 | **Credentials** | `config.json` and `.env` written `0o600`; subprocess envs are credential-stripped; 6 secret families redacted at record construction. |
 | **Server** | `wisp server` refuses to boot unauthenticated (exit 2 + key-minting instructions). `--no-auth` is loopback-only and loudly warned; non-loopback binds always require `WISP_API_KEY`. |

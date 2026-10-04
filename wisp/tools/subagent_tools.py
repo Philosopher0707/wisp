@@ -96,7 +96,9 @@ async def wait(deps: SubagentDeps, func_args: dict[str, Any]) -> str:
             settled.append({
                 "agent_id": i, "label": i, "role": "",
                 "ok": False, "elapsed_seconds": 0.0,
-                "error": "unknown agent id",
+                "error": manager.unknown_agent_error(i)
+                if hasattr(manager, "unknown_agent_error")
+                else "unknown agent id",
             })
             continue
         rec: dict[str, Any] = {
@@ -122,7 +124,12 @@ async def wait(deps: SubagentDeps, func_args: dict[str, Any]) -> str:
             rec["ok"] = False
             rec["error"] = "cancelled"
         else:
-            still_running.append({"agent_id": e.id, "label": e.label})
+            row = {"agent_id": e.id, "label": e.label}
+            try:
+                row.update(manager.progress(e.id))
+            except Exception:
+                pass
+            still_running.append(row)
             continue
         settled.append(rec)
 

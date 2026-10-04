@@ -22,7 +22,7 @@
 > `—` therefore means *no catch inside these roots*, which is **not** the same claim as
 > *unhandled* — see §(c).
 >
-> Generated 2026-09-30 at `2c092d5` · **47 classes** · **258 raise sites** · **43 catch sites** · **8 with no test naming them**.
+> Generated 2026-09-30 at `a354c6d` · **47 classes** · **258 raise sites** · **45 catch sites** · **7 with no test naming them**.
 
 ---
 
@@ -31,10 +31,10 @@
 | exception | base | role | phase | defined_at | raise_sites | first_raise | caught_at | adr |
 |---|---|---|---|---|---|---|---|---|
 | `ExitREPL` | `Exception` | verdict | cli | `wisp/exceptions.py:13` | 1 | `wisp/repl/commands/core.py:175` | `wisp/cli/dispatcher.py:179`, `wisp/cli/dispatcher.py:208`, `wisp/entry.py:698`, `wisp/repl/commands/__init__.py:108` | — |
-| `ApprovalCancelled` | `Exception` | verdict | approval | `wisp/exceptions.py:17` | 1 | `wisp/transport/cli.py:881` | `wisp/core/approval_gate.py:117`, `wisp/core/approval_gate.py:146`, `wisp/tool_executor.py:960` | — |
-| `ApprovalTimeout` | `Exception` | verdict | approval | `wisp/exceptions.py:33` | 1 | `wisp/transport/cli.py:844` | `wisp/core/approval_gate.py:127`, `wisp/tool_executor.py:973` | — |
+| `ApprovalCancelled` | `Exception` | verdict | approval | `wisp/exceptions.py:17` | 1 | `wisp/transport/cli.py:945` | `wisp/core/approval_gate.py:117`, `wisp/core/approval_gate.py:146`, `wisp/tool_executor.py:960` | — |
+| `ApprovalTimeout` | `Exception` | verdict | approval | `wisp/exceptions.py:33` | 1 | `wisp/transport/cli.py:908` | `wisp/core/approval_gate.py:127`, `wisp/tool_executor.py:973` | — |
 | `_TransientOpenError` | `Exception` | recoverable | provider | `wisp/core/provider_stream.py:40` | 1 | `wisp/core/provider_stream.py:167` | `wisp/core/provider_stream.py:267` | — |
-| `FirstTokenTimeout` | `asyncio.TimeoutError` | recoverable | subagent | `wisp/multi_agent/_runner.py:131` | 1 | `wisp/multi_agent/_runner.py:609` | `wisp/multi_agent/_runner.py:386` | — |
+| `FirstTokenTimeout` | `asyncio.TimeoutError` | recoverable | subagent | `wisp/multi_agent/_runner.py:135` | 1 | `wisp/multi_agent/_runner.py:625` | `wisp/multi_agent/_runner.py:396`, `wisp/multi_agent/_runner.py:694`, `wisp/multi_agent/_runner.py:854` | — |
 | `CircuitOpenError` | `Exception` | recoverable | provider | `wisp/infra/circuit_breaker.py:175` | 2 | `wisp/infra/circuit_breaker.py:93` | `wisp/core/stateless.py:1275` | — |
 | `CircuitBreakerOpenError` | `Exception` | recoverable | subagent | `wisp/multi_agent/_circuit_breaker.py:102` | 1 | `wisp/multi_agent/_circuit_breaker.py:44` | — | — |
 | `OllamaError` | `Exception` | recoverable | provider | `wisp/ollama_client.py:46` | 10 | `wisp/ollama_client.py:273` | `wisp/ollama_client.py:288`, `wisp/ollama_client.py:427` | — |
@@ -52,7 +52,7 @@
 | `ContextOverflow` | `RuntimeError` | guard | context | `wisp/core/context_trust.py:104` | 1 | `wisp/core/context_trust.py:314` | — | — |
 | `CriteriaDeclarationRejected` | `Exception` | guard | turn | `wisp/core/convergence.py:673` | 9 | `wisp/core/convergence.py:782` | `wisp/autonomous.py:325` | ADR-0050 |
 | `ReplayDivergence` | `RuntimeError` | guard | persist | `wisp/core/replay_digest.py:64` | 2 | `wisp/core/replay_digest.py:125` | `wisp/core/runtime.py:1841` | — |
-| `ToolError` | `Exception` | fault | tool | `wisp/tools/errors.py:8` | 78 | `agent/fast_tools.py:47` | `agent/tools/batch_reader.py:386`, `agent/tools/batch_reader.py:629`, `wisp/cli/dispatcher.py:374`, `wisp/tool_executor.py:364`, `wisp/tool_executor.py:1461`, `wisp/tool_executor.py:1574`, `wisp/tools/bash.py:160`, `wisp/tools/registry.py:1268`, `wisp/tools/registry.py:1410` | — |
+| `ToolError` | `Exception` | fault | tool | `wisp/tools/errors.py:8` | 78 | `agent/fast_tools.py:47` | `agent/tools/batch_reader.py:386`, `agent/tools/batch_reader.py:629`, `wisp/cli/dispatcher.py:374`, `wisp/tool_executor.py:364`, `wisp/tool_executor.py:1461`, `wisp/tool_executor.py:1574`, `wisp/tools/bash.py:160`, `wisp/tools/registry.py:1265`, `wisp/tools/registry.py:1407` | — |
 | `PlanError` | `Exception` | fault | plan | `wisp/graph/planner.py:72` | 28 | `wisp/graph/planner.py:87` | `wisp/graph/cli.py:300`, `wisp/graph/cli.py:341`, `wisp/graph/planner.py:314`, `wisp/graph/planner.py:396` | — |
 | `LSPServerError` | `Exception` | fault | tool | `wisp/lsp/client.py:24` | 16 | `wisp/lsp/client.py:78` | `wisp/lsp/client.py:529`, `wisp/lsp/manager.py:174`, `wisp/lsp/manager.py:188` | — |
 | `SearchReplaceError` | `ValueError` | fault | tool | `wisp/core/mutator/search_replace.py:38` | 3 | `wisp/core/mutator/search_replace.py:59` | — | — |
@@ -122,7 +122,7 @@ the derivation refuses if a row's phase is absent here, or a phase here has no r
 
 ## (c) The raise/catch asymmetry
 
-**258 raise sites, 43 catch sites.** The asymmetry is large and it is mostly not a defect: a library-style module raises and lets its caller decide, and the caller is often outside the three roots this page covers.
+**258 raise sites, 45 catch sites.** The asymmetry is large and it is mostly not a defect: a library-style module raises and lets its caller decide, and the caller is often outside the three roots this page covers.
 
 What the asymmetry **does** let this page state precisely is the zero:
 
@@ -138,13 +138,13 @@ may mean the caller is out of scope. `raise_sites: 0` is strong: an AST walk ove
 whole runtime found no `raise` of that name anywhere, so the class cannot fire in this
 tree at all.
 
-**8 distinct names — 8 of 47 rows — are named by no test file.** Derived by
+**7 distinct names — 7 of 47 rows — are named by no test file.** Derived by
 searching `tests/` for each name, so it is a floor and not a proof: a test can exercise a
 path without ever naming the exception. The list is a place to look, not a verdict.
 
 The name and row counts differ because `SchemaValidationError` is defined twice (§Findings); a name-keyed count would say 8 and a row-keyed count 9, and only the pair is honest.
 
-`CancelledTurnError`, `CircuitBreakerOpenError`, `EventStreamError`, `FirstTokenTimeout`, `LSPServerError`, `LadderExhausted`, `ToolDeniedError`, `_TransientOpenError`
+`CancelledTurnError`, `CircuitBreakerOpenError`, `EventStreamError`, `LSPServerError`, `LadderExhausted`, `ToolDeniedError`, `_TransientOpenError`
 
 ---
 
@@ -170,7 +170,7 @@ The name and row counts differ because `SchemaValidationError` is defined twice 
 
 - **`adr` is `—` for 45 of 47 rows, and that is a limit, not a claim.** Only two rows carry a decision, and each is cited because the class's **own docstring** names it — `ADR-0038` for `OllamaConfigurationError`, `ADR-0050` for `CriteriaDeclarationRejected`. Most of these exceptions arrived in a phase whose ADR exists but does not name the class. **The provenance was not traced**, and a plausible ADR is worse than a blank — guessing a decision is the defect this corpus exists to prevent. `—` states *not pinned*, not *none exists*.
 
-- **`tripwire` is derived, and a derived tripwire is weaker than a declared one.** The column is the first `tests/` file that names the exception, found by search. It shows what is *referenced*, not what is *asserted*: a test that imports a name and never exercises the raise still counts. It is included because the zero is informative — 8 of 47 classes are named by no test file at all — and it is labelled derived so nobody reads it as a guard. **The number is a floor.** `LSPServerError` has 16 raise sites and no test names it; that is a live path with no assertion on its failure shape, and it is the kind of zero this column exists to surface.
+- **`tripwire` is derived, and a derived tripwire is weaker than a declared one.** The column is the first `tests/` file that names the exception, found by search. It shows what is *referenced*, not what is *asserted*: a test that imports a name and never exercises the raise still counts. It is included because the zero is informative — 7 of 47 classes are named by no test file at all — and it is labelled derived so nobody reads it as a guard. **The number is a floor.** `LSPServerError` has 16 raise sites and no test names it; that is a live path with no assertion on its failure shape, and it is the kind of zero this column exists to surface.
 
 ### What this page did not do
 

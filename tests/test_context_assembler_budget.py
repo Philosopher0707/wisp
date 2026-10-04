@@ -152,3 +152,18 @@ class TestBuildBudget:
     def test_default_budget(self, assembler):
         used = assembler._estimate_tokens(assembler.build(workspace="/tmp"))
         assert used <= _DEFAULT_MAX_CONTEXT_TOKENS
+
+    def test_build_with_skills_respects_budget(self, assembler):
+        """The guardrail footer is reserved inside the budget, not added on top."""
+        huge = "word " * 2_000  # ~10K chars — forces trimming
+        result = assembler.build(
+            workspace="/tmp",
+            default_system=huge,
+            skills_block="## Skills\n- test-skill",
+            max_tokens=500,
+        )
+        assert "Safety Guardrails" in result  # footer itself survives
+        used = assembler._estimate_tokens(result)
+        assert used <= 500 + 100, (
+            f"Prompt used ~{used} tokens but max was 500"
+        )
