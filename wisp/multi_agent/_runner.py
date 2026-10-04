@@ -98,6 +98,17 @@ def _event_field(event: dict, key: str, default: Any = None) -> Any:
     return default
 
 
+def _spend(budget: Any, text: str) -> str:
+    """Charge ``text`` to the child's budget; return the exhaustion message, or ``""`` while it has room.
+
+    Everything the child produces or reads is charged, not only tool results: a child that streams without ever
+    calling a tool used to be unmetered.
+    """
+    if text:
+        budget.record_text(text)
+    return budget.check() or ""
+
+
 def _child_verdict(*, saw_done: bool, saw_fatal_error: bool, error_message: str,
                    budget_error: str, output_text: str,
                    last_nonempty_round: str) -> tuple[bool, str, str | None]:
@@ -112,7 +123,12 @@ def _child_verdict(*, saw_done: bool, saw_fatal_error: bool, error_message: str,
     from wisp.core.goal import TerminalOutcome, terminal_outcome_from_evidence
 
     if budget_error:
-        return False, f"[BUDGET EXHAUSTED] {budget_error}", budget_error
+        # The tokens were spent, so the text they bought is kept: the CURRENT round only. `output_text` resets at
+        # every tool call, so narration from an earlier round ("Let me check the ...") is never returned as if it
+        # were the report.
+        partial = output_text.strip()
+        marker = f"[BUDGET EXHAUSTED] {budget_error}"
+        return False, f"{partial}\n{marker}" if partial else marker, budget_error
     outcome = terminal_outcome_from_evidence(saw_done=saw_done, saw_fatal_error=saw_fatal_error)
     if outcome is TerminalOutcome.SUCCEEDED:
         # A child whose LAST action was a tool call (remember/save) never
@@ -658,6 +674,13 @@ class SubagentRunner:
                             output_text += event.get("text", "")
                             if output_text.strip():
                                 last_nonempty_round = output_text
+                            budget_error = _spend(budget, event.get("text", ""))
+                            if budget_error:
+                                logger.warning(
+                                    "Subagent %s budget exhausted: %s",
+                                    contract.name, budget_error,
+                                )
+                                break
                         elif etype == "tool_call":
                             engine_iterations += 1
                             budget.record_tool_call()
@@ -677,9 +700,7 @@ class SubagentRunner:
                             output_text = ""
                         elif etype == "tool_result":
                             result_data = event.get("result", "")
-                            if isinstance(result_data, str):
-                                budget.record_tokens(len(result_data) // 4)
-                            budget_error = budget.check() or ""
+                            budget_error = _spend(budget, result_data if isinstance(result_data, str) else "")
                             if budget_error:
                                 logger.warning(
                                     "Subagent %s budget exhausted: %s",
@@ -819,6 +840,13 @@ class SubagentRunner:
                         output_text += event.get("text", "")
                         if output_text.strip():
                             last_nonempty_round = output_text
+                        budget_error = _spend(budget, event.get("text", ""))
+                        if budget_error:
+                            logger.warning(
+                                "Subagent %s budget exhausted: %s",
+                                contract.name, budget_error,
+                            )
+                            break
                     elif etype == "tool_call":
                         engine_iterations += 1
                         budget.record_tool_call()
@@ -838,9 +866,7 @@ class SubagentRunner:
                         output_text = ""
                     elif etype == "tool_result":
                         result_data = event.get("result", "")
-                        if isinstance(result_data, str):
-                            budget.record_tokens(len(result_data) // 4)
-                        budget_error = budget.check() or ""
+                        budget_error = _spend(budget, result_data if isinstance(result_data, str) else "")
                         if budget_error:
                             logger.warning(
                                 "Subagent %s budget exhausted: %s",
