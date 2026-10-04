@@ -318,3 +318,23 @@ class TestCorruptionRecovery:
         assert backups, "corrupt file must be preserved as a backup"
         assert store._get_conn().execute(
             "PRAGMA integrity_check").fetchone()[0] == "ok"
+
+
+# 7. The sidecars hold committed-but-uncheckpointed transactions: set aside, never deleted
+def test_dropping_sidecars_preserves_their_contents_for_salvage(tmp_path):
+    """A WAL can hold committed transactions the main file does not have yet. Deleting it to "heal" the
+    store is irreversible data loss, so it must be moved aside under the same corrupt-<epoch> naming."""
+    from wisp.infra.store import UnifiedStore
+
+    store = UnifiedStore(tmp_path / "wisp.db")
+    payloads = {"-wal": b"committed frames", "-shm": b"index", "-journal": b"rollback"}
+    for suffix, data in payloads.items():
+        (tmp_path / f"wisp.db{suffix}").write_bytes(data)
+
+    store._drop_sidecars()
+
+    for suffix, data in payloads.items():
+        assert not (tmp_path / f"wisp.db{suffix}").exists(), f"{suffix} must be out of the way"
+        kept = list(tmp_path.glob(f"wisp.db{suffix}.corrupt-*"))
+        assert len(kept) == 1, f"{suffix} must be preserved, not deleted"
+        assert kept[0].read_bytes() == data

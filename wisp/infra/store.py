@@ -61,11 +61,21 @@ class UnifiedStore:
                 pass
 
     def _drop_sidecars(self) -> None:
-        """Delete WAL/SHM/journal sidecars (uncheckpointed frames may be the corruption)."""
+        """Set the WAL/SHM/journal sidecars aside so the main file can be reopened without them.
+
+        They are moved to ``<name>.corrupt-<epoch>``, not deleted: a WAL holds committed transactions that
+        have not been checkpointed into the main file, so deleting it can silently lose recent sessions.
+        Moved aside, the frames stay available to `sqlite3 <db> ".recover"`.
+        """
+        import time as _time
+
         self._close_thread_conns()
+        stamp = int(_time.time())
         for suffix in ("-wal", "-shm", "-journal"):
+            sidecar = self.db_path.with_name(self.db_path.name + suffix)
             try:
-                self.db_path.with_name(self.db_path.name + suffix).unlink(missing_ok=True)
+                if sidecar.exists():
+                    sidecar.rename(sidecar.with_name(f"{sidecar.name}.corrupt-{stamp}"))
             except (PermissionError, OSError):
                 pass
 
@@ -115,15 +125,15 @@ class UnifiedStore:
             except sqlite3.DatabaseError as e:
                 if self._is_corruption_error(e):
                     # WAL-only corruption is the common case (crash/iCloud
-                    # sync mid-checkpoint): dropping the sidecars heals it
-                    # with zero data loss, so try that before quarantining
-                    # the main file.
+                    # sync mid-checkpoint): reopening without the sidecars
+                    # often heals it. They are set aside, not deleted, so
+                    # frames the main file lacks stay recoverable.
                     self._drop_sidecars()
                     try:
                         self._init_schema()
                         self._initialized = True
                         logger.warning(
-                            "UnifiedStore: recovered %s by dropping WAL sidecars",
+                            "UnifiedStore: recovered %s by setting its WAL sidecars aside",
                             self.db_path,
                         )
                         return
