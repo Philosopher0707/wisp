@@ -365,7 +365,10 @@ class SubagentRunner:
             # Token estimation
             messages = result_dict.get("messages", [])
             if messages:
-                in_tok, out_tok, total_tok = self._estimate_tokens(messages)
+                # What the child SPENT, not the size of its final transcript: every provider call re-sends the
+                # system prompt, the tool schemas and the history so far (the global session ceiling counts this).
+                in_tok, out_tok = self._estimate_spend(messages, int(result_dict.get("overhead_chars", 0) or 0))
+                total_tok = in_tok + out_tok
                 subagent_result.input_tokens = in_tok
                 subagent_result.output_tokens = out_tok
                 subagent_result.tokens_used = total_tok
@@ -745,6 +748,7 @@ class SubagentRunner:
                 "files_changed": self._extract_files_changed(output_text) if success else [],
                 "iterations_used": engine_iterations,
                 "messages": session_dict.get("messages", []),
+                "overhead_chars": self._overhead_chars(core, session_dict),
                 "timed_out": timed_out_mid_run,
             }
         finally:
@@ -910,6 +914,7 @@ class SubagentRunner:
             "files_changed": self._extract_files_changed(output_text) if success else [],
             "iterations_used": engine_iterations,
             "messages": runtime_session.get("messages", []),
+            "overhead_chars": self._overhead_chars(self._agent_runtime, runtime_session),
             "timed_out": timed_out_mid_run,
         }
 
@@ -976,6 +981,46 @@ class SubagentRunner:
         object.__setattr__(child, "_subagent_depth", int(getattr(contract, "_subagent_depth", 0) or 0))
         object.__setattr__(child, "_subagent_branch_count", int(getattr(contract, "_subagent_branch_count", 0) or 0))
         return child
+
+    @staticmethod
+    def _overhead_chars(source: Any, session: Any) -> int:
+        """The fixed per-call overhead (system prompt + tool schemas) in characters, or 0 when ``source`` cannot say.
+
+        Spend accounting must never fail a run that already succeeded, so any error here degrades to 0.
+        """
+        probe = getattr(source, "prompt_overhead_chars", None)
+        if probe is None:
+            return 0
+        try:
+            return max(0, int(probe(session)))
+        except Exception:
+            logger.debug("prompt overhead probe failed", exc_info=True)
+            return 0
+
+    def _estimate_spend(self, messages: list[dict], overhead_chars: int = 0) -> tuple[int, int]:
+        """Estimate ``(input_tokens, output_tokens)`` the provider was actually sent and returned.
+
+        Providers report no usage in the stream, so this reconstructs it from the transcript. Each assistant message
+        is one provider call; that call's input is the fixed overhead plus every message before it, and its output
+        is the message itself (content and tool-call arguments). Summing over calls is what the child cost: the
+        transcript counted once understates it by roughly the number of calls.
+        """
+        from wisp.infra.token_counter import TokenCounter
+
+        counter = TokenCounter(chars_per_token=getattr(self.parent_config, "chars_per_token", 4))
+        history_chars = 0
+        in_tok = out_tok = 0
+        for msg in messages:
+            content = msg.get("content", "") or ""
+            chars = len(content if isinstance(content, str) else str(content))
+            if msg.get("role") == "assistant":
+                for tc in msg.get("tool_calls", []) or []:
+                    args = tc.get("function", {}).get("arguments", "")
+                    chars += len(args) if isinstance(args, str) else len(str(args))
+                in_tok += counter.estimate_chars(overhead_chars + history_chars)
+                out_tok += counter.estimate_chars(chars)
+            history_chars += chars
+        return in_tok, out_tok
 
     def _estimate_tokens(self, messages: list[dict]) -> tuple[int, int, int]:
         """Estimate token count from message history.
