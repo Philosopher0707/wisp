@@ -341,7 +341,8 @@ class TestCoreSeams:
         core.config = SimpleNamespace()  # type: ignore[assignment]
         core.extensions = None
         names = [s["function"]["name"] for s in core._get_tool_schemas()]
-        assert len(names) == 42 and "exec_sandbox" not in names
+        # 42 + the GitHub workflow tools (6 reads, 4 gated writes).
+        assert len(names) == 52 and "exec_sandbox" not in names
 
     def test_thin_prompt_menu_matches_schemas(self, tmp_path: Path) -> None:
         from wisp.core.stateless import WispAgentCore

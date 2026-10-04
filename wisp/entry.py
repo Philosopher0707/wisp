@@ -34,6 +34,7 @@ from wisp.transport.typeahead import TypeAheadBuffer as TypeAheadBuffer  # noqa:
 from wisp.transport.renderer import render_turn_stats, render_file_ticker
 from wisp.terminal_width import status_symbols
 from wisp.colors import dim, error
+from wisp.paths import default_workspace_hint
 import shutil
 
 logger = logging.getLogger(__name__)
@@ -468,7 +469,8 @@ def _run_repl_legacy(transport: CLITransport, root: CompositionRoot, config: Wis
         _store_path = str(getattr(getattr(root, "store", None), "db_path", "") or "")
         if "wisp_fallback.db" in _store_path:
             sys.stderr.write(
-                dim(f"  Workspace blocked by TCC; using fallback DB {_store_path} — run /workspace ~/Documents/wisp\n")
+                dim(f"  Workspace blocked by TCC; using fallback DB {_store_path}"
+                    f" — run /workspace {default_workspace_hint()}\n")
             )
             sys.stderr.flush()
     except Exception:

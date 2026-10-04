@@ -23,13 +23,13 @@ def test_trusted_read_allowed_without_approval():
 
 
 def test_bash_requires_approval_outside_full():
-    """13F.1 STEP 6: M2 agrees with policy — bash is hard-DENIED outside
-    full mode (was: allowed-with-obligation, overridable by approval)."""
+    """M2 agrees with policy: bash in AUTO_EDIT needs an operator's yes.
+    (13F.1 made it a hard DENY; d0d4bea lifted that to REQUIRE_APPROVAL.)"""
     p = local_principal(workspace="/w", profile="p")
     d = authorize(p, "run_bash", {"command": "ls"},
                   workspace_trust=WorkspaceTrust.TRUSTED,
                   permission_mode="auto_edit")
-    assert d.allowed is False
+    assert d.allowed is True and d.approval_required is True
     assert d.controlling_layer == "approval"
 
 

@@ -30,9 +30,13 @@ async def _collect(agen):
 
 
 # ── STEP 3 stop conditions: DENY is hard, REQUIRE_APPROVAL gates ──
+# The hard-DENY exemplar is `git_push`: `run_bash` left the AUTO_EDIT deny set
+# in d0d4bea and is REQUIRE_APPROVAL now (see STEP 5/6). Since 2026-09-28 the git/gh
+# writes are REQUIRE_APPROVAL too and the default deny set is empty, so the mechanism
+# tests re-impose the old deny with the `auto_edit_hard_deny_witness` fixture.
 
 @pytest.mark.asyncio
-async def test_step3_deny_never_prompts_gate():
+async def test_step3_deny_never_prompts_gate(auto_edit_hard_deny_witness):
     gate = ApprovalGate(SecurityPolicy())
     prompted = []
 
@@ -41,15 +45,15 @@ async def test_step3_deny_never_prompts_gate():
         return True
 
     allowed, _ = await gate.check(
-        {"type": "tool_call", "name": "run_bash",
-         "arguments": {"command": "echo hi"}, "id": "call_D"},
+        {"type": "tool_call", "name": "git_push",
+         "arguments": {"remote": "o", "branch": "b"}, "id": "call_D"},
         {"workspace": "."}, approval_handler=approving)
     assert allowed is False
     assert prompted == []
 
 
 @pytest.mark.asyncio
-async def test_step3_deny_yes_cannot_execute(tmp_path):
+async def test_step3_deny_yes_cannot_execute(tmp_path, auto_edit_hard_deny_witness):
     ex = _executor()
     prompted, ran = [], []
 
@@ -63,7 +67,7 @@ async def test_step3_deny_yes_cannot_execute(tmp_path):
         return True, None
 
     yielded = await _collect(ex.execute(
-        "run_bash", {"command": "echo hi"}, str(tmp_path),
+        "git_push", {"remote": "o", "branch": "b"}, str(tmp_path),
         tool_call_id="call_D", approval_handler=approving))
     assert ran == [] and prompted == []
     results = [d for d in yielded if d.get("type") == "tool_result"]
@@ -148,7 +152,12 @@ def test_step4_child_tools_filtered_by_mode():
     ("fanout", "require", "delegation primitive: operator yes, children filtered"),
     ("spawn_background", "allow",
      "detached primitive: policy allows, executor prompts interactively"),
-    ("run_bash", "deny", "exec: hard deny in AUTO_EDIT"),
+    ("run_bash", "require",
+     "exec: routed through the sandbox tier router, operator yes (d0d4bea)"),
+    ("git_push", "require", "remote write: operator yes each time (2026-09-28)"),
+    ("git_commit", "require", "git write: operator yes each time (2026-09-28)"),
+    ("git_branch", "require", "git write: operator yes each time (2026-09-28)"),
+    ("gh_pr_create", "require", "remote write: operator yes each time (2026-09-28)"),
 ])
 def test_step5_capability_table(tool, policy, note):
     from wisp.infra.security import SecurityPolicy, Action, Context
@@ -179,7 +188,8 @@ def test_step5_thin_mutators_prompt_not_silent(tmp_path):
     ("write_file", (True, False)),
     ("fanout", (True, True)),
     ("spawn", (True, True)),
-    ("run_bash", (False, False)),
+    ("run_bash", (True, True)),
+    ("git_push", (True, True)),
 ])
 def test_step6_gate_m2_agree(tool, expected):
     """(policy-allowed, approval-required) identical at both layers."""
@@ -248,19 +258,19 @@ def _audit_entries(ws):
 
 
 @pytest.mark.asyncio
-async def test_step9_hard_deny_audited_once(tmp_path):
+async def test_step9_hard_deny_audited_once(tmp_path, auto_edit_hard_deny_witness):
     ex = _executor()
     ws = str(tmp_path)
 
     async def approving(name, args, reason):
         return True, None
 
-    await _collect(ex.execute("run_bash", {"command": "echo hi"}, ws,
+    await _collect(ex.execute("git_push", {"remote": "o", "branch": "b"}, ws,
                               tool_call_id="call_A1", approval_handler=approving))
     blocked = [e for e in _audit_entries(tmp_path)
                if e.get("decision") == "blocked"]
     assert len(blocked) == 1
-    assert blocked[0].get("tool") == "run_bash"
+    assert blocked[0].get("tool") == "git_push"
     assert blocked[0].get("executed", False) is not True
 
 
@@ -349,7 +359,7 @@ def test_step7_denial_display_lines():
 # ── STEP 8: continuation contract ──
 
 @pytest.mark.asyncio
-async def test_step8_denied_tool_stays_denied_and_reads_continue(tmp_path):
+async def test_step8_denied_tool_stays_denied_and_reads_continue(tmp_path, auto_edit_hard_deny_witness):
     gate = ApprovalGate(SecurityPolicy())
     session = {"workspace": str(tmp_path)}
 
@@ -359,8 +369,8 @@ async def test_step8_denied_tool_stays_denied_and_reads_continue(tmp_path):
     # same denied tool, re-proposed: still denied (S4)
     for _ in range(2):
         allowed, _ = await gate.check(
-            {"type": "tool_call", "name": "run_bash",
-             "arguments": {"command": "echo hi"}}, session,
+            {"type": "tool_call", "name": "git_push",
+             "arguments": {"remote": "o", "branch": "b"}}, session,
             approval_handler=approve)
         assert allowed is False
     # read continues (S9)
@@ -398,11 +408,11 @@ async def test_step8_decline_then_approve_executes_no_budget_burn(tmp_path):
 # ── STEP 13: adversarial authority matrix ──
 
 @pytest.mark.parametrize("tool,args", [
-    ("run_bash", {"command": "echo hi"}),
+    ("git_commit", {"message": "m"}),
     ("git_push", {"remote": "o", "branch": "b"}),
 ])
 @pytest.mark.asyncio
-async def test_step13_policy_deny_never_executes(tmp_path, tool, args):
+async def test_step13_policy_deny_never_executes(tmp_path, tool, args, auto_edit_hard_deny_witness):
     """S1/S2/S3: hard DENY + approving user + stubbed dispatch."""
     ex = _executor()
     ran, prompted = [], []
@@ -465,9 +475,9 @@ async def test_step13_genuine_cancellation_propagates_no_continuation(tmp_path):
 # ── STEP 13: post-denial authority stays correctly gated ──
 
 @pytest.mark.asyncio
-async def test_step13_post_deny_authority_matrix(tmp_path):
-    """After a POLICY_DENIED on run_bash: reads/network stay allowed,
-    writes and delegation re-prompt, shell stays denied — each proposal
+async def test_step13_post_deny_authority_matrix(tmp_path, auto_edit_hard_deny_witness):
+    """After a POLICY_DENIED on git_push: reads/network stay allowed,
+    writes and delegation re-prompt, the push stays denied — each proposal
     independently decided (S4/S6)."""
     gate = ApprovalGate(SecurityPolicy())
     session = {"workspace": str(tmp_path)}
@@ -478,8 +488,8 @@ async def test_step13_post_deny_authority_matrix(tmp_path):
         return True
 
     denied, _ = await gate.check(
-        {"type": "tool_call", "name": "run_bash",
-         "arguments": {"command": "echo hi"}}, session,
+        {"type": "tool_call", "name": "git_push",
+         "arguments": {"remote": "o", "branch": "b"}}, session,
         approval_handler=approve)
     assert denied is False and prompts == []
     for tool, args, expect_prompt in [
@@ -493,9 +503,9 @@ async def test_step13_post_deny_authority_matrix(tmp_path):
             session, approval_handler=approve)
         assert ok is True, tool
     assert sorted(prompts) == ["fanout", "spawn"]
-    # shell re-proposed: still hard-denied, still no prompt
+    # push re-proposed: still hard-denied, still no prompt
     denied2, _ = await gate.check(
-        {"type": "tool_call", "name": "run_bash",
-         "arguments": {"command": "echo again"}}, session,
+        {"type": "tool_call", "name": "git_push",
+         "arguments": {"remote": "o", "branch": "b2"}}, session,
         approval_handler=approve)
     assert denied2 is False and sorted(prompts) == ["fanout", "spawn"]

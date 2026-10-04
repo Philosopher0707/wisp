@@ -31,8 +31,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from wisp.core.verification import INVARIANT_STATEMENT
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # Section trust classification (migration M14)
 #
@@ -172,8 +170,8 @@ You have access to tools that let you read, write, and edit files, run bash comm
 - Fetch full output with subagent_result; continue a finished agent with subagent_send.
 - Report honestly: if children failed (e.g. rate limits), say so — never fabricate their findings.
 
-## Tools available
-(generated at runtime from the live tool registry — see the '## Tools available' block appended to this prompt)
+Tool schemas are generated at runtime from the live tool registry and appended to this prompt as a
+`## Tools available` section. Read that section before assuming a tool does not exist.
 """
 
 VERIFICATION_LOOP_RULES = """
@@ -183,6 +181,7 @@ You are NOT done when the code is merely written — you are done when it is VER
 2. A verification command counts only when it exits with status 0. A non-zero exit status means the task is NOT complete, no matter how plausible the code looks.
 3. If verification fails: read the failure output, fix the cause, and re-run. Repeat until the exit status is 0 or you can prove the failure predates your change.
 4. Never report success without a passing verification run in this conversation. Summaries must state which command verified the work and its result.
+5. This applies to a turn that changed code, and the harness enforces it: it will refuse a finish that has no passing run after the last edit. If the grind floor is spent — the attempt budget is exhausted — and you still cannot get one, report the work UNVERIFIED, never success. UNVERIFIED is a legitimate, expected answer; claiming success without evidence is not.
 """
 
 VERIFICATION_LOOP_RULES_NO_BASH = """
@@ -192,12 +191,21 @@ You are NOT done when the code is merely written — you are done when it is VER
 2. A verification counts only when it reports 0 errors and exit status 0. A non-zero result means the task is NOT complete.
 3. If verification fails: read the failure output, fix the cause, and re-run. Repeat until it passes or you can prove the failure predates your change.
 4. Never report success without a passing verification in this conversation. Summaries must state which check verified the work.
+5. This applies to a turn that changed code, and the harness enforces it: it will refuse a finish that has no passing run after the last edit. If the grind floor is spent — the attempt budget is exhausted — and you still cannot get one, report the work UNVERIFIED, never success. UNVERIFIED is a legitimate, expected answer; claiming success without evidence is not.
 """
 
-# The canonical invariant, owned by the gate (verification.py) and quoted
-# here so prose can never drift from enforcement (GH#27).
-VERIFICATION_LOOP_RULES += "\n> " + INVARIANT_STATEMENT + "\n"
-VERIFICATION_LOOP_RULES_NO_BASH += "\n> " + INVARIANT_STATEMENT + "\n"
+# ── Why this prose is NOT a verbatim quote of the gate's string ────────────────
+# `verification.py` still owns `INVARIANT_STATEMENT`, the gate still enforces it, and
+# `compose_nudge` still derives its intervention text from it — those are unchanged and
+# pinned by `tests/test_invariant_single_source.py`.
+#
+# What changed on 2026-10-01: the **static prompt** no longer appends the gate's string as
+# a blockquote. It states the same three conditions in its own words instead, so the prompt
+# can be developed without a byte-exact pin — which is what "free it for development" means
+# here. The two facts the quote carried that the prose did **not** (the grind floor, and
+# `UNVERIFIED` as a sanctioned verdict) are now item 5 of both variants, so nothing was lost
+# by de-pinning: the model is told them *before* acting rather than only when the gate nudges
+# it. The guarantee moved from **spelling** to **content**, and the test asserts the content.
 
 DEFAULT_SYSTEM = DEFAULT_BASE_SYSTEM + VERIFICATION_LOOP_RULES
 

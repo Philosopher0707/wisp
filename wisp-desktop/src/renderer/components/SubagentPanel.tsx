@@ -100,6 +100,46 @@ export const SubagentPanel: React.FC = () => {
   );
 };
 
+/**
+ * Renders one child's authority surface as THREE distinct claims.
+ *
+ * The temptation is a single line reading "52 tools" or "restricted", but the
+ * three states below are genuinely different facts and collapsing any pair of
+ * them misleads the user about what the agent may do:
+ *
+ * - `unbounded: true`      — inherits the full unrestricted surface.
+ * - `capabilities: [...]`  — a real, narrowed list. Shorter means LESS authority.
+ * - `capabilities: null`   — the backend reported nothing. Unknown, not "none".
+ *
+ * Note there is deliberately no `unbounded ? caps.length : 0` shortcut: a
+ * narrowed child and an unreported child are different, and only the explicit
+ * boolean can tell them apart.
+ */
+const CapabilitySummary: React.FC<{ task: SubagentTask }> = ({ task }) => {
+  if (task.unbounded) {
+    return (
+      <span className="subagent-caps subagent-caps-unbounded" title="Inherits the full unrestricted tool surface">
+        unrestricted
+      </span>
+    );
+  }
+  if (task.capabilities === null) {
+    return (
+      <span className="subagent-caps subagent-caps-unknown" title="Authority not reported by the backend">
+        authority unreported
+      </span>
+    );
+  }
+  return (
+    <span
+      className="subagent-caps subagent-caps-narrowed"
+      title={task.capabilities.join(', ')}
+    >
+      {task.capabilities.length} tool{task.capabilities.length === 1 ? '' : 's'}
+    </span>
+  );
+};
+
 const SubagentTaskItem: React.FC<{ task: SubagentTask; startTime: number | null }> = ({ task, startTime }) => {
   const elapsed = useElapsed(startTime);
   const isRunning = task.status === 'running';
@@ -114,7 +154,10 @@ const SubagentTaskItem: React.FC<{ task: SubagentTask; startTime: number | null 
         </div>
       )}
       <div className="subagent-task-info">
-        <div className="subagent-task-name">{task.name}</div>
+        <div className="subagent-task-name">
+          {task.name}
+          <CapabilitySummary task={task} />
+        </div>
         <div className="subagent-task-meta">
           {task.status === 'running' && (
             <span className="subagent-task-progress">

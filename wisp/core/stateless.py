@@ -57,7 +57,7 @@ from wisp.infra.circuit_breaker import (
 )
 
 if TYPE_CHECKING:
-    from wisp.providers.protocol import Provider
+    from wisp.providers.protocol import Provider, ProviderEvent
     from wisp.infra.security import SecurityPolicy
     from wisp.infra.extensions import ExtensionHost
     from wisp.tool_executor import ToolExecutor
@@ -401,7 +401,7 @@ class WispAgentCore:
         """
         import asyncio as _asyncio
         from wisp.tools import context as _exec_ctx
-        turn_timeout = getattr(self.config, "turn_timeout", 1800) if self.config else 1800
+        turn_timeout = getattr(self.config, "turn_timeout", 7200) if self.config else 7200
         # Publish the absolute deadline so nested consumers (subagent
         # orchestrator retries) can budget themselves against the same clock.
         # Overwritten by every turn; only read while a turn is live. Lives
@@ -889,6 +889,24 @@ class WispAgentCore:
                         messages.append(nudge_message(nudge))
                         yield _flatten_event(system(nudge, level="warning"))
                         continue
+                # Announced-step gate: "Let me reproduce the issue first." with no
+                # tool call is not a final answer, and with no code changed none of
+                # the gates above fires. Same bounded, shared extension budget, so a
+                # model that only ever announces still ends the turn.
+                from wisp.core.announced_step import (
+                    announces_next_step, compose_continue_nudge)
+
+                round_text = "".join(partial_content)
+                if (announces_next_step(round_text)
+                        and stagnation_interventions_used
+                        < _MAX_STAGNATION_INTERVENTIONS
+                        and iteration + 1 < max_iterations):
+                    stagnation_interventions_used += 1
+                    messages.append({"role": "assistant", "content": round_text})
+                    nudge = compose_continue_nudge(round_text)
+                    messages.append(nudge_message(nudge))
+                    yield _flatten_event(system(nudge, level="warning"))
+                    continue
                 # RESOLVED (verified, not surrendered) → distill the trail
                 # into a permanent auto skill, best-effort, never blocking.
                 if guard.resolved():
@@ -941,6 +959,14 @@ class WispAgentCore:
                         # this same channel for live rendering but must
                         # never become role:tool messages (their ID is "").
                         if result_event.get("type") == "tool_result":
+                            # Tool output is DATA, never instructions. A result
+                            # carrying an instruction shape is WITHHELD —
+                            # fail-closed, and withheld rather than killing the
+                            # run. See wisp/core/tool_result_guard.py.
+                            from wisp.core.tool_result_guard import (
+                                withhold_if_injected,
+                            )
+                            result_event = withhold_if_injected(result_event)
                             tool_results_events.append(result_event)
                         yield result_event
                         # Verification-floor tracking: fold every tool outcome
@@ -1108,7 +1134,7 @@ class WispAgentCore:
         system_prompt: str,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None,
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncIterator[ProviderEvent]:
         """Wrap a synchronous provider generator in an async iterator.
 
         Runs the blocking I/O in a thread to avoid blocking the event loop.
@@ -1131,7 +1157,7 @@ class WispAgentCore:
             logger.debug("Pruning in _stream_events_async failed", exc_info=True)
 
         # Define the streaming callable for circuit breaker
-        async def _call_provider() -> AsyncIterator[dict[str, Any]]:
+        async def _call_provider() -> AsyncIterator[ProviderEvent]:
             if hasattr(provider, "generate_stream_events_async"):
                 async for event in provider.generate_stream_events_async(
                     system_prompt=system_prompt,
@@ -1145,7 +1171,7 @@ class WispAgentCore:
             import threading
 
             loop = asyncio.get_running_loop()
-            queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+            queue: asyncio.Queue[ProviderEvent] = asyncio.Queue()
             done = object()  # sentinel
             producer_error: list[BaseException] = []
             cancelled = threading.Event()
@@ -1223,7 +1249,7 @@ class WispAgentCore:
         if self._circuit_breaker is not None:
             breaker = self._circuit_breaker
 
-            async def _emit_circuit_open() -> AsyncIterator[dict[str, Any]]:
+            async def _emit_circuit_open() -> AsyncIterator[ProviderEvent]:
                 retry = breaker.retry_after()
                 yield _flatten_event(provider_status_event(
                     "circuit_open",
@@ -1499,19 +1525,14 @@ class WispAgentCore:
         if ws:
             lines.append(f"- workspace: {ws}")
 
-        # Dynamic environment grounding: cwd, OS, shell, git branch + commit
-        # hash, package managers, suggested verification commands. Computed
-        # per turn (not cached) so the commit hash never goes stale.
-        # Skipped when the session has no workspace — the block grounds the
-        # model in a *project* environment; bare sessions stay lean.
-        env_block = ""
-        if ws:
-            try:
-                from wisp.environment import collect_environment, format_environment_block
-                env_block = format_environment_block(collect_environment(ws))
-            except Exception:
-                logger.debug("Environment collection failed — continuing without it", exc_info=True)
-
+        # NOTE — the `## Environment` block is deliberately NOT built here.
+        #
+        # `_build_environment_block` owns that section and honours `config.env_context`. This method
+        # used to build a second copy of it, which did three things: it put the section in every
+        # prompt **twice** (byte-identical), it ran `collect_environment` twice per turn (that shells
+        # out to `git` and is not memoized), and it **defeated the switch** — `env_context` gates the
+        # other call site only, so turning it off still left a block in the prompt through here.
+        # Pinned by `tests/test_operating_context.py::TestTheEnvironmentSectionHasOneProducer`.
         sid = session.get("id", "")
         if sid:
             lines.append(f"- session: {sid}")
@@ -1540,14 +1561,9 @@ class WispAgentCore:
             except Exception:
                 pass  # inventory is advisory — never break prompt building
 
-        if not lines and not env_block:
+        if not lines:
             return ""
-        parts: list[str] = []
-        if env_block:
-            parts.append(env_block)
-        if lines:
-            parts.append("## Operating context\n" + "\n".join(lines))
-        return "\n\n".join(parts)
+        return "## Operating context\n" + "\n".join(lines)
 
     def invalidate_caches(self) -> None:
         """Invalidate all caches — call when workspace context changes."""
@@ -1566,7 +1582,8 @@ class WispAgentCore:
             for skill in skills:
                 lines.append(f"- {skill.name}: {skill.description}")
                 if skill.instructions:
-                    lines.append(f"  Instructions: {skill.instructions[:200]}")
+                    shown = skill.instructions if skill.inline_instructions else skill.instructions[:200]
+                    lines.append(f"  Instructions: {shown}")
             return "\n".join(lines)
         except Exception as e:
             logger.debug("Failed to build skills block: %s", e)
@@ -1584,12 +1601,20 @@ class WispAgentCore:
             return ""
 
     def _build_memory_block(self, workspace: str) -> str:
-        """Cross-session memory: remembered facts + recent summaries."""
+        """Cross-session memory: remembered facts + recent summaries.
+
+        Facts are **bucketed by scope** before rendering. `list_all_facts()` is global by design, so
+        a fact recorded in another project arrived here with no provenance — and one of them asserts
+        a container layout (`/workspace`) that is false for this repository. The model acted on it,
+        every tool call landed outside the workspace, and the turn stalled. See
+        `format_cross_session_block` for the failure and `wisp.memory.facts_grouped_by_scope` for the
+        bucketing.
+        """
         try:
             from wisp.agent_memory import get_agent_memory
-            from wisp.memory import list_all_facts
+            from wisp.memory import facts_grouped_by_scope
 
-            facts = list_all_facts()
+            buckets = facts_grouped_by_scope(workspace)
             mem = get_agent_memory()
             try:
                 all_summaries = mem.load_all()
@@ -1600,7 +1625,7 @@ class WispAgentCore:
             same_ws = [x for x in all_summaries if x.workspace == workspace]
             others = [x for x in all_summaries if x.workspace != workspace]
             summaries = (same_ws + others)[:3]
-            return format_cross_session_block(facts, summaries)
+            return format_cross_session_block(buckets, summaries, workspace)
         except Exception as e:
             logger.debug("Failed to build memory block: %s", e)
             return ""
@@ -2600,31 +2625,84 @@ class WispAgentCore:
 
         return Context(workspace=Path(session.get("workspace", ".")))
 def format_cross_session_block(
-    facts: list[Any], summaries: list[Any]
+    facts: Any, summaries: list[Any], workspace: str | None = None
 ) -> str:
     """Render remembered facts + past-session summaries for the prompt.
 
     Pure function so the injection contract is testable without disk.
+
+    *facts* is the scope-bucketed mapping from `wisp.memory.facts_grouped_by_scope` — ``here`` /
+    ``global`` / ``elsewhere``. A plain list is still accepted and rendered unscoped, which is what
+    an older caller passes.
+
+    **The provenance headings are the point.** Facts are recalled globally by design (*"memory works
+    regardless of which directory the agent is running in"*), so this block routinely carries facts
+    about *other* projects — including claims about their environment. With no provenance the model
+    read one such claim, *"run_bash runs in a container rooted at /workspace, NOT the macOS path"*,
+    as a statement about the repository it was actually in: it ran every tool against ``/workspace``,
+    each call failed with *"outside workspace"*, and the turn could not proceed. A fact is only
+    useful if the model knows what it is a fact **about**.
     """
     lines: list[str] = []
-    fact_items: list[str] = []
-    for fact in facts or []:
-        content = fact.get("content") if isinstance(fact, dict) else str(fact)
-        if content and content.strip():
-            fact_items.append(content.strip())
-    if fact_items:
-        important = [f for f in facts or [] if isinstance(f, dict) and f.get("important")]
-        important_contents = {
-            (f.get("content") or "").strip() for f in important
+
+    def _contents(items: Any) -> list[str]:
+        """Contents, **important facts first** — the ordering the block always had.
+
+        A fact carrying `_origin` (from `facts_grouped_by_scope`) is prefixed with the workspace it
+        came from, so the model can see *which project* it is a fact about rather than having to
+        infer it from a heading.
+        """
+        out: list[str] = []
+        for fact in items or []:
+            if isinstance(fact, dict):
+                content = fact.get("content")
+                origin = fact.get("_origin")
+            else:
+                content, origin = str(fact), None
+            if content and content.strip():
+                prefix = f"[from {origin}] " if origin else ""
+                out.append(prefix + content.strip())
+        important = {
+            (f.get("content") or "").strip()
+            for f in (items or []) if isinstance(f, dict) and f.get("important")
         }
-        ordered = (
-            [f for f in fact_items if f in important_contents]
-            + [f for f in fact_items if f not in important_contents]
-        )[:15]
+        return ([c for c in out if c.split("] ", 1)[-1] in important]
+                + [c for c in out if c.split("] ", 1)[-1] not in important])
+
+    buckets: dict[str, list[str]]
+    if isinstance(facts, dict):
+        buckets = {k: _contents(v) for k, v in facts.items()}
+    else:                                   # legacy: an unscoped list
+        buckets = {"here": _contents(facts)}
+
+    if any(buckets.values()):
         lines.append("## Cross-Session Memory")
-        lines.append(
-            "Facts the user asked you to remember across conversations:")
-        lines.extend(f"- {f}" for f in ordered)
+        lines.append("Facts the user asked you to remember across conversations.")
+
+        def _emit(title: str, items: list[str], cap: int = 15) -> None:
+            if not items:
+                return
+            lines.append("")
+            lines.append(title)
+            lines.extend(f"- {f}" for f in items[:cap])
+
+        # This workspace's facts go FIRST and the heading appears even when there are none: with
+        # nothing said about the workspace the model is actually in, the only facts it has are the
+        # foreign ones — and it used them. An anchor it can read past beats no anchor at all.
+        here = buckets.get("here", [])
+        lines.append("")
+        lines.append(f"**About this workspace** (`{workspace}`):" if workspace
+                     else "**About this workspace:**")
+        lines.extend(f"- {f}" for f in here[:15]) if here else lines.append(
+            "- (nothing remembered for this workspace yet)")
+
+        _emit("**Global — not specific to any workspace:**", buckets.get("global", []))
+        _emit(
+            "**From OTHER workspaces — each line names the project it came from. Some state how that "
+            "project's environment is laid out (paths, containers, toolchains), which is exactly the "
+            "kind of fact that is false here. Verify with a tool before acting on one:**",
+            buckets.get("elsewhere", []), cap=5,
+        )
 
     if summaries:
         if lines:

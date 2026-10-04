@@ -1750,6 +1750,10 @@ class CLITransport(Transport):
                     box_mode=True,
                     language=None if plain_diff else lang,
                     plain=plain_diff,
+                    # 0 = unlimited. getattr-with-default so configs and
+                    # test doubles predating the setting keep today's cap.
+                    max_lines=(getattr(self.config, "diff_max_lines", 50)
+                               if self.config else 50),
                 )
                 if skip_header:
                     return f"{summary}\n{diff_box}"

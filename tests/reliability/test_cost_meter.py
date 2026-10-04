@@ -153,3 +153,59 @@ class TestTheTableIsIdentifiable:
     def test_every_entry_is_a_price(self):
         for model, price in PRICE_TABLE.items():
             assert isinstance(price, Price), f"{model} is not priced with a Price"
+
+
+# ── The flaw that WIRING found ──────────────────────────────────────────
+
+
+class TestAnUnknownModelMustNotBreakTheTurn:
+    """Found by wiring, not by reading: `charge` raises under FAIL_CLOSED, and
+    `Telemetry.record_turn` calls it — so a model the table had not seen would have
+    crashed the turn. Refusing to CHARGE is not refusing to RUN.
+    """
+
+    def test_try_charge_counts_instead_of_raising(self):
+        meter = _meter()
+        assert meter.try_charge("shipped-yesterday", input_tokens=1000) is None
+        assert meter.uncharged_calls == 1
+        assert meter.spent_usd == 0.0
+
+    def test_charge_still_raises_for_an_explicit_caller(self):
+        """The explicit path keeps its failure — a caller that can handle it should
+        see it. Only the telemetry path swallows."""
+        with pytest.raises(UnknownModel):
+            _meter().charge("shipped-yesterday", input_tokens=1000)
+
+    def test_the_gap_is_VISIBLE_in_the_summary(self):
+        """The whole point: not silent. A spend figure is only trustworthy if the
+        calls it could not price are beside it."""
+        meter = _meter()
+        meter.try_charge("shipped-yesterday", input_tokens=1000)
+        meter.try_charge("shipped-yesterday", input_tokens=1000)
+        meter.try_charge("another-new-one", input_tokens=1000)
+        s = meter.summary()
+        assert s["uncharged_calls"] == 3
+        assert s["uncharged_models"] == ["shipped-yesterday", "another-new-one"]
+
+    def test_a_known_model_is_unaffected(self):
+        meter = _meter()
+        assert meter.try_charge("local", input_tokens=1000) == 0.0
+        assert meter.uncharged_calls == 0
+
+    def test_the_bound_still_holds_for_what_could_be_priced(self):
+        """The gap must not disable the control for the models it CAN price."""
+        meter = CostMeter(on_unknown=UnknownPolicy.FAIL_CLOSED)
+        meter.try_charge("unknown-model", input_tokens=999_999)     # counted
+        assert meter.spent_usd == 0.0
+        meter.try_charge("gpt-4o", input_tokens=1000, output_tokens=1000)
+        assert meter.spent_usd > 0.0
+
+    def test_record_turn_does_not_raise_on_an_unknown_model(self):
+        """**The flaw, driven through the seam that found it.**"""
+        from wisp.infra.telemetry import Telemetry
+
+        meter = _meter()
+        tel = Telemetry(cost_meter=meter)
+        tel.record_turn(1.0, 1000, 1000, model="shipped-yesterday")   # must not raise
+        assert meter.uncharged_calls == 1
+        assert tel.prompt_tokens_total == 1000, "the counters still counted"

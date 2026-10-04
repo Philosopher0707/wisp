@@ -123,6 +123,14 @@ class TestRenderDiffPanel:
         assert "hello" in result
         assert "world" in result
 
+    def test_zero_or_none_max_lines_disables_truncation(self):
+        lines = [f" {i} line{i}" for i in range(1, 100)]
+        diff_text = "\n".join(lines)
+        for unlimited in (0, None):
+            result = render_diff_panel(diff_text, max_lines=unlimited)
+            assert "more lines" not in result
+            assert "line99" in result
+
 
 # ═══════════════════════════════════════════════════════════════════
 # Diff rendering functionality: no phantom blanks, plain mode, titles

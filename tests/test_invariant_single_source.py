@@ -1,8 +1,12 @@
 """Single-source turn-completion invariant (GH#27).
 
-verification.py owns the canonical statement; the prompt prose quotes it
-and the nudge composer derives from the same source. These pins fail on
-any prose<->gate drift.
+`verification.py` owns the canonical statement; **the gate enforces it and `compose_nudge`
+derives from it**, so those two can never drift — that half is unchanged and still pinned here.
+
+The **static prompt** no longer quotes the string verbatim (2026-10-01). It states the same
+conditions in its own words, so the prompt can be developed without a byte-exact pin. See
+`TestSingleSource.test_prose_names_all_three_gate_conditions` for what is still guaranteed and
+why the guarantee moved from spelling to content.
 """
 
 from wisp.context_assembler import (
@@ -18,9 +22,31 @@ from wisp.core.verification import (
 
 
 class TestSingleSource:
-    def test_prose_quotes_canonical_statement(self):
-        assert VERIFICATION_LOOP_RULES.count(INVARIANT_STATEMENT) == 1
-        assert VERIFICATION_LOOP_RULES_NO_BASH.count(INVARIANT_STATEMENT) == 1
+    def test_prose_names_all_three_gate_conditions(self):
+        """The prose is **free to be edited**; it is not free to be less true.
+
+        This replaced an exact-string pin (`count(INVARIANT_STATEMENT) == 1`) on 2026-10-01, so
+        the prompt could be developed without a byte-exact constraint. The guarantee moved from
+        **spelling** to **content**.
+
+        The gate blocks iff the turn mutated code **AND** no verification exit-0 postdates the
+        mutation **AND** the grind floor is unspent — so the prose must name all three, plus the
+        sanctioned verdict for when the floor is spent. That last one is the fact the verbatim
+        quote used to carry and the prose did not: without it a model that genuinely cannot get a
+        passing run has no legitimate answer, and its only options are to lie or to loop.
+        """
+        for name, text in (("VERIFICATION_LOOP_RULES", VERIFICATION_LOOP_RULES),
+                           ("VERIFICATION_LOOP_RULES_NO_BASH", VERIFICATION_LOOP_RULES_NO_BASH)):
+            lowered = text.lower()
+            assert "code change" in lowered, (
+                f"{name} no longer names the mutation condition the gate tests")
+            assert "exit" in lowered and "status 0" in lowered, (
+                f"{name} no longer names the exit-0 condition the gate tests")
+            assert "grind floor" in lowered, (
+                f"{name} no longer names the escape hatch — a model that cannot verify is left "
+                "with no sanctioned answer, which is the hole the quote used to fill")
+            assert "unverified" in lowered, (
+                f"{name} no longer names the UNVERIFIED verdict")
 
     def test_statement_is_gate_faithful(self):
         # Gate blocks iff: mutated AND no post-mutation exit-0 AND floor

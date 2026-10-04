@@ -320,6 +320,13 @@ class OrchestratorEvent:
                 "subagent_id": self.task_id,
                 "name": p.get("role", p.get("name", "")),
                 "description": p.get("description", ""),
+                # The child's real authority surface, as computed by the
+                # runner at spawn time. Absent payload keys degrade to an
+                # honest "unknown" rather than a permissive default: an
+                # emitter that predates this field must not read as
+                # "unconstrained".
+                "capabilities": p.get("capabilities"),
+                "unbounded": p.get("unbounded", False),
             }
         elif kind == EventKind.TASK_PROGRESS:
             return {

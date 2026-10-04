@@ -99,6 +99,11 @@ class WorkspaceTrustManager:
                         f.truncate()
                         json.dump(trusted, f, indent=2)
                         f.write("\n")
+                        # Flush while still holding the lock: the file object
+                        # buffers, so unlocking first let the next writer read
+                        # a partial file, parse nothing, and overwrite it.
+                        f.flush()
+                        os.fsync(f.fileno())
                 finally:
                     fcntl.flock(f.fileno(), fcntl.LOCK_UN)
         except (PermissionError, OSError):

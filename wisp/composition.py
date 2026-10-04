@@ -12,6 +12,8 @@ Design:
 
 from __future__ import annotations
 
+import pathlib
+
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -110,7 +112,35 @@ class CompositionRoot:
                 self.security.permission_mode, self.security.effective_permission_mode,
             )
         self.extensions = ExtensionHost()
-        self.telemetry = Telemetry()
+        # ── The four run bounds, and the meter that makes one of them fire ──
+        #
+        # `wisp/configs/default.yaml` is the Config layer — "the only place
+        # capabilities are named" — and until now NOTHING READ IT. A layer that is
+        # not loaded is not a layer, so this is the load.
+        #
+        # ONE meter, shared: `Telemetry` charges it and `ToolExecutor` gates on it.
+        # Two meters would measure and gate different things, which is the defect
+        # class this repository names most often.
+        #
+        # `FAIL_CLOSED` is affordable here only because `try_charge` COUNTS an
+        # unpriceable model instead of raising: a new model name degrades the meter
+        # (visibly, in `summary()["uncharged_calls"]`), not the run.
+        from wisp.runtime.bounds import BoundsError, load as _load_bounds
+        from wisp.runtime.cost import CostMeter, UnknownPolicy
+
+        _bounds_path = pathlib.Path(__file__).resolve().parent / "configs" / "default.yaml"
+        try:
+            self.run_bounds = _load_bounds(_bounds_path)
+        except BoundsError as _exc:
+            # Loud, not silent: a run whose ceiling cannot be read has no ceiling,
+            # and that must be visible rather than assumed.
+            logger.warning(
+                "no run bounds loaded from %s (%s) — the cost bound is INACTIVE",
+                _bounds_path, _exc)
+            self.run_bounds = None
+        self.cost_meter = CostMeter(on_unknown=UnknownPolicy.FAIL_CLOSED)
+
+        self.telemetry = Telemetry(cost_meter=self.cost_meter)
         # Durable run registry (migration P0). Built here — before its two
         # consumers (ToolExecutor's lazy background-manager fallback and the
         # BackgroundAgentManager below) — so exactly one instance exists per
@@ -193,6 +223,12 @@ class CompositionRoot:
             extensions=self.extensions,
             run_store=self.run_store,
             policy=self.organization_policy,
+            # The gate. Both are needed for it to be active; `max_cost_usd` comes
+            # from the loaded bounds so the ceiling is the CONFIG's, not a literal
+            # buried here.
+            cost_meter=self.cost_meter,
+            max_cost_usd=(self.run_bounds.max_cost_usd
+                          if self.run_bounds is not None else None),
         )
 
         # Create Compactor for LLM-powered summarization

@@ -196,6 +196,23 @@ class UnifiedStore:
                     ON idempotency(created_at);
                 """
             )
+            # Schema migration: the idempotency table gains STATE and FINGERPRINT.
+            #
+            # The existing table is a result MEMO (`key, result, created_at`) with
+            # first-write-wins, and it cannot express the two things the guard
+            # needs: that a key is IN_PROGRESS (so a crash mid-effect is visible
+            # rather than invisible), and WHICH body the key was first used for (so
+            # reuse with a different body is rejected instead of silently returning
+            # the wrong result).
+            for _col, _ddl in (
+                ("state", "ALTER TABLE idempotency ADD COLUMN state TEXT NOT NULL DEFAULT ''"),
+                ("fingerprint", "ALTER TABLE idempotency ADD COLUMN fingerprint TEXT NOT NULL DEFAULT ''"),
+            ):
+                try:
+                    conn.execute(f"SELECT {_col} FROM idempotency LIMIT 1")
+                except sqlite3.OperationalError:
+                    conn.execute(_ddl)
+
             # Schema migration: add title column if missing
             try:
                 conn.execute("SELECT title FROM sessions LIMIT 1")
@@ -712,6 +729,52 @@ class UnifiedStore:
             """,
             (key, result, _time.time()),
         )
+
+    def idem_begin(self, key: str, fingerprint: str) -> tuple[dict | None, bool]:
+        """The CONDITIONAL WRITE. Returns `(existing_row_or_None, created)`.
+
+        `ON CONFLICT DO NOTHING` + `rowcount` is what makes exactly one racer win:
+        a read-then-write pair would let two callers both see nothing and both
+        proceed, which is the race the guard exists to stop.
+        """
+        import time as _time
+        cur = self._get_conn().execute(
+            """
+            INSERT INTO idempotency (key, result, created_at, state, fingerprint)
+            VALUES (?, '', ?, 'in_progress', ?)
+            ON CONFLICT(key) DO NOTHING
+            """,
+            (key, _time.time(), fingerprint),
+        )
+        if cur.rowcount == 1:
+            return None, True
+        row = self._get_conn().execute(
+            "SELECT key, result, created_at, state, fingerprint FROM idempotency WHERE key = ?",
+            (key,),
+        ).fetchone()
+        return (dict(row) if row is not None else None), False
+
+    def idem_finish(self, key: str, state: str, result: str = "") -> None:
+        """Record the outcome. Unlike `idem_put` this UPDATES, because a record
+        that started `in_progress` must be able to become `completed`."""
+        self._get_conn().execute(
+            "UPDATE idempotency SET state = ?, result = ? WHERE key = ?",
+            (state, result, key),
+        )
+
+    def idem_find_by_fingerprint(self, fingerprint: str) -> dict | None:
+        """The row this body was first seen under, whatever key carried it.
+
+        This is what makes an unstable key (a fresh key per retry) DETECTABLE: the
+        same body arriving under a second key is visible as one fingerprint with
+        two keys.
+        """
+        row = self._get_conn().execute(
+            "SELECT key, result, created_at, state, fingerprint FROM idempotency "
+            "WHERE fingerprint = ? ORDER BY created_at LIMIT 1",
+            (fingerprint,),
+        ).fetchone()
+        return dict(row) if row is not None else None
 
     # ── Trace spans (M5) ─────────────────────────────────────────────
 

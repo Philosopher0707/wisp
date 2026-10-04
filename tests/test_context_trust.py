@@ -22,7 +22,6 @@ import pytest
 from wisp.core.context_trust import (
     MAY_INFLUENCE,
     TRUSTED_TAGS,
-    Context,
     ContextItem,
     ContextRequest,
     DroppedItem,

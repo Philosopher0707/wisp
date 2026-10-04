@@ -224,7 +224,10 @@ class TestSubagentEndToEnd:
 
         # Health is advisory; the actual stream is still attempted.
         assert result.success is False
-        assert result.error == "Connection refused"
+        # The turn's fatal error is the verdict's cause, and it names the
+        # provider failure (the runner no longer stops at the first,
+        # recoverable, error event — ADR-0044's outcome authority decides).
+        assert "Connection refused" in (result.error or "")
         assert provider.health_checks == 1
         assert provider.stream_calls == 1
         assert result.elapsed_seconds < 5.0

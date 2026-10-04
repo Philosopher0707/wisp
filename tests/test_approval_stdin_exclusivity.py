@@ -10,6 +10,7 @@ loop. Regression tests for that theft.
 from __future__ import annotations
 
 import os
+import queue
 import sys
 import threading
 import time
@@ -27,6 +28,39 @@ def _make_buffer(fd: int) -> TypeAheadBuffer:
     return tb
 
 
+#: How long a delivery may take before it counts as lost. The reader wakes
+#: within one `_SELECT_TICK` of resume, but the thread still has to be
+#: scheduled: a fixed sleep followed by `get_nowait()` failed on a loaded CI
+#: runner with the line late, not lost. A bounded wait returns as soon as the
+#: line arrives, and a genuinely dropped line still fails.
+_DELIVERY_TIMEOUT = 2.0
+
+
+def _start_reader(tb: TypeAheadBuffer) -> threading.Thread:
+    """Run the read loop on a thread `stop_drain_for_test` can join.
+
+    The join matters: the fixture closes the pipe at teardown, and the next
+    test's `os.pipe()` reuses those fd numbers. A reader that outlived its
+    test could `os.read` the next test's pipe and swallow its line.
+    """
+    thread = threading.Thread(target=tb._read_loop, daemon=True)
+    tb._thread = thread
+    thread.start()
+    return thread
+
+
+def _next_line(tb: TypeAheadBuffer, thread: threading.Thread) -> str:
+    """Wait for a delivered line; on timeout say where the reader was."""
+    try:
+        return tb._queue.get(timeout=_DELIVERY_TIMEOUT)
+    except queue.Empty:
+        raise AssertionError(
+            f"no line within {_DELIVERY_TIMEOUT}s: reader alive={thread.is_alive()} "
+            f"parked={tb._parked.is_set()} gate_open={tb._read_gate.is_set()} "
+            f"stopped={tb._stop.is_set()} partial={bytes(tb._buf)!r}"
+        ) from None
+
+
 @pytest.fixture()
 def pty_pair():
     # A pipe exercises the same select()+os.read() fd semantics as a tty;
@@ -42,8 +76,7 @@ class TestPauseSemantics:
         master, slave = pty_pair
         tb = _make_buffer(slave)
         tb.pause()
-        thread = threading.Thread(target=tb._read_loop, daemon=True)
-        thread.start()
+        _start_reader(tb)
         try:
             os.write(master, b"Y\n")
             time.sleep(0.2)
@@ -56,14 +89,12 @@ class TestPauseSemantics:
         master, slave = pty_pair
         tb = _make_buffer(slave)
         tb.pause()
-        thread = threading.Thread(target=tb._read_loop, daemon=True)
-        thread.start()
+        thread = _start_reader(tb)
         try:
             time.sleep(0.1)
             tb.resume()
             os.write(master, b"a\n")
-            time.sleep(0.2)
-            assert tb._queue.get_nowait() == "a"
+            assert _next_line(tb, thread) == "a"
         finally:
             tb.stop_drain_for_test()
 
@@ -71,30 +102,26 @@ class TestPauseSemantics:
         """Documents the bug shape: unpauseed capture steals the line."""
         master, slave = pty_pair
         tb = _make_buffer(slave)
-        thread = threading.Thread(target=tb._read_loop, daemon=True)
-        thread.start()
+        thread = _start_reader(tb)
         try:
             os.write(master, b"Y\n")
-            time.sleep(0.2)
-            assert tb._queue.get_nowait() == "Y"
+            assert _next_line(tb, thread) == "Y"
         finally:
             tb.stop_drain_for_test()
 
     def test_pause_resume_roundtrip_no_loss(self, pty_pair):
         master, slave = pty_pair
         tb = _make_buffer(slave)
-        thread = threading.Thread(target=tb._read_loop, daemon=True)
-        thread.start()
+        thread = _start_reader(tb)
         try:
             tb.pause()
             os.write(master, b"before\n")
             time.sleep(0.15)
             assert tb._queue.empty()  # nothing consumed while paused
             tb.resume()
-            time.sleep(0.15)
             # Bytes written while paused are still in the kernel queue;
             # the reader must pick them up after resume, not drop them.
-            assert tb._queue.get_nowait() == "before"
+            assert _next_line(tb, thread) == "before"
         finally:
             tb.stop_drain_for_test()
 

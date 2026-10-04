@@ -141,6 +141,7 @@ class DoctorReport:
 
 CHECK_NAMES: Final[tuple[str, ...]] = (
     "path_environment",
+    "build_sequence",
     "stream_hygiene",
     "tool_cache",
     "autonomous_policy",
@@ -737,12 +738,211 @@ async def _check_boot_context() -> CheckResult:
                            f"unexpected: {e}", latency, details)
 
 
+#: Container bases that ship no interpreter. A sandbox built on one of these cannot run the command
+#: the prompt itself suggests (`python -m pytest`) — which is exactly what happened: the default was
+#: `ubuntu:22.04`, so `run_bash` inside the sandbox answered *python3: command not found* while the
+#: prompt advertised a Python and a test command.
+#:
+#: Matched against the repository part of the image reference, so a project image built *from* one of
+#: these (`wisp-sandbox:py311`) is not flagged — a name containing "python" would have missed it, and
+#: one containing "ubuntu" would have flagged it wrongly.
+_BARE_OS_IMAGE_REPOS: Final[tuple[str, ...]] = (
+    "ubuntu", "debian", "alpine", "busybox", "centos", "fedora", "rockylinux", "amazonlinux",
+)
+
+
+async def _check_build_sequence(workspace: str | Path | None = None) -> CheckResult:
+    """The chain that must hold before the agent can run the command its own prompt suggests.
+
+    Every link here was broken on 2026-10-01, and each produced the same symptom — an agent that
+    could not verify its own work:
+
+      1. the project has a virtualenv at all;
+      2. the agent's bash resolves ``python`` to *that* interpreter rather than to whatever the host
+         has (this machine's fallback is a managed 3.13.12, which has no pytest);
+      3. the sandbox image is not a bare OS — `run_bash` executes **inside the container**, so the
+         agent's toolchain is the image's, not the host's;
+      4. the runner the prompt suggests (``python -m pytest``) is resolvable on that PATH.
+
+    **Static on purpose.** `run_preflight` gives every check a 100 ms budget, and asking Docker
+    whether the image really carries an interpreter costs seconds — it would be permanently reported
+    as "timed out". So the image is judged by its repository name, and ``details`` says as much: that
+    is weak evidence, and still enough to catch the failure that actually happened.
+    """
+    t0 = time.monotonic()
+    name = "build_sequence"
+    commit = "build-seq"
+    details: dict[str, Any] = {}
+    try:
+        import shutil
+
+        from wisp.config import safe_getcwd
+        from wisp.tools._utils_env import credential_free_env
+
+        ws = str(Path(workspace).resolve()) if workspace else safe_getcwd()
+        details["workspace"] = ws
+
+        venv_bin = Path(ws) / ".venv" / "bin"
+        if not venv_bin.is_dir():
+            venv_bin = Path(ws) / ".venv" / "Scripts"
+        has_venv = venv_bin.is_dir()
+        details["venv"] = str(venv_bin) if has_venv else None
+
+        env, _ = credential_free_env(workspace=ws)
+        path = env.get("PATH", "")
+        python_bin = shutil.which("python3", path=path) or shutil.which("python", path=path)
+        pytest_bin = shutil.which("pytest", path=path)
+        python_is_project = bool(python_bin and has_venv and python_bin.startswith(str(venv_bin)))
+        details["python"] = python_bin
+        details["pytest"] = pytest_bin
+        details["python_is_project_venv"] = python_is_project
+
+        try:
+            from wisp.sandbox import sandbox_image
+
+            image = sandbox_image()
+        except Exception:
+            image = ""
+        repo = image.split("/")[-1].split(":")[0].lower()
+        bare = repo in _BARE_OS_IMAGE_REPOS
+        details["sandbox_image"] = image
+        details["sandbox_image_is_bare_os"] = bare
+        details["image_judged_by"] = "repository name (Docker costs more than the check budget)"
+
+        latency = (time.monotonic() - t0) * 1000
+        if not has_venv:
+            return CheckResult(name, commit, CheckStatus.FAIL,
+                               "no .venv in the workspace — the agent has no project interpreter",
+                               latency, details)
+        if not python_is_project:
+            return CheckResult(
+                name, commit, CheckStatus.FAIL,
+                f"the agent's bash resolves python to {python_bin or 'nothing'}, not the project's "
+                f"venv — the prompt's own verification command will not run there",
+                latency, details)
+        if bare:
+            return CheckResult(
+                name, commit, CheckStatus.WARN,
+                f"sandbox image {image!r} looks like a bare OS — run_bash executes inside it, so "
+                f"`python -m pytest` may not exist there",
+                latency, details)
+        if not pytest_bin:
+            return CheckResult(name, commit, CheckStatus.WARN,
+                               "pytest is not resolvable on the agent's PATH — the suggested "
+                               "verification command cannot run as written",
+                               latency, details)
+        return CheckResult(name, commit, CheckStatus.OK,
+                           f"python -> {Path(python_bin).parent.name}/ · image {image}",
+                           latency, details)
+    except Exception as e:
+        latency = (time.monotonic() - t0) * 1000
+        logger.debug("build_sequence check failed: %s", e, exc_info=True)
+        return CheckResult(name, commit, CheckStatus.FAIL, f"unexpected: {e}", latency, details)
+
+
+async def check_sandbox_image_deep(
+    workspace: str | Path | None = None,
+    image: str | None = None,
+    timeout_s: float = 30.0,
+) -> CheckResult:
+    """Actually **run** the sandbox image and ask it for an interpreter and a test runner.
+
+    The fast `build_sequence` check judges the image by its name, because `run_preflight` gives every
+    check a 100 ms budget and a Docker call costs seconds. A name is enough to catch a bare-OS base
+    and nothing else: an image called ``wisp-sandbox:py312`` could exist and still lack Python, or
+    lack the runner the prompt suggests, or not exist at all.
+
+    **A separate function, not a check inside `run_preflight`.** A check that cannot finish inside
+    the budget is reported as *"timed out"* — a permanent WARN that says nothing about the real
+    state. This is the slow half, run only when asked (`/doctor deep`).
+    """
+    import asyncio
+    import shutil
+
+    t0 = time.monotonic()
+    name = "sandbox_image_deep"
+    commit = "img-deep"
+    details: dict[str, Any] = {}
+    try:
+        from wisp.sandbox import sandbox_image
+
+        img = image or sandbox_image()
+        details["image"] = img
+
+        docker = shutil.which("docker")
+        details["docker"] = docker
+        if not docker:
+            return CheckResult(name, commit, CheckStatus.WARN,
+                               "docker is not on PATH — cannot verify the image",
+                               (time.monotonic() - t0) * 1000, details)
+
+        # Probe each binary separately and tag the output, so a failure names *which* tool is
+        # missing rather than reporting an exit code. The first version chained them with `&&` and
+        # said "failed (exit 1)" while the cause — `No module named pytest` — sat unread in stderr.
+        probe = ("echo \"PY=$(python3 --version 2>&1)\"; "
+                 "echo \"PT=$(python3 -m pytest --version 2>&1)\"; "
+                 "echo \"GT=$(git --version 2>&1)\"")
+        proc = await asyncio.create_subprocess_exec(
+            docker, "run", "--rm", "--network", "none", "--entrypoint", "sh", img, "-c", probe,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        try:
+            out_b, err_b = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
+        except asyncio.TimeoutError:
+            proc.kill()
+            return CheckResult(name, commit, CheckStatus.FAIL,
+                               f"the image did not answer within {timeout_s:.0f}s",
+                               (time.monotonic() - t0) * 1000, details)
+
+        out = (out_b or b"").decode("utf-8", "replace").strip()
+        err = (err_b or b"").decode("utf-8", "replace").strip()
+        details["stdout"] = out
+        details["stderr"] = err[:400]
+        details["returncode"] = proc.returncode
+        latency = (time.monotonic() - t0) * 1000
+
+        if proc.returncode != 0 and not out:
+            return CheckResult(
+                name, commit, CheckStatus.FAIL,
+                f"could not run {img} (exit {proc.returncode}) — the agent's run_bash would fail "
+                f"the same way: {(err or 'no output')[:160]}",
+                latency, details)
+
+        found = {}
+        for line in out.splitlines():
+            key, _, value = line.partition("=")
+            if key in ("PY", "PT", "GT"):
+                found[key] = value.strip()
+        details["python"] = found.get("PY", "")
+        details["pytest"] = found.get("PT", "")
+        details["git"] = found.get("GT", "")
+
+        missing = []
+        if not details["python"].startswith("Python"):
+            missing.append(f"python3 ({details['python'][:80] or 'absent'})")
+        # `.startswith("pytest")`, not `"pytest" in ...`: a *missing* runner answers
+        # `/usr/local/bin/python3: No module named pytest`, which contains the word. Checking for the
+        # word passed an image that has no pytest at all.
+        if not details["pytest"].lower().startswith("pytest"):
+            missing.append(f"the test runner ({details['pytest'][:80] or 'absent'})")
+        if missing:
+            return CheckResult(name, commit, CheckStatus.FAIL,
+                               f"{img} cannot run the prompt's suggested verification command — "
+                               f"missing {', '.join(missing)}",
+                               latency, details)
+        return CheckResult(name, commit, CheckStatus.OK,
+                           f"{details['python']} · {details['pytest']}", latency, details)
+    except Exception as e:
+        logger.debug("sandbox_image_deep check failed: %s", e, exc_info=True)
+        return CheckResult(name, commit, CheckStatus.FAIL, f"unexpected: {e}",
+                           (time.monotonic() - t0) * 1000, details)
+
+
 async def run_preflight(
     workspace: str | Path | None = None,
     config: Any | None = None,
     timeout_s: float = 0.1,
 ) -> DoctorReport:
-    """Run all 6 subsystem checks concurrently with 100 ms budget.
+    """Run all 7 subsystem checks concurrently with 100 ms budget.
 
     Args:
         workspace: Workspace to validate (defaults to safe_getcwd).
@@ -758,6 +958,7 @@ async def run_preflight(
 
     checks = [
         _check_path_environment(),
+        _check_build_sequence(workspace),
         _check_stream_hygiene(),
         _check_tool_cache(),
         _check_autonomous_policy(),

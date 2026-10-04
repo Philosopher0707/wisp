@@ -27,6 +27,16 @@ from wisp.tools.git import (
     tool_git_commit,
     tool_git_push,
     tool_gh_pr_create,
+    tool_git_log,
+    tool_git_fetch,
+    tool_gh_pr_view,
+    tool_gh_pr_list,
+    tool_gh_pr_checks,
+    tool_gh_run_failed_logs,
+    tool_gh_pr_comment,
+    tool_gh_pr_close,
+    tool_gh_pr_merge,
+    tool_git_sync_base,
 )
 from wisp.tools.lsp import (
     tool_lsp_diagnostics,
@@ -637,6 +647,206 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "git_log",
+            "description": 'Show recent commits of the current branch (one line each). Optionally limit to one path.',
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "description": "How many commits (1-100, default 20)"
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Only commits touching this path"
+                    }
+                },
+                "required": []
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "git_fetch",
+            "description": 'Fetch origin so remote branches and PR heads are current. Does not change the working tree or any local branch.',
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "gh_pr_view",
+            "description": "Show a pull request of this repository as JSON: state, draft, mergeability, review decision, checks, body. Acts only on this workspace's own remote.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "number": {
+                        "type": "integer",
+                        "description": "Pull request number (positive integer) in this repository"
+                    }
+                },
+                "required": [
+                    "number"
+                ]
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "gh_pr_list",
+            "description": "List this repository's pull requests.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "state": {
+                        "type": "string",
+                        "enum": [
+                            "open",
+                            "closed",
+                            "merged",
+                            "all"
+                        ],
+                        "description": "Default open"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "How many (1-100, default 20)"
+                    }
+                },
+                "required": []
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "gh_pr_checks",
+            "description": 'Show the CI checks of a pull request (name, pass/fail/pending, link). Pending or failing checks are reported as the answer.',
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "number": {
+                        "type": "integer",
+                        "description": "Pull request number (positive integer) in this repository"
+                    }
+                },
+                "required": [
+                    "number"
+                ]
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "gh_run_failed_logs",
+            "description": "Show the logs of the failed steps of a GitHub Actions run (capped). Get the run id from a check's link.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "run_id": {
+                        "type": "integer",
+                        "description": "Workflow run id (positive integer)"
+                    }
+                },
+                "required": [
+                    "run_id"
+                ]
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "gh_pr_comment",
+            "description": 'Comment on a pull request of this repository. Asks the operator each time.',
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "number": {
+                        "type": "integer",
+                        "description": "Pull request number (positive integer) in this repository"
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "Comment text"
+                    }
+                },
+                "required": [
+                    "number",
+                    "body"
+                ]
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "gh_pr_close",
+            "description": 'Close a pull request of this repository without merging, optionally with a closing comment. Asks the operator each time.',
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "number": {
+                        "type": "integer",
+                        "description": "Pull request number (positive integer) in this repository"
+                    },
+                    "comment": {
+                        "type": "string",
+                        "description": "Optional closing comment"
+                    }
+                },
+                "required": [
+                    "number"
+                ]
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "gh_pr_merge",
+            "description": 'Merge a pull request with a merge commit. Refuses unless the PR is open, not a draft, mergeable, has checks, every check is green and no changes are requested. Asks the operator each time.',
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "number": {
+                        "type": "integer",
+                        "description": "Pull request number (positive integer) in this repository"
+                    }
+                },
+                "required": [
+                    "number"
+                ]
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "git_sync_base",
+            "description": 'Merge origin/<base> into the current branch (never a rebase). Refuses with uncommitted tracked changes. On conflicts it stops and lists the files so you can resolve them, then git_commit. Asks the operator each time.',
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "base": {
+                        "type": "string",
+                        "description": "Base branch name (default main)"
+                    }
+                },
+                "required": []
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "lsp_diagnostics",
             "description": "Run language server diagnostics on a file to find errors and warnings. Supports .py (py_compile), .ts/.tsx (tsc), .js/.jsx (eslint), .rs (cargo check), .go (go vet). Use after writing code to catch errors.",
             "parameters": {
@@ -830,6 +1040,16 @@ TOOL_IMPLS = {
     "git_commit": tool_git_commit,
     "git_push": tool_git_push,
     "gh_pr_create": tool_gh_pr_create,
+    "git_log": tool_git_log,
+    "git_fetch": tool_git_fetch,
+    "gh_pr_view": tool_gh_pr_view,
+    "gh_pr_list": tool_gh_pr_list,
+    "gh_pr_checks": tool_gh_pr_checks,
+    "gh_run_failed_logs": tool_gh_run_failed_logs,
+    "gh_pr_comment": tool_gh_pr_comment,
+    "gh_pr_close": tool_gh_pr_close,
+    "gh_pr_merge": tool_gh_pr_merge,
+    "git_sync_base": tool_git_sync_base,
     "lsp_diagnostics": tool_lsp_diagnostics,
     "lsp_definition": tool_lsp_definition,
     "lsp_references": tool_lsp_references,

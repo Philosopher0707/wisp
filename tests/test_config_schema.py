@@ -170,3 +170,25 @@ class TestToolPoolSizeSettings:
         assert WispConfig().tool_pool_size == 1, "out-of-range clamps to min"
         monkeypatch.setenv("WISP_TOOL_POOL_SIZE", "notanint")
         assert WispConfig().tool_pool_size == 8, "unparseable falls back to default"
+
+
+class TestDiffMaxLinesSetting:
+    """diff_max_lines follows the same int-setting convention as the pool sizes."""
+
+    def test_schema_declares_env_var_and_default(self):
+        schema = get_schema()
+        assert schema["diff_max_lines"]["env_var"] == "WISP_DIFF_MAX_LINES"
+        assert schema["diff_max_lines"]["default"] == 50
+
+    def test_negative_rejected_by_validation(self):
+        assert validate_config({"diff_max_lines": -1})
+
+    def test_config_reads_env(self, monkeypatch):
+        from wisp.config import WispConfig
+
+        monkeypatch.delenv("WISP_DIFF_MAX_LINES", raising=False)
+        assert WispConfig().diff_max_lines == 50
+        monkeypatch.setenv("WISP_DIFF_MAX_LINES", "0")
+        assert WispConfig().diff_max_lines == 0, "0 means unlimited"
+        monkeypatch.setenv("WISP_DIFF_MAX_LINES", "200")
+        assert WispConfig().diff_max_lines == 200

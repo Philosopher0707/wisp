@@ -21,7 +21,6 @@ The running total is now maintained incrementally in bytes, matching
 
 from __future__ import annotations
 
-import pytest
 
 from wisp.multi_agent.telemetry import SubagentTelemetryBuffer
 

@@ -154,6 +154,14 @@ export function useWebSocket(
               id: (msg as any).subagent_id || '',
               name: (msg as any).name || '',
               description: (msg as any).description || '',
+              // Fail-closed on absent data. An older backend omits
+              // `capabilities` entirely; `null` renders as "authority not
+              // reported" instead of being coerced into a list, and
+              // `unbounded` defaults to false so an unreported child can
+              // never be shown as unconstrained. Note `?? null`, not `|| []`:
+              // `[]` is a real claim of zero authority.
+              capabilities: (msg as any).capabilities ?? null,
+              unbounded: (msg as any).unbounded === true,
             });
             break;
           case 'subagent_progress':

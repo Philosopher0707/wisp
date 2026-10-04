@@ -21,6 +21,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from wisp.core.contracts import is_declared_read
+
 
 class RuleEffect(StrEnum):
     ALLOW = "allow"
@@ -236,10 +238,10 @@ class PriorityRuleEngine(PolicyEngine):
             description="ASK_ALL mode: blocked tools require approval",
         ))
 
-        # Priority 30: AUTO_EDIT — exec/git writes are hard DENY (never
-        # prompt, never overridable); delegation primitives (spawn/fanout)
-        # are REQUIRE_APPROVAL (13F.1: children are mode-filtered, so the
-        # fanout itself needs an operator's yes, not a ban).
+        # Priority 30: AUTO_EDIT — `_AUTO_EDIT_DENY_TOOLS` are hard DENY
+        # (never prompt, never overridable; empty since 2026-09-28); exec,
+        # git/gh writes and delegation primitives are REQUIRE_APPROVAL (an
+        # operator's yes each time, not a ban).
         engine.add_rule(Rule(
             name="mode.auto_edit_block",
             predicate=_make_block_rule(edit_block - _AUTO_EDIT_APPROVAL_TOOLS,
@@ -253,7 +255,7 @@ class PriorityRuleEngine(PolicyEngine):
             predicate=_make_approval_rule(_AUTO_EDIT_APPROVAL_TOOLS,
                                           "AUTO_EDIT mode requires approval for", "auto_edit"),
             priority=31,
-            description="AUTO_EDIT mode: delegation primitives require approval",
+            description="AUTO_EDIT mode: exec, git/gh writes and delegation require approval",
         ))
 
         # Priority 1000: catch-all — allow if mode matched, deny otherwise
@@ -271,7 +273,8 @@ class PriorityRuleEngine(PolicyEngine):
 
 _DEFAULT_SAFE_READ_TOOLS = frozenset({
     "read_file", "list_files", "search_codebase", "search_symbols",
-    "git_status", "git_diff", "lsp_diagnostics", "lsp_definition",
+    "git_status", "git_diff", "git_log", "git_fetch", "gh_pr_view", "gh_pr_list", "gh_pr_checks", "gh_run_failed_logs",
+    "lsp_diagnostics", "lsp_definition",
     "lsp_references", "lsp_hover", "lsp_symbols", "web_fetch",
     "web_search", "recall",
 })
@@ -279,6 +282,7 @@ _DEFAULT_SAFE_READ_TOOLS = frozenset({
 _DEFAULT_ASK_ALL_BLOCK = frozenset({
     "write_file", "edit_file", "edit_file_multi", "run_bash",
     "git_branch", "git_commit", "git_push", "gh_pr_create",
+    "gh_pr_comment", "gh_pr_close", "gh_pr_merge", "git_sync_base",
     "spawn", "fanout", "plan_task", "mark_step_done", "update_plan",
 })
 
@@ -295,10 +299,26 @@ _DEFAULT_ASK_ALL_BLOCK = frozenset({
 # RESIDUAL, stated because it is not nothing: the PTY tier bounds RESOURCE USE and CREDENTIAL
 # EXPOSURE (own session, rlimits, credential-stripped env). It does NOT bound FILESYSTEM REACH —
 # a command in AUTO_EDIT can still write anywhere the user can. That is the trade this line makes.
-_AUTO_EDIT_DENY_TOOLS = frozenset({
+#
+# Lifting the deny moves `run_bash` to REQUIRE_APPROVAL, not to allowed: `authorize()` and the
+# executor's forced-approval gate already ask for exec in AUTO_EDIT. Dropping it from both sets
+# let the REST gate, which reads this engine, run shell unprompted in the default mode.
+#
+# The four git/gh writes moved to REQUIRE_APPROVAL on 2026-09-28. Their reason for staying — they
+# mutate a shared remote, which no local sandbox tier contains — argues for a HUMAN'S YES before
+# each one, not for making them impossible: the default mode refused `git_push` outright, so an
+# operator could not push at all without switching the whole session to `ask_all` or `full`.
+# They are asked every time (the executor's AUTO_EDIT gate names all four, `authorize()` asks for
+# exec), never run unprompted, are still blocked where no approval handler exists (headless,
+# REST without a bridge), and stay out of subagent children (`filter_allowed_for_mode` drops the
+# whole AUTO_EDIT block union). The deny set is kept, empty, as the one place a future hard deny
+# goes.
+_AUTO_EDIT_DENY_TOOLS: frozenset[str] = frozenset()
+_AUTO_EDIT_APPROVAL_TOOLS = frozenset({
+    "run_bash", "spawn", "fanout",
     "git_branch", "git_commit", "git_push", "gh_pr_create",
+    "gh_pr_comment", "gh_pr_close", "gh_pr_merge", "git_sync_base",
 })
-_AUTO_EDIT_APPROVAL_TOOLS = frozenset({"spawn", "fanout"})
 
 #: What to do about an AUTO_EDIT denial. One string, both denial sites (`_make_block_rule` here and
 #: `auth/decision.py`), because a remedy stated twice drifts.
@@ -331,7 +351,7 @@ def filter_allowed_for_mode(mode: str, tool_names) -> list[str]:
     if m == "full":
         return requested
     if m == "read_only":
-        return [t for t in requested if t in _DEFAULT_SAFE_READ_TOOLS]
+        return [t for t in requested if t in _DEFAULT_SAFE_READ_TOOLS or is_declared_read(t)]
     blocked = (
         _DEFAULT_ASK_ALL_BLOCK if m == "ask_all" else _DEFAULT_AUTO_EDIT_BLOCK
     )
@@ -354,6 +374,8 @@ def _make_readonly_rule(safe_tools: frozenset[str]) -> RulePredicate:
             return None
         if action.name in safe_tools:
             return PolicyDecision.allow("mode.read_only", f"safe read: {action.name}")
+        if is_declared_read(action.name):
+            return PolicyDecision.allow("mode.read_only", f"operator-declared read: {action.name}")
         return PolicyDecision.deny("mode.read_only", f"READ_ONLY mode blocks {action.name}")
     return predicate
 

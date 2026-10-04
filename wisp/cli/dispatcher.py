@@ -80,6 +80,30 @@ class CommandSpec:
     usage: str = ""
 
 
+
+def _legacy_commands() -> dict:
+    """The legacy command registry, or `{}` if it cannot be imported.
+
+    Imported lazily: `wisp.repl.commands` pulls in every command module (and through them the
+    transport), and the dispatcher is constructed during REPL boot. A failure here must degrade to
+    "built-ins only" rather than take the REPL down.
+    """
+    try:
+        from wisp.repl.commands import _REGISTRY
+        return {name: cmd for name, cmd in _REGISTRY.items() if name == cmd.name}
+    except Exception:
+        return {}
+
+
+def _legacy_command(name: str):
+    """One legacy command by name or alias, or `None`."""
+    try:
+        from wisp.repl.commands import lookup
+        return lookup(name)
+    except Exception:
+        return None
+
+
 class Dispatcher:
     """Name → handler router with legacy-registry fallback."""
 
@@ -212,17 +236,47 @@ class Dispatcher:
     # ── Built-in commands (public interfaces only) ────────────────────
 
     def _register_builtins(self) -> None:
-        @self.register("help", "Show available commands", usage="/help")
+        @self.register("help", "Show every command (built-in and legacy)", usage="/help [name]")
         def _help(ctx: ReplContext, args: str) -> CommandResult:
-            lines = ["Available commands:"]
+            """Every command, built-in **and** legacy — and `/help <name>` for one of them.
+
+            This used to list only `self.names()` (the built-in handlers) and point at `/doctor`
+            for the rest, so the other 23 — `/thinking` among them — were **undiscoverable**.
+            The renderer even printed *"use /thinking to expand"* for a command `/help` never
+            mentioned. Reported by the user as *"i cant toggle the tinking, there is no cmd to do
+            this"*: there was one, and this hid it.
+            """
+            want = (args or "").strip().lstrip("/")
+            if want:
+                spec = self._specs.get(want)
+                if spec is not None:
+                    ctx.emit(f"/{spec.name} — {spec.description}"
+                             + (f"\n  usage: {spec.usage}" if spec.usage else ""))
+                    return CommandResult.CONSUMED
+                legacy = _legacy_command(want)
+                if legacy is not None:
+                    ctx.emit(f"/{legacy.name} — {legacy.description}"
+                             + (f"\n  usage: {legacy.usage}" if legacy.usage else ""))
+                    return CommandResult.CONSUMED
+                ctx.emit(f"no such command: /{want} — try /help")
+                return CommandResult.CONSUMED
+
+            lines = ["Built-in commands:"]
             for key in self.names():
                 spec = self._specs[key]
                 lines.append(f"  /{spec.name:<12} {spec.description}")
-            lines.append("  (more: /doctor reports legacy commands via fallback)")
+            legacy = _legacy_commands()
+            if legacy:
+                lines.append("")
+                lines.append("Legacy commands (same registry, via the adapter):")
+                for name in sorted(legacy):
+                    lines.append(f"  /{name:<12} {legacy[name].description}")
+            lines.append("")
+            lines.append("  /help <name> for one command's usage.")
             ctx.emit("\n".join(lines))
             return CommandResult.CONSUMED
 
-        @self.register("doctor", "Show pre-flight / subsystem health", usage="/doctor")
+        @self.register("doctor", "Show pre-flight / subsystem health", usage="/doctor [deep]")
         def _doctor(ctx: ReplContext, args: str) -> CommandResult:
             report = ctx.runtime.get_doctor_report()
             if isinstance(report, dict):
@@ -232,6 +286,26 @@ class Dispatcher:
                     ctx.emit(f"  {check}")
             else:
                 ctx.emit(str(report))
+
+            if (args or "").strip().lower() in ("deep", "--deep", "-d"):
+                # The slow half. `build_sequence` judges the sandbox image by *name* because the
+                # pre-flight budget is 100 ms per check; this actually runs it. It cannot be a check
+                # inside `run_preflight` — one that cannot finish in the budget is reported as
+                # "timed out", a permanent WARN that says nothing about the real state.
+                from wisp.async_utils import run_sync_coro
+                from wisp.core.doctor import check_sandbox_image_deep
+
+                ctx.emit("")
+                ctx.emit("Deep checks — these run Docker, so they take seconds:")
+                workspace = (ctx.session or {}).get("workspace") if isinstance(ctx.session, dict) else None
+                try:
+                    result = run_sync_coro(check_sandbox_image_deep(workspace))
+                    ctx.emit(f"  {result.symbol} {result.name}: {result.message}")
+                    for key in ("image", "python", "pytest", "git"):
+                        if result.details.get(key):
+                            ctx.emit(f"      {key}: {result.details[key]}")
+                except Exception as exc:  # a deep check must never take the REPL down
+                    ctx.emit(f"  deep check could not run: {exc}")
             return CommandResult.CONSUMED
 
         @self.register("provider", "Show active provider and model", usage="/provider")
@@ -327,6 +401,39 @@ class Dispatcher:
                 state = "" if enabled else " [disabled]"
                 lines.append(f"  {name:<24} {event:<14} {matcher}{state}")
             ctx.emit("\n".join(lines))
+            return CommandResult.CONSUMED
+
+        @self.register("sandbox", "Show or set command confinement",
+                        usage="/sandbox [auto|off]")
+        def _sandbox(ctx: ReplContext, args: str) -> CommandResult:
+            """The operator's toggle for `run_bash` confinement.
+
+            Operator-only **by construction**: it is a slash command, so it is unreachable from the
+            tool registry and the model cannot grant itself host execution. `set_sandbox_mode` is the
+            single authority both this and `get_sandbox()` consult — see its docstring.
+            """
+            from wisp.sandbox import sandbox_mode, set_sandbox_mode
+
+            want = (args or "").strip()
+            if not want:
+                mode = sandbox_mode()
+                ctx.emit(f"Sandbox: {mode} — "
+                         + ("HOST, unconfined: commands run with the host toolchain and no "
+                            "resource limits" if mode == "off"
+                            else "confined when a provider is available"))
+                ctx.emit("  /sandbox off    run_bash executes on the host")
+                ctx.emit("  /sandbox auto   confine when possible (default)")
+                return CommandResult.CONSUMED
+            try:
+                mode = set_sandbox_mode(want)
+            except ValueError as exc:
+                ctx.emit(str(exc))
+                return CommandResult.CONSUMED
+            ctx.emit(f"Sandbox: {mode}")
+            if mode == "off":
+                ctx.emit("  run_bash now executes on the HOST — host filesystem and toolchain, "
+                         "no resource limits. Credentials are still stripped, the dangerous-command "
+                         "check still applies, and approvals are unaffected.")
             return CommandResult.CONSUMED
 
         def _exit(ctx: ReplContext, args: str) -> CommandResult:

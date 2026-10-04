@@ -49,7 +49,23 @@ class Telemetry:
     # Health thresholds
     error_rate_threshold: float = 0.5  # 50% errors = degraded
 
-    def record_turn(self, latency_ms: float, prompt_tokens: int, completion_tokens: int) -> None:
+    #: The cost meter, when one is wired. `None` keeps the pre-existing
+    #: behaviour exactly: tokens are counted, no cost is computed.
+    cost_meter: Any | None = None
+
+    def record_turn(self, latency_ms: float, prompt_tokens: int,
+                    completion_tokens: int, *, model: str | None = None) -> None:
+        """`model` is keyword-only and optional, so every existing caller is
+        unchanged: without it the meter is not charged, which is the same as no
+        meter being wired."""
+        if self.cost_meter is not None and model:
+            # Charged HERE because this is the one place token counts arrive:
+            # the providers do not report usage, so these counters are the only
+            # source there is.
+            # `try_charge`, not `charge`: an unknown model must not break the
+            # turn. It is counted on the meter instead, so the gap is visible.
+            self.cost_meter.try_charge(model, input_tokens=prompt_tokens,
+                                       output_tokens=completion_tokens)
         with self._lock:
             self.turns_total += 1
             self.turn_latency_ms_sum += latency_ms

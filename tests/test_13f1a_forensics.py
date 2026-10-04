@@ -136,7 +136,7 @@ async def test_a3_policy_precedes_schema_validation(tmp_path):
 # ── A4: repetition is generic, not run_bash-specific ──
 
 @pytest.mark.asyncio
-async def test_a4_repetition_generic_across_denied_tools(tmp_path):
+async def test_a4_repetition_generic_across_denied_tools(tmp_path, auto_edit_hard_deny_witness):
     provider = MockProvider(
         responses=["", "", "", "done"],
         tool_calls=[[ _call("git_push", {"remote": "o", "branch": "b"}) ],
@@ -157,7 +157,8 @@ async def test_a4_repetition_generic_across_denied_tools(tmp_path):
         parsed = _parse_result(r)
         got[r.get("name")] = parsed.get("status") if isinstance(parsed, dict) else parsed
     assert got.get("git_push") == "POLICY_DENIED"
-    assert got.get("run_bash") == "POLICY_DENIED"
+    # run_bash is REQUIRE_APPROVAL in AUTO_EDIT (d0d4bea): the user declined it.
+    assert got.get("run_bash") == "USER_DENIED"
     # fanout with empty tasks is structurally invalid (minItems 1, 13-J1)
     # so it is refused pre-approval as SCHEMA_INVALID, not USER_DENIED.
     assert got.get("fanout") == "SCHEMA_INVALID"

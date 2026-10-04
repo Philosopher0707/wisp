@@ -552,10 +552,11 @@ class ReplRunner:
             store_path = str(getattr(getattr(self.runtime, "store", None), "db_path", "") or "")
             if "wisp_fallback.db" in store_path:
                 from wisp.colors import dim
+                from wisp.paths import default_workspace_hint as _hint
 
                 self.err.write(
                     dim(f"  Workspace blocked by TCC; using fallback DB {store_path}"
-                        " — run /workspace ~/Documents/wisp\n")
+                        f" — run /workspace {_hint()}\n")
                 )
                 self.err.flush()
         except Exception:

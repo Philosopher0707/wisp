@@ -22,7 +22,8 @@ wheels/
 
 # Virtual environments
 venv/
-.venv/
+# `.venv` may be a symlink (to ~/.venvs/wisp); a trailing slash matches only a directory, not a symlink
+.venv
 
 # IDE
 .vscode/
@@ -102,3 +103,7 @@ workspace/
 
 # Brainstorm drafts & visual companion sessions
 .superpowers/
+
+# Agent scratch (session debris — never project source)
+/.scratch*
+/_*.txt

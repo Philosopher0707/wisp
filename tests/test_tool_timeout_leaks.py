@@ -22,6 +22,7 @@ class _Hookless:
 
 def _executor(pool_size: int = 2) -> ToolExecutor:
     config = WispConfig().replace(
+        permission_mode="full",  # no human here: authorise explicitly (0c6bcf2, ADR-0074)
         tool_timeout=1,
         tool_pool_size=pool_size,
     )
@@ -128,6 +129,7 @@ async def test_saturated_network_pool_errors_cleanly_and_spares_default_pool(
 
     (tmp_path / "fast.txt").write_text("fast-data")
     config = WispConfig().replace(
+        permission_mode="full",  # no human here: authorise explicitly (0c6bcf2, ADR-0074)
         tool_timeout=1, tool_pool_size=2, tool_pool_network_size=1)
     ex = ToolExecutor(config=config)
     try:

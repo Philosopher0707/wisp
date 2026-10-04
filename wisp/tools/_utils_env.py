@@ -135,12 +135,45 @@ def non_minimal_keys(extra: dict[str, str] | None = None) -> list[str]:
     return sorted(k for k in os.environ if k not in allowed)
 
 
-def credential_free_env(env: dict | None = None) -> tuple[dict[str, str], int]:
-    """Return ``(scrbed_env, stripped_count)`` with credential vars removed.
+def _put_venv_first(env: dict[str, str], workspace: str | None) -> None:
+    """Prepend ``<workspace>/.venv/bin`` (``Scripts`` on Windows) to ``PATH``.
+
+    Idempotent, and a no-op when the workspace has no virtualenv, so a project without one is
+    unaffected. ``VIRTUAL_ENV`` is deliberately **not** set — the point is which interpreter is on
+    PATH, and setting it would change how a nested tool behaves.
+    """
+    if not workspace:
+        return
+    bindir = ""
+    for sub in ("bin", "Scripts"):
+        candidate = os.path.join(workspace, ".venv", sub)
+        if os.path.isdir(candidate):
+            bindir = candidate
+            break
+    if not bindir:
+        return
+    path = env.get("PATH", "")
+    parts = path.split(os.pathsep) if path else []
+    if bindir in parts:
+        return
+    env["PATH"] = os.pathsep.join([bindir, *parts])
+
+
+def credential_free_env(env: dict | None = None,
+                        workspace: str | None = None) -> tuple[dict[str, str], int]:
+    """Return ``(scrubbed_env, stripped_count)`` with credential vars removed.
 
     Deny-list approach: keeps the general POSIX environment usable while
     dropping anything that looks like a credential (by exact name or by
     normalized pattern). If ``env`` is *None*, ``os.environ`` is used.
+
+    **When *workspace* is given, its virtualenv goes on ``PATH`` first.** Without it the scrubbed
+    PATH resolves ``python``/``python3`` to whatever the host happens to have — on this machine the
+    managed 3.13.12, which has **no pytest** — while the prompt advertises ``Python: 3.12.8`` (the
+    running interpreter) and suggests ``python -m pytest tests/ -x -q``. **The suggested command then
+    cannot work in the environment the agent actually runs it in**: the verification loop can never
+    close, and the model reads "command not found" as a failure of its own change rather than of the
+    environment it was handed.
     """
     src = env if env is not None else os.environ
     out: dict[str, str] = {}
@@ -151,4 +184,5 @@ def credential_free_env(env: dict | None = None) -> tuple[dict[str, str], int]:
             stripped += 1
             continue
         out[k] = v
+    _put_venv_first(out, workspace)
     return out, stripped

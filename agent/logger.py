@@ -26,7 +26,8 @@ import re
 from pathlib import Path
 from typing import Any, Final
 
-__all__ = ["install", "uninstall", "truncate_payload", "LOG_PATH", "BadgeFilter", "get_log_path"]
+__all__ = ["install", "uninstall", "truncate_payload", "LOG_PATH", "BadgeFilter", "get_log_path",
+           "set_console_echo", "console_echo_enabled"]
 
 LOG_PATH: Final[Path] = Path(".agent/runtime.log")
 _FILE_LOGGER_NAME: Final[str] = "agent.runtime"
@@ -213,6 +214,54 @@ def install(level: int = logging.WARNING) -> Path:
 
     _installed = True
     return current_path
+
+
+_ECHO_HANDLER: logging.Handler | None = None
+
+
+def set_console_echo(enabled: bool, level: int = logging.WARNING) -> bool:
+    """Route the engine's diagnostic events to the CONSOLE as well as the file.
+
+    The interceptor exists so these never reach user stdout (see the module docstring): provider
+    retries, SSE reconnects, tool 404s and truncation badges go to `.agent/runtime.log` and are
+    suppressed on screen. That is the right default, and a poor one when something is misbehaving
+    and you cannot see why — **the events exist, they are simply invisible.**
+
+    This is the opt-in that surfaces them. It writes to **stderr**, never stdout, so it cannot
+    corrupt a `--print` payload or interleave into the answer. Idempotent; returns the new state.
+    """
+    global _ECHO_HANDLER
+    if not enabled:
+        if _ECHO_HANDLER is not None:
+            for target in (*[logging.getLogger(n) for n in _NOISY_LOGGERS],
+                           logging.getLogger(), logging.getLogger(_FILE_LOGGER_NAME)):
+                try:
+                    target.removeHandler(_ECHO_HANDLER)
+                except Exception:
+                    pass
+            try:
+                _ECHO_HANDLER.close()
+            except Exception:
+                pass
+            _ECHO_HANDLER = None
+        return False
+
+    if _ECHO_HANDLER is not None:
+        return True
+    import sys
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setLevel(level)
+    handler.setFormatter(logging.Formatter("  [engine] %(levelname)s %(name)s: %(message)s"))
+    for name in _NOISY_LOGGERS:
+        logging.getLogger(name).addHandler(handler)
+    logging.getLogger().addHandler(handler)
+    _ECHO_HANDLER = handler
+    return True
+
+
+def console_echo_enabled() -> bool:
+    """Whether the engine's diagnostics are currently echoed to the console."""
+    return _ECHO_HANDLER is not None
 
 
 def uninstall() -> None:

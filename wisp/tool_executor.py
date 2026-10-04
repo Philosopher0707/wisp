@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
 from wisp.config import WispConfig
+from wisp.core.contracts import is_declared_read
 from wisp.infra.security import PermissionMode, policy_hard_deny
 from wisp.core.events import (
     AgentEvent,
@@ -151,6 +152,10 @@ _DEFAULT_WRITE_TOOLS: set[str] = {
     "git_commit",
     "git_push",
     "gh_pr_create",
+    "gh_pr_comment",
+    "gh_pr_close",
+    "gh_pr_merge",
+    "git_sync_base",
     "plan_task",
     "mark_step_done",
     "update_plan",
@@ -198,6 +203,39 @@ _SUBAGENT_TOOLS: frozenset[str] = frozenset({
     "orchestrate_vote", "orchestrate_map_reduce", "orchestrate_chain",
     "orchestrate_dag",
 })
+
+
+#: In `auto_edit`, the tools that go through the approver even when `auto_approve` is on.
+_AUTO_EDIT_FORCED = frozenset({
+    "run_bash", "git_branch", "git_commit", "git_push", "gh_pr_create",
+    "gh_pr_comment", "gh_pr_close", "gh_pr_merge", "git_sync_base",
+})
+
+
+def _forced_by_mode(config: Any, func_name: str) -> bool:
+    """True when the permission mode forces this built-in tool through the approver (auto_approve does not waive it)."""
+    mode = getattr(config, "permission_mode", PermissionMode.AUTO_EDIT)
+    if mode == PermissionMode.ASK_ALL:
+        return func_name in _get_write_tools(config)
+    if mode == PermissionMode.AUTO_EDIT:
+        return func_name in _AUTO_EDIT_FORCED
+    return False
+
+
+def approval_needed(config: Any, func_name: str) -> bool:
+    """Would the executor stop for an approver before running this built-in tool under `config`?
+
+    The one rule behind "no approver ⇒ deny" (ADR-0061 R4), shared by the agent path and the REST gate so
+    the two cannot drift: the tool is gated as a write, and either the mode forces it through the approver
+    or nobody authorised it (`full` mode, or `auto_approve`, is the caller's explicit decision). In
+    `read_only` writes are hard-blocked earlier, so no approver is ever asked and this is False. MCP tools
+    are not covered here; they are always asked (`_is_external_call`).
+    """
+    mode = getattr(config, "permission_mode", PermissionMode.AUTO_EDIT)
+    if mode == PermissionMode.READ_ONLY or func_name not in _get_write_tools(config):
+        return False
+    return _forced_by_mode(config, func_name) or (
+        mode != PermissionMode.FULL and not getattr(config, "auto_approve", False))
 
 
 def _get_write_tools(config: Any = None) -> set[str]:
@@ -429,8 +467,15 @@ class ToolExecutor:
         policy: Any = None,
         run_store: Any = None,
         principal: Any = None,
+        cost_meter: Any | None = None,
+        max_cost_usd: float | None = None,
     ):
         self.config = config
+        # The cost bound, wired. BOTH are needed for the gate to be active: a meter
+        # with no ceiling measures without gating, and a ceiling with no meter
+        # cannot fire. Passing neither is exactly the pre-existing behaviour.
+        self._cost_meter = cost_meter
+        self._max_cost_usd = max_cost_usd
         self.extensions = extensions
         # Migration P9: the principal this executor authorizes AS. `None` keeps
         # today's behaviour exactly (the unbounded local human principal), so
@@ -707,6 +752,29 @@ class ToolExecutor:
         """
         func_name = tool_name
         func_args = dict(tool_args) if tool_args else {}
+
+        # ── The cost bound ──
+        #
+        # Refuse the NEXT TOOL CALL rather than killing the turn: the run can still
+        # finish and report what it did, so it ends honestly instead of being cut
+        # off mid-flight with a partial transcript. Same shape as the idempotency
+        # guard's CONFLICT — do not do the thing, and say why.
+        if (self._cost_meter is not None and self._max_cost_usd is not None
+                and self._cost_meter.exhausted(self._max_cost_usd)):
+            from wisp.core.events import denial_result, DENIAL_BUDGET_EXCEEDED
+            _spent = self._cost_meter.spent_usd
+            self._audit_denial(
+                func_name, func_args, workspace,
+                f"[Blocked: cost bound ${self._max_cost_usd} met (spent ${_spent:.4f})]")
+            yield denial_result(
+                func_name, DENIAL_BUDGET_EXCEEDED,
+                f"[Blocked: this run has spent ${_spent:.4f} of its "
+                f"${self._max_cost_usd} cost bound, so no further tool calls are made. "
+                f"This is not a judgement about this tool — the run is out of budget. "
+                f"Finish and report what has been done.]",
+                tool_call_id=tool_call_id,
+            )
+            return
         _principal = self._effective_principal(workspace, principal)
 
         # Dangerous commands are blocked before any mode/approval logic so
@@ -825,11 +893,22 @@ class ToolExecutor:
 
         # ── Approval gating ──
         needs_approval = func_name in _get_write_tools(self.config)
+        approval_reason = f"{func_name} modifies workspace state"
+        # An MCP tool is external: wisp cannot know what it does, so it is gated by its
+        # risk class (operator-declared `tool_risk`, else EXEC) through the layered
+        # authority's approval requirement, which already follows the permission mode.
+        # Keying approval only on the built-in `write_tools` list let every MCP tool run
+        # unasked in auto_edit, even when the approver refused.
+        if not needs_approval and self._is_external_call(func_name) and _decision.approval_required:
+            needs_approval = True
+            from wisp.core.contracts import risk_for_tool
+            approval_reason = f"{func_name} is an MCP tool with {risk_for_tool(func_name).value} risk"
         forced_approval = self._needs_forced_approval(func_name)
         # Bundle-level "approve" forces the approval path even in full
         # mode (explicit, no ambiguity with session-layer requirements).
         _matrix = getattr(self.policy, "approval_matrix", None) or {}
-        if _matrix.get(func_name) == "approve":
+        from wisp.core.contracts import canonical_tool_name
+        if "approve" in (_matrix.get(func_name), _matrix.get(canonical_tool_name(func_name))):
             needs_approval = True
             forced_approval = True
         is_full_mode = getattr(self.config, "permission_mode", PermissionMode.AUTO_EDIT) == PermissionMode.FULL
@@ -839,27 +918,39 @@ class ToolExecutor:
         if needs_approval and (forced_approval or (
                 not is_full_mode and not getattr(self.config, "auto_approve", False))):
             if not approval_handler:
-                if forced_approval:
-                    from wisp.core.events import denial_result, DENIAL_POLICY_DENIED
-                    self._audit_denial(func_name, func_args, workspace, f"[Blocked: approval required for {func_name}, no handler]")
-                    yield denial_result(
-                        func_name, DENIAL_POLICY_DENIED,
-                        f"[Blocked: {getattr(self.config, 'permission_mode', 'auto_edit')} mode "
-                        f"requires approval for {func_name}, but no approval handler is available]",
-                        tool_call_id=tool_call_id,
-                    )
-                    return
-                # No handler, and the approval is not forced: fall through and
-                # execute. The enclosing guard already required
-                # `not auto_approve` (or `not is_full_mode`), so this is NOT the
-                # auto_approve shortcut — it is the fall-through for an unforced
-                # approval. ADR-0055 §3 residual 3 measured the consequence: with
-                # `approval_handler=None` a `write_file` in `auto_edit` runs, which
-                # is why a REST caller gets the agent's *no-approver* behaviour.
-                # (This comment said "auto_approve=True + no handler + not forced",
-                # which described a branch this one is not in.)
+                # ── No approver is not an approval ──
+                #
+                # This used to FALL THROUGH AND EXECUTE whenever the approval was
+                # not *forced*, so with `approval_handler=None` a `write_file` in
+                # `auto_edit` ran (ADR-0055 §3 residual 3 measured it). A mutating
+                # tool must be structurally unable to run unconfirmed: if nobody
+                # could be asked, nobody said yes.
+                #
+                # The reason is DISTINGUISHABLE from a human's "no" — ADR-0061 R4's
+                # rule for the WebSocket path, applied to the agent path. "Nobody
+                # could be asked" and "the human said no" are different facts.
+                #
+                # A caller that genuinely has no human — `wisp bench`, a subagent,
+                # an ACP session — authorises EXPLICITLY, by passing an approver or
+                # by `auto_approve`/`permission_mode=full`. That is a caller's
+                # decision, which is the point: the model does not authorise a side
+                # effect, and neither does an accident of wiring.
+                from wisp.core.events import denial_result, DENIAL_NO_APPROVER
+                self._audit_denial(
+                    func_name, func_args, workspace,
+                    f"[Blocked: approval required for {func_name}, no approver available]")
+                yield denial_result(
+                    func_name, DENIAL_NO_APPROVER,
+                    f"[Blocked: {getattr(self.config, 'permission_mode', 'auto_edit')} mode "
+                    f"requires approval for {func_name}, and no approver is available. "
+                    f"This is not a denial by a human — nobody could be asked. A caller "
+                    f"with no human authorises explicitly, by passing an approval "
+                    f"handler or by `auto_approve=True` / `permission_mode=full`.]",
+                    tool_call_id=tool_call_id,
+                )
+                return
             else:
-                reason = f"{func_name} modifies workspace state"
+                reason = approval_reason
                 yield _approval_request_event(func_name, func_args, reason)
                 try:
                     approved, modified = await approval_handler(func_name, func_args, reason)
@@ -1324,8 +1415,10 @@ class ToolExecutor:
         mode = getattr(self.config, "permission_mode", PermissionMode.AUTO_EDIT)
         if mode == PermissionMode.READ_ONLY and func_name in _get_write_tools(self.config):
             return f"[Blocked: read_only mode - {func_name} is not allowed]"
-        # MCP tools are external code — always gated in READ_ONLY mode
-        if mode == PermissionMode.READ_ONLY and self._is_external_call(func_name):
+        # MCP tools are external code — gated in READ_ONLY mode unless the operator declared this one
+        # `tool_risk: read` in mcp.json (PR #47): that declaration is what lets a read-only session read.
+        if (mode == PermissionMode.READ_ONLY and self._is_external_call(func_name)
+                and not is_declared_read(func_name)):
             return f"[Blocked: read_only mode - MCP tool {func_name} is not allowed]"
         return None
 
@@ -1335,7 +1428,8 @@ class ToolExecutor:
 
         This lets permission modes override the auto_approve shortcut:
           ask_all   -> all write tools need approval
-          auto_edit -> bash and git writes need approval (file ops are free)
+          auto_edit -> bash and git writes are forced through the approver even when
+                       auto_approve is on; file ops are gated too, but auto_approve waives it
           full      -> auto_approve governs normally
           read_only -> already caught by hard block above
 
@@ -1345,12 +1439,7 @@ class ToolExecutor:
         # MCP tools = external code = always require explicit approval.
         if self._is_external_call(func_name):
             return True
-        mode = getattr(self.config, "permission_mode", PermissionMode.AUTO_EDIT)
-        if mode == PermissionMode.ASK_ALL:
-            return func_name in _get_write_tools(self.config)
-        if mode == PermissionMode.AUTO_EDIT:
-            return func_name in ("run_bash", "git_branch", "git_commit", "git_push", "gh_pr_create")
-        return False
+        return _forced_by_mode(self.config, func_name)
 
     async def _run_bash_tool(self, func_args: dict, workspace: str) -> str:
         func_name = "run_bash"

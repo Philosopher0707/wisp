@@ -5,9 +5,9 @@ and output size limits.
 """
 
 import asyncio
-import os
 import logging
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from wisp.tools._utils import (
@@ -20,7 +20,7 @@ from wisp.tools._utils import (
     check_dangerous_command,
 )
 from wisp.auth.secrets import redact
-from wisp.sandbox import get_sandbox
+from wisp.sandbox import get_sandbox, sandbox_mode
 from wisp.sandbox.router import get_router  # the multi-tier router, not `get_sandbox`:
 # `get_sandbox` answers Docker-or-host and falls to raw host execution when the daemon
 # is missing; the router adds the isolated-PTY tier that works WITHOUT a daemon.
@@ -55,11 +55,26 @@ def _format_bash_output(returncode: int, stdout_str: str, stderr_str: str) -> st
     return output or "(no output)"
 
 
-async def async_tool_run_bash(command: str, workspace: str, timeout: int = 60) -> str:
-    """Run a bash command in the workspace directory.
+@dataclass(frozen=True)
+class BashRun:
+    """One confined command's raw result, before it is shaped for the model."""
 
-    Security: validates command length, checks for dangerous commands,
-    rejects null bytes, strips ANSI codes, enforces timeout, caps output.
+    returncode: int
+    stdout: str
+    stderr: str
+    provider: str
+    duration_ms: int
+    timed_out: bool
+
+
+async def run_bash_confined(command: str, workspace: str, timeout: int = 60) -> BashRun:
+    """Validate a command and run it through the sandbox tier router.
+
+    The single place a run_bash command executes. Callers that only change where the
+    OUTPUT goes (the `agent.tools.runner` disk sink) call this rather than starting a
+    process themselves, so they cannot skip the validation, the danger gate, the tier
+    router or the UNCONFINED warning. A timeout is reported, not raised, so such a caller
+    can record the partial output before raising the tool's own timeout error.
     """
     _validate_string(command, "command", _MAX_CMD_LENGTH)
     timeout_val = _validate_int(timeout, "timeout", 1, 3600)
@@ -84,13 +99,18 @@ async def async_tool_run_bash(command: str, workspace: str, timeout: int = 60) -
     # `PtySandbox` — own session, rlimits, credential-stripped env — instead of unconfined host
     # execution. `route()` is asked only for the name/reason the log lines report; the call itself
     # goes through the router so failover stays inside it.
-    # `WISP_SANDBOX=off` is an OPERATOR'S EXPLICIT CHOICE and the router does not consult it —
+    # An explicit "off" is the OPERATOR'S (or host's) CHOICE and the router does not consult it —
     # its tiers are Docker -> PTY -> host unconditionally. Swapping `get_sandbox` for the router
     # without this branch silently overrode the setting (caught by
     # `test_explicit_off_is_info_not_warning`, which asserts an explicit choice must not scream).
     # So: explicit off -> `get_sandbox`, which returns the host provider with `reason="explicit"`;
     # anything else -> the tier router.
-    if os.environ.get("WISP_SANDBOX", "").strip().lower() == "off":
+    #
+    # `sandbox_mode()` is the single authority for that question — the vocabulary and the
+    # host-override precedence live there, not here. This line used to compare the literal "off"
+    # while `get_sandbox` accepted six spellings, so `WISP_SANDBOX=false` meant "off" to REST and
+    # "auto" to this path. One variable, two meanings; now one function.
+    if sandbox_mode() == "off":
         sandbox = get_sandbox(str(cwd))
         # It IS the provider — read name/reason from it directly. Going through `route()` here
         # returned None (NoopSandbox has no `route`), which lost `reason="explicit"` and made an
@@ -134,18 +154,6 @@ async def async_tool_run_bash(command: str, workspace: str, timeout: int = 60) -
     try:
         returncode, stdout_str, stderr_str = await sandbox.run(
             command, cwd="", timeout=timeout_val)
-        if returncode == -1 and "timed out" in stderr_str.lower():
-            safe_command = redact(command)[:100]
-            logger.warning("Command timed out after %ds: %.100s", timeout_val, safe_command)
-            raise ToolError(f"Command timed out after {timeout_val}s: {safe_command}...")
-        output = _format_bash_output(returncode, stdout_str, stderr_str)
-
-        duration_ms = round((time.time() - start_time) * 1000)
-        logger.info(
-            "Bash execution — workspace=%s sandbox=%s command=%.100s exit_code=%d output_len=%d duration_ms=%d",
-            workspace, provider_name, redact(command), returncode, len(output), duration_ms,
-        )
-        return output
     except asyncio.CancelledError:
         logger.warning("Command execution cancelled: %.100s", redact(command))
         raise
@@ -157,6 +165,33 @@ async def async_tool_run_bash(command: str, workspace: str, timeout: int = 60) -
     except Exception as e:
         logger.error("Unexpected error in run_bash: %s", e)
         raise ToolError(f"Command failed: {e}")
+    timed_out = returncode == -1 and "timed out" in stderr_str.lower()
+    if timed_out:
+        logger.warning("Command timed out after %ds: %.100s", timeout_val, redact(command)[:100])
+    return BashRun(
+        returncode=returncode, stdout=stdout_str, stderr=stderr_str, provider=provider_name,
+        duration_ms=round((time.time() - start_time) * 1000), timed_out=timed_out)
+
+
+def timeout_error(command: str, timeout: int) -> ToolError:
+    return ToolError(f"Command timed out after {timeout}s: {redact(command)[:100]}...")
+
+
+async def async_tool_run_bash(command: str, workspace: str, timeout: int = 60) -> str:
+    """Run a bash command in the workspace directory.
+
+    Security: validates command length, checks for dangerous commands,
+    rejects null bytes, strips ANSI codes, enforces timeout, caps output.
+    """
+    run = await run_bash_confined(command, workspace, timeout)
+    if run.timed_out:
+        raise timeout_error(command, _validate_int(timeout, "timeout", 1, 3600))
+    output = _format_bash_output(run.returncode, run.stdout, run.stderr)
+    logger.info(
+        "Bash execution — workspace=%s sandbox=%s command=%.100s exit_code=%d output_len=%d duration_ms=%d",
+        workspace, run.provider, redact(command), run.returncode, len(output), run.duration_ms,
+    )
+    return output
 
 
 def tool_run_bash(command: str, workspace: str, timeout: int = 60) -> str:

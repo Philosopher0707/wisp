@@ -1,4 +1,9 @@
-"""Cyclic execution graph: explicit phases with oscillation + ceiling traps."""
+"""Cyclic execution graph: explicit phases with oscillation + ceiling traps.
+
+Experimental — NOT wired into ``WispAgentCore.turn`` (the live path is the
+provider-driven ``_turn_inner`` loop in ``wisp/core/stateless.py``). Keep for
+reference; delete if no caller appears (history preserves it).
+"""
 
 from __future__ import annotations
 

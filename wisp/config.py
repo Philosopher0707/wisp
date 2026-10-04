@@ -122,6 +122,13 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
         "description": "Show full tool output (when false, collapse to one-liners)",
         "env_var": "WISP_SHOW_TOOL_OUTPUT",
     },
+    "diff_max_lines": {
+        "type": int,
+        "default": 50,
+        "min": 0,
+        "description": "Max diff lines rendered in the terminal for write/edit tools (0 = unlimited)",
+        "env_var": "WISP_DIFF_MAX_LINES",
+    },
     "compact_mode": {
         "type": bool,
         "default": False,
@@ -148,7 +155,7 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
     },
     "max_iterations": {
         "type": int,
-        "default": 50,
+        "default": 200,
         "min": 1,
         "max": 200,
         "description": "Max agent loop iterations per user turn",
@@ -156,7 +163,7 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
     },
     "turn_timeout": {
         "type": int,
-        "default": 1800,
+        "default": 7200,
         "min": 10,
         "max": 7200,
         "description": "Max seconds for a single agent turn before timeout",
@@ -165,7 +172,7 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
     "write_tools": {
         "type": list,
         "default": ["write_file", "edit_file", "run_bash", "git_commit", "git_push",
-                     "gh_pr_create", "spawn", "fanout", "spawn_background"],
+                     "gh_pr_create", "gh_pr_comment", "gh_pr_close", "gh_pr_merge", "git_sync_base", "spawn", "fanout", "spawn_background"],
         "description": "Tools that require approval in restricted permission modes",
         "env_var": "WISP_WRITE_TOOLS",
     },
@@ -243,7 +250,7 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
         "default": 5,
         "min": 1,
         "max": 200,
-        "description": "Max iterations for the agentic graph outer loop (spec default 5, reconciled with turn loop 50)",
+        "description": "Max iterations for the agentic graph outer loop (spec default 5, reconciled with turn loop 200)",
         "env_var": "WISP_GRAPH_MAX_ITERATIONS",
     },
     "graph_sandbox_timeout": {
@@ -772,6 +779,7 @@ class WispConfig:
     auto_approve: bool
     show_thinking: bool
     show_tool_output: bool
+    diff_max_lines: int
     compact_mode: bool
     verification_loop: bool
 
@@ -915,6 +923,12 @@ class WispConfig:
         object.__setattr__(self, "show_tool_output",
             _parse_bool(get_setting("show_tool_output", "true"), True)
         )
+        # Max diff lines in terminal for write/edit tools (0 = unlimited).
+        # Default 50 preserves the historical cap; the transport reads it
+        # via getattr(config, "diff_max_lines", 50) so older doubles keep it.
+        object.__setattr__(self, "diff_max_lines",
+            _parse_int(get_setting("diff_max_lines", "50"), 50, 0)
+        )
         # Minimal rendering mode — no boxes, flat output, good for pipes/narrow terminals
         object.__setattr__(self, "compact_mode",
             _parse_bool(get_setting("compact_mode", "false"), False)
@@ -931,11 +945,11 @@ class WispConfig:
         )
         # Max agent loop iterations per user turn
         object.__setattr__(self, "max_iterations",
-            _parse_int(get_setting("max_iterations", "50"), 50, 1, 200)
+            _parse_int(get_setting("max_iterations", "200"), 200, 1, 200)
         )
         # Max seconds for a single agent turn before timeout
         object.__setattr__(self, "turn_timeout",
-            _parse_int(get_setting("turn_timeout", "1800"), 1800, 10, 7200)
+            _parse_int(get_setting("turn_timeout", "7200"), 7200, 10, 7200)
         )
         # Session-wide subagent token ceiling; admission refuses new
         # children once spent (0 = unlimited)
@@ -1031,7 +1045,7 @@ class WispConfig:
         raw_write_tools = get_setting(
             "write_tools",
             ["write_file", "edit_file", "run_bash", "git_commit", "git_push",
-             "gh_pr_create", "spawn", "fanout", "spawn_background"],
+             "gh_pr_create", "gh_pr_comment", "gh_pr_close", "gh_pr_merge", "git_sync_base", "spawn", "fanout", "spawn_background"],
         )
         if isinstance(raw_write_tools, str):
             object.__setattr__(self, "write_tools",
@@ -1042,7 +1056,7 @@ class WispConfig:
         else:
             object.__setattr__(self, "write_tools",
                 ["write_file", "edit_file", "run_bash", "git_commit",
-                 "gh_pr_create", "git_push", "spawn", "fanout",
+                 "gh_pr_create", "git_push", "gh_pr_comment", "gh_pr_close", "gh_pr_merge", "git_sync_base", "spawn", "fanout",
                  "spawn_background"]
             )
         # Subagent model fallback priority (tried in order for local subagent execution)
@@ -1081,7 +1095,7 @@ class WispConfig:
         # Subagent depth/branch tracking for propagation
         object.__setattr__(self, "_subagent_depth", 0)
         object.__setattr__(self, "_subagent_branch_count", 0)
-        # Agentic graph loop (outer) — reconciles spec default 5 with turn loop 50
+        # Agentic graph loop (outer) — reconciles spec default 5 with turn loop 200
         object.__setattr__(self, "graph_max_iterations",
             _parse_int(get_setting("graph_max_iterations", "5"), 5, 1, 200)
         )

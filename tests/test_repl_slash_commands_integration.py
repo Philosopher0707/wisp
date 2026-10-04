@@ -69,7 +69,12 @@ def test_repl_help_command():
         _run_repl(transport, root, root.config)
 
     output = stdout.getvalue()
-    assert "Available commands" in output
+    # The header wording is incidental — the test is about `/help` answering from the registry
+    # without an LLM call. It now lists the legacy commands too; before that, 23 of them
+    # (including `/thinking`) were undiscoverable, which is how the user hit "there is no cmd".
+    assert "/help" in output and "commands" in output.lower()
+    assert "/thinking" in output, "/help no longer lists the legacy commands"
+    assert "/approve" in output
 
 
 def test_repl_clear_command():

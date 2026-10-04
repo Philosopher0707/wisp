@@ -208,7 +208,7 @@ def shorten_diff_title(path: str, max_len: int = 60) -> str:
 
 
 def render_diff_box(
-    diff_text, title: str = "Diff", max_lines: int = 50,
+    diff_text, title: str = "Diff", max_lines: Optional[int] = 50,
     width: Optional[int] = None, box_mode: bool = True,
     language: Optional[str] = None,
     plain: bool = False,
@@ -220,7 +220,7 @@ def render_diff_box(
 
 
 def render_diff_panel(
-    diff_text, title: str = "Diff", max_lines: int = 50,
+    diff_text, title: str = "Diff", max_lines: Optional[int] = 50,
     width: Optional[int] = None, box_mode: bool = True,
     language: Optional[str] = None,
     plain: bool = False,
@@ -230,7 +230,8 @@ def render_diff_panel(
     Args:
         diff_text: Raw plain-text diff string.
         title: Panel title.
-        max_lines: Max lines before truncation.
+        max_lines: Max lines before truncation. 0 or None disables truncation
+            and renders the whole diff (see `diff_max_lines` in `wisp/config.py`).
         width: Terminal width.
         box_mode: If False, return plain colored text.
         language: Pygments language name (e.g. "python", "rust").
@@ -245,7 +246,7 @@ def render_diff_panel(
         return ""
 
     lines = diff_text.strip().split("\n")
-    if len(lines) > max_lines:
+    if max_lines and len(lines) > max_lines:
         total = len(lines)
         lines = lines[:max_lines]
         lines.append(f"... ({total - max_lines} more lines)")

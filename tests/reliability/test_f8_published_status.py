@@ -52,6 +52,10 @@ DENIAL_STATUSES_BEFORE = frozenset({
     "POLICY_DENIED", "USER_DENIED", "APPROVAL_TIMEOUT", "CANCELLED", "SCHEMA_INVALID",
 })
 
+#: Added since, each by a recorded decision (ADR-0074), never by drift. A new denial status is a
+#: published-taxonomy change: it needs an entry here, an ADR naming it, and a terminal class.
+DENIAL_STATUSES_ADDED_SINCE = frozenset({"NO_APPROVER", "BUDGET_EXCEEDED"})
+
 
 @pytest.fixture
 def validator_absent():
@@ -196,9 +200,30 @@ class TestThePublishedTaxonomyIsUnchanged:
     """The reason Option B was chosen over Option A."""
 
     def test_no_new_denial_status(self):
-        assert _DENIAL_STATUSES == DENIAL_STATUSES_BEFORE, (
-            "the published denial taxonomy changed — ADR-0052 chose the envelope route "
-            "precisely to avoid that")
+        assert _DENIAL_STATUSES == DENIAL_STATUSES_BEFORE | DENIAL_STATUSES_ADDED_SINCE, (
+            "the published denial taxonomy changed without a recorded decision — ADR-0052 chose the "
+            "envelope route precisely to avoid silent changes; add the status to "
+            "DENIAL_STATUSES_ADDED_SINCE and write the ADR (ADR-0074 is the model)")
+
+    def test_every_addition_is_recorded_in_an_adr_that_names_it(self):
+        text = (REPO / "WISP_ARCHITECTURE_DECISIONS.md").read_text()
+        adr = text[text.index("## ADR-0074"):]
+        adr = adr[:adr.index("\n## ADR-", 10)] if "\n## ADR-" in adr[10:] else adr
+        for status in DENIAL_STATUSES_ADDED_SINCE:
+            assert status in adr, f"ADR-0074 does not name {status}"
+
+    @pytest.mark.parametrize("status", sorted(DENIAL_STATUSES_BEFORE | DENIAL_STATUSES_ADDED_SINCE))
+    def test_every_denial_status_is_classified_and_final(self, status):
+        """`UNKNOWN` is not terminal, so an unclassified denial could be auto-retried (it was: NO_APPROVER and
+        BUDGET_EXCEEDED classified as UNKNOWN until ADR-0074). The map says every status `denial_result()`
+        can emit appears in it."""
+        from wisp.core.events import OUTCOME_BY_STATUS, TERMINAL_OUTCOME_CLASSES, denial_result
+
+        assert status in OUTCOME_BY_STATUS, f"{status} is not in OUTCOME_BY_STATUS"
+        assert OUTCOME_BY_STATUS[status] in TERMINAL_OUTCOME_CLASSES
+        envelope = denial_result("write_file", status, "x", tool_call_id="c")
+        payload = envelope.data["result"] if hasattr(envelope, "data") else envelope["result"]
+        assert classify_result(payload) in TERMINAL_OUTCOME_CLASSES
 
     def test_the_capability_status_is_not_a_denial(self):
         assert CAPABILITY_FAILURE_STATUS not in _DENIAL_STATUSES
@@ -231,14 +256,20 @@ class TestTheStampingRuleIsShared:
     unconditionally would publish a capability failure as a denial again."""
 
     def test_both_dry_run_sites_use_the_predicate(self):
+        """c285e87 merged the batched and the lone-call paths into one
+        `_gate_tool_call`, so the rule now has ONE site that both paths call."""
         src = (REPO / "wisp/core/stateless.py").read_text()
-        assert src.count("_is_capability_failure(_schema_error") == 2, (
-            "the two dry-run stamping sites no longer both apply the predicate — "
-            "a site that always stamps `_denial` re-publishes a host failure as an "
+        assert src.count("await self._gate_tool_call(") == 2, (
+            "the batched and the lone-call paths no longer share the gate")
+        assert src.count("_is_capability_failure(schema_error)") == 1, (
+            "the dry-run stamping site no longer applies the predicate — a site "
+            "that always stamps `_denial` re-publishes a host failure as an "
             "argument verdict")
-        assert 'tc_event["_denial"] = "SCHEMA_INVALID"' not in src.replace(
-            'tc_event["_denial"] = "SCHEMA_INVALID"\n', "", 1), (
-            "an unconditional SCHEMA_INVALID stamp remains")
+        stamp = 'tc_event["_denial"] = "SCHEMA_INVALID"'
+        assert src.count(stamp) == 1, "a second SCHEMA_INVALID stamp appeared"
+        predicate_at = src.index("_is_capability_failure(schema_error)")
+        assert predicate_at < src.index(stamp) < predicate_at + 200, (
+            "the SCHEMA_INVALID stamp is no longer the predicate's else-branch")
 
     def test_the_refusal_helper_reads_the_capability_flag(self):
         src = (REPO / "wisp/core/stateless.py").read_text()

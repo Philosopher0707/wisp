@@ -433,7 +433,7 @@ pytest tests/test_websocket.py tests/test_transport_headless.py -v
 # Core + runtime tests
 pytest tests/test_core_stateless.py tests/test_runtime_concurrent.py tests/test_provider_integration.py -v
 
-# Full suite (~357 test files, ~5,400 test functions — foreign-session WIP files excluded below)
+# Full suite (~400 test files, ~5,400 test functions — foreign-session WIP files excluded below)
 python -m pytest tests/test_*.py -v
 
 # CLI surface E2E (hermetic HOME + mock provider, PTY repl/tui, 7+ groups)
@@ -537,7 +537,11 @@ python3 -m pytest tests/test_durable_layer_reachable.py tests/test_turn_journal_
   tests/reliability/test_injection_scan.py \
   tests/reliability/test_redaction_point.py \
   tests/reliability/test_clock_injection.py \
-  tests/reliability/test_cost_meter.py -q --basetemp="$TMPDIR/wisp-block-$$"   # alone — ADR-0062 R6
+  tests/reliability/test_cost_meter.py \
+  tests/reliability/test_cost_gate.py \
+  tests/reliability/test_confirmation_gate.py \
+  tests/reliability/test_tool_result_guard.py \
+  tests/reliability/test_idempotency_store.py -q --basetemp="$TMPDIR/wisp-block-$$"   # alone — ADR-0062 R6
 ```
 
 ### The environment will fight you

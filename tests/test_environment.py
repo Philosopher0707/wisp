@@ -99,3 +99,26 @@ class TestFormatEnvironmentBlock:
         assert "git:" not in block
         assert "package managers:" not in block
         assert "suggested verification" not in block
+
+
+class TestTheEnvironmentBlockSaysWhereItApplies:
+    """The block describes the **host**. `run_bash` and `run_tests` do not run there.
+
+    An unqualified `Python: 3.12.8` reads as "the Python you will get", and it is not — the sandbox
+    has its own interpreter. That mismatch is what let an agent run `python -m pytest` against a
+    container with no interpreter at all and read the failure as its own.
+    """
+
+    def _block(self, tmp_path):
+        from wisp.environment import collect_environment, format_environment_block
+
+        return format_environment_block(collect_environment(str(tmp_path)))
+
+    def test_the_python_line_is_labelled_host(self, tmp_path):
+        block = self._block(tmp_path)
+        assert "- Python (host):" in block, "an unqualified Python line reads as the sandbox's"
+        assert "- Python: " not in block
+
+    def test_it_says_the_executing_tools_are_sandboxed(self, tmp_path):
+        block = self._block(tmp_path)
+        assert "run_bash" in block and "sandbox" in block.lower()

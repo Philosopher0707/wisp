@@ -28,7 +28,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0", "httpx>=0.27", "pytest-asyncio>=1.3.0", "ruff>=0.6", "mypy>=1.10"]
+dev = ["pytest>=7.0", "httpx>=0.27", "pytest-asyncio>=1.3.0", "pytest-timeout>=2.3", "ruff>=0.6",
+       "mypy>=1.10",
+       # The golden transcripts pin the word-level diff, which needs it.
+       "diff-match-patch>=20241021"]
 
 [project.scripts]
 wisp = "wisp.__main__:main"
@@ -47,6 +50,10 @@ wisp = "wisp.__main__:main"
 # running from the repo root does not mask this — only `python -m wisp` does, because `-m` adds
 # the CWD. That is why the defect survived: the one invocation that works is not the one users run.
 include = ["wisp*", "agent*"]
+
+[tool.setuptools.package-data]
+# The network platform's runbooks and fault scenarios are data, not modules.
+wisp_net = ["knowledge/*.md", "scenarios/*.json", "policies/*.json", "agents/*/SKILL.md"]
 
 [tool.pytest.ini_options]
 # Restrict collection to the test tree. wisp/test_distill.py and

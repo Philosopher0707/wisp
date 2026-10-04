@@ -150,6 +150,24 @@ export interface SubagentTask {
   filesChanged: string[];
   durationMs: number | null;
   error?: string;
+  /**
+   * The child's real authority surface, reported by the backend at spawn time
+   * from the same value fed to `allowed_tools`.
+   *
+   * `null` means UNKNOWN, not "none". A backend that predates this field sends
+   * no `capabilities` key at all, and the UI must render that as "authority not
+   * reported" rather than inferring a list from the name. `[]` would be a
+   * positive claim of zero authority and is a different fact.
+   */
+  capabilities: string[] | null;
+  /**
+   * Explicit "this child inherits the unrestricted surface" flag.
+   *
+   * Must never be inferred from `capabilities.length` — a shortened list means
+   * NARROWED, which is the opposite of unbounded. Keep it a separate boolean so
+   * the two claims cannot be confused in the UI.
+   */
+  unbounded: boolean;
 }
 
 // ── Actions ──
@@ -209,7 +227,15 @@ export type Action =
   | { type: 'ADD_CHECKPOINT'; checkpoint: Checkpoint }
   | { type: 'REMOVE_CHECKPOINT'; id: string }
   | { type: 'TOGGLE_CHECKPOINT_PANEL' }
-  | { type: 'SUBAGENT_START'; id: string; name: string; description: string }
+  | {
+      type: 'SUBAGENT_START';
+      id: string;
+      name: string;
+      description: string;
+      /** `null` when the backend reported no capability data. */
+      capabilities: string[] | null;
+      unbounded: boolean;
+    }
   | { type: 'SUBAGENT_PROGRESS'; id: string; progress: string }
   | { type: 'SUBAGENT_COMPLETE'; id: string; filesChanged: string[]; durationMs: number }
   | { type: 'SUBAGENT_FAIL'; id: string; error: string }
@@ -590,6 +616,8 @@ export function appReducer(state: AppState, action: Action): AppState {
             progress: '',
             filesChanged: [],
             durationMs: null,
+            capabilities: action.capabilities,
+            unbounded: action.unbounded,
           },
         ],
       };

@@ -15,14 +15,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 
 
-def _executor():
+def _executor(mode=None):
+    """`mode="full"` for a test with no human to ask: it authorises explicitly (0c6bcf2, ADR-0074)."""
     from wisp.config import WispConfig
     from wisp.tool_executor import ToolExecutor
-    return ToolExecutor(config=WispConfig(), hook_manager=None, mcp=None,
+    config = WispConfig().replace(permission_mode=mode) if mode else WispConfig()
+    return ToolExecutor(config=config, hook_manager=None, mcp=None,
                         file_lock=None, lsp_manager=None,
                         subagent_orchestrator=None, extensions=None)
 
@@ -277,7 +280,7 @@ async def test_approval_cancel_preserves_id(tmp_path):
 async def test_live_session_twin_no_400(tmp_path):
     """search TLS-fail x2 -> fetch 404 -> breaker trips -> history valid."""
     from wisp.providers.openai import OpenAIProvider
-    ex = _executor()
+    ex = _executor("full")
     ws = str(tmp_path)
 
     async def _tls_fail(name, args, **kw):
@@ -407,7 +410,7 @@ def test_ollama_protocol_has_no_tool_call_id():
     out = subprocess.run(
         ["grep", "-rn", "tool_call_id", "wisp/ollama_client.py",
          "wisp/providers/ollama.py"], capture_output=True, text=True,
-        cwd="/Users/philosopher/Documents/wisp").stdout
+        cwd=Path(__file__).resolve().parent.parent).stdout
     assert out.strip() == "", out
 
 

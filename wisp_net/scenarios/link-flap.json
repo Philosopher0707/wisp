@@ -1,0 +1,2 @@
+{"description": "spine1-core1 flaps with a 40s period from t=30s.",
+ "steps": [{"at": 30, "inject": "link_flap", "target": "spine1:Ethernet31", "params": {"period_s": 40}, "name": "flap"}]}

@@ -1,0 +1,2 @@
+{"description": "A bulk transfer from leaf1 to leaf4 grows 40x at t=30s and overruns the leaf4 access ports.",
+ "steps": [{"at": 30, "inject": "congestion", "target": "leaf1->leaf4", "params": {"multiplier": 40}, "name": "bulk"}]}

@@ -278,7 +278,6 @@ class TestTheAdapter:
             "silently.")
 
     def test_the_code_table_and_the_adapter_agree(self):
-        from wisp.core import events as E
         from wisp.core.recovery import CODE_FAILURE_CLASS
         for code, cls in CODE_FAILURE_CLASS.items():
             assert isinstance(cls, FailureClass), (code, cls)

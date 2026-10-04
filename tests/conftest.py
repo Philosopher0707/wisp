@@ -56,6 +56,76 @@ def isolated_wisp_env(monkeypatch, tmp_path):
 
 
 @pytest.fixture(scope="session", autouse=True)
+def _isolate_workspace_trust_file():
+    """Point the workspace-trust file at a throwaway for the whole session.
+
+    `WorkspaceTrustManager.TRUST_FILE` is computed from `Path.home()` at import
+    time, so patching HOME later never redirected it. Every test that called
+    `trust_workspace(tmp_path)` without `trust_file=` appended its temp dir to
+    the developer's real `~/.config/wisp/trusted_workspaces.json` (about 1,500
+    entries accumulated). Live E2E runs keep the ambient file.
+    """
+    if os.environ.get("WISP_E2E_LIVE") == "1":
+        yield
+        return
+    from wisp.trust import WorkspaceTrustManager
+
+    scratch = Path(tempfile.mkdtemp(prefix="wisp-trust-"))
+    saved = WorkspaceTrustManager.TRUST_FILE
+    WorkspaceTrustManager.TRUST_FILE = scratch / "trusted_workspaces.json"
+    try:
+        yield
+    finally:
+        WorkspaceTrustManager.TRUST_FILE = saved
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _isolate_memory_store():
+    """Point the cross-session memory store at a throwaway for the whole session.
+
+    `WISP_CONFIG_DIR` is `Path.home() / ".config" / "wisp"`, computed at import time and
+    bound *by value* into every module that does `from wisp.config import WISP_CONFIG_DIR`
+    (`memory`, `agent_memory`, `planner`). Patching it inside a single test is therefore too
+    late: `test_importance_should_not_be_immortal` monkeypatches `wisp.memory.WISP_CONFIG_DIR`
+    and still wrote into the developer's real `~/.config/wisp/memory.json` — 2 global facts
+    ("stale important", "newest fact") and 20 pytest-tmp workspace keys had accumulated
+    there. Same class as the trust-file leak above, fixed the same way. Live E2E runs keep
+    the ambient store.
+    """
+    if os.environ.get("WISP_E2E_LIVE") == "1":
+        yield
+        return
+    import wisp.agent_memory as am_mod
+    import wisp.config as cfg_mod
+    import wisp.memory as mem_mod
+
+    try:
+        import wisp.planner as plan_mod
+    except Exception:  # optional module
+        plan_mod = None
+
+    scratch = Path(tempfile.mkdtemp(prefix="wisp-cfg-"))
+    patched: list[tuple[object, str, object]] = []
+
+    def _patch(module, attr, value):
+        if module is not None and hasattr(module, attr):
+            patched.append((module, attr, getattr(module, attr)))
+            setattr(module, attr, value)
+
+    for mod in (cfg_mod, mem_mod, am_mod, plan_mod):
+        _patch(mod, "WISP_CONFIG_DIR", scratch)
+    # `agent_memory` derives a second constant from it at import time.
+    _patch(am_mod, "AGENT_MEMORY_DIR", scratch / "agent_memory")
+    try:
+        yield
+    finally:
+        for module, attr, value in patched:
+            setattr(module, attr, value)
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+@pytest.fixture(scope="session", autouse=True)
 def _neutralize_server_auth():
     """Force server dev-mode (no auth) for the unit-test session.
 
@@ -142,6 +212,33 @@ def _dispose_sandbox_containers():
     sandbox_mod = sys.modules.get("wisp.sandbox")
     if sandbox_mod is not None and sandbox_mod._app_sandbox is not None:
         sandbox_mod.reset_sandbox()
+
+
+@pytest.fixture
+def auto_edit_hard_deny_witness(monkeypatch):
+    """Re-impose an AUTO_EDIT hard deny on the four git/gh writes, as a test witness.
+
+    The 13F.1 guarantee — *a hard DENY is never prompted, and no approval can run it* — is a
+    property of the mechanism, and `git_push` was its witness. On 2026-09-28 the default AUTO_EDIT
+    deny set became empty (the git/gh writes ask the operator each time instead), so the mechanism
+    has no default member to be observed through. This fixture restores the pre-change
+    classification for the duration of one test, at every place that reads it:
+
+    * `policy_engine._AUTO_EDIT_DENY_TOOLS` — read at call time by `auth/decision.py`;
+    * `policy_engine._AUTO_EDIT_APPROVAL_TOOLS` — read when a policy engine is built;
+    * `security._AUTO_EDIT_DENY_TOOLS` — the name `policy_hard_deny` (the executor's gate) reads.
+
+    Build any `SecurityPolicy` / `ToolExecutor` inside the test, after this fixture applies.
+    """
+    import wisp.infra.policy_engine as pe
+    import wisp.infra.security as sec
+
+    deny = frozenset({"git_branch", "git_commit", "git_push", "gh_pr_create"})
+    monkeypatch.setattr(pe, "_AUTO_EDIT_DENY_TOOLS", deny)
+    monkeypatch.setattr(pe, "_AUTO_EDIT_APPROVAL_TOOLS",
+                        frozenset({"run_bash", "spawn", "fanout"}))
+    monkeypatch.setattr(sec, "_AUTO_EDIT_DENY_TOOLS", deny)
+    return deny
 
 
 @pytest.fixture

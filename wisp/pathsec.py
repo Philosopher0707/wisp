@@ -22,9 +22,21 @@ from collections.abc import Mapping
 #: one is a privilege-escalation primitive — an agent that can write here can
 #: arrange arbitrary code execution without a further approval. Reads stay
 #: allowed; only mutation is refused.
+#:
+#: `.git/hooks` and `.git/config` are the same primitive one layer down. The
+#: git tools (`git_commit`, `git_push`, `gh_pr_create`) run on the host, outside
+#: the bash sandbox, and git executes whatever those name: a hook script, or a
+#: `core.hooksPath` / `core.fsmonitor` / `core.sshCommand` / `alias.x = !cmd`
+#: entry. `write_file` is auto-approved in AUTO_EDIT, so without them here one
+#: file write plus one `git_commit` was a host-execution route that needed no
+#: bash. Matched at any depth, so submodules and nested checkouts are covered.
 PROTECTED_PATH_FRAGMENTS: frozenset[str] = frozenset({
     ".wisp/hooks",
     ".wisp\\hooks",  # Windows
+    ".git/hooks",
+    ".git\\hooks",  # Windows
+    ".git/config",
+    ".git\\config",  # Windows
 })
 
 
@@ -58,11 +70,11 @@ def is_protected_path(candidate: str) -> bool:
     for fragment in PROTECTED_PATH_FRAGMENTS:
         marker = fragment.replace("\\", "/")
         idx = norm.find(marker)
-        if idx < 0:
-            continue
-        after = norm[idx + len(marker):]
-        if after == "" or after.startswith("/"):
-            return True
+        while idx >= 0:
+            after = norm[idx + len(marker):]
+            if after == "" or after.startswith("/"):
+                return True
+            idx = norm.find(marker, idx + 1)
     return False
 
 

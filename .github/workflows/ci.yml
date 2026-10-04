@@ -43,6 +43,7 @@ jobs:
       - name: Ruff (Pyflakes gate)
         run: |
           ruff check wisp/
+          ruff check wisp_net/
           ruff check tests/
 
       - name: Mypy on typed spine (hard gate)
@@ -79,13 +80,17 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # The action's default also installs "tools", which the SDK repository no longer serves.
+          packages: platform-tools
 
       - name: Grant execute permission for gradlew
         run: chmod +x android/gradlew
 
       - name: Build Android debug APK
         working-directory: ./android
-        run: ./gradlew assembleDebug
+        # android/gradle.properties pins a local Homebrew JDK; point Gradle at the runner's.
+        run: ./gradlew assembleDebug -Dorg.gradle.java.home="$JAVA_HOME"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4

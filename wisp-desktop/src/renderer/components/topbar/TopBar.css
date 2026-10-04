@@ -145,3 +145,46 @@
 .topbar-sandbox-dot--host {
   background: var(--accent-orange);
 }
+
+/*
+ * Principal capability chip. The three states must never share a colour:
+ * a bounded surface (grey) and an unknown one (dashed) look equally "quiet"
+ * if styled alike, and only one of them is a fact about authority.
+ */
+.wisp-cap-chip {
+  display: flex;
+  align-items: center;
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.wisp-cap-chip--loading {
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+
+/* Unrestricted: the one state that should pull the eye. */
+.wisp-cap-chip--unbounded {
+  color: var(--danger, #d9534f);
+  border: 1px solid rgba(217, 83, 79, 0.3);
+  border-radius: 3px;
+  padding: 0 4px;
+}
+
+/* Bounded: a real, reduced surface. Fewer tools is LESS authority. */
+.wisp-cap-chip--bounded {
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 4px;
+}
+
+/* Unknown: deliberately dashed and italic so it never reads as resolved. */
+.wisp-cap-chip--unreported {
+  color: var(--text-muted);
+  border: 1px dashed var(--text-muted);
+  border-radius: 3px;
+  padding: 0 4px;
+  font-style: italic;
+  opacity: 0.8;
+}

@@ -1,0 +1,6 @@
+{"description": "At t=30s someone on leaf4's CLI re-enables SSH v1 and removes the login banner; at t=60s spine1 loses an NTP server. Nothing breaks: only the compliance audit notices.",
+ "steps": [
+   {"at": 30, "config": {"device": "leaf4", "path": "/system/ssh-server/config/protocol-version", "value": "V1_V2", "user": "jdoe"}},
+   {"at": 30, "config": {"device": "leaf4", "path": "/system/config/login-banner", "user": "jdoe"}},
+   {"at": 60, "config": {"device": "spine1", "path": "/system/ntp/servers/server[address=192.0.2.251]/config/address", "user": "jdoe"}}
+ ]}

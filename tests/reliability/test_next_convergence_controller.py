@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -48,7 +47,7 @@ from wisp.core.convergence import (
     directive_for,
 )
 from wisp.core.goal import GoalState
-from wisp.core.recovery import FailureClass, RecoveryLadder, RecoveryRung
+from wisp.core.recovery import FailureClass, RecoveryRung
 
 
 # ── Harness ─────────────────────────────────────────────────────────────

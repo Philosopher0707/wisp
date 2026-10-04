@@ -57,7 +57,7 @@ async def test_supervisor_executes_prompt_and_persists_events(tmp_path):
             "model": model,
         }
 
-    with patch("wisp.entry.run_headless", fake_run_headless):
+    with patch("wisp.headless.run_headless", fake_run_headless):
         thread, run, events = await supervisor.execute_prompt(config, "Explain the repo")
 
     saved = store.load_run(run["id"])

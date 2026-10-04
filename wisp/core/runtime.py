@@ -581,20 +581,15 @@ class AgentRuntime:
                 pass
 
         async with session_lock:
-            # Crash recovery: if last event in session_events isn't DONE,
-            # replay from last UserMessage to rebuild state
+            # Crash recovery: the last turn did not reach DONE, so the saved
+            # transcript may lag the journal. Rebuild from the journal only when
+            # it can be trusted; otherwise keep the saved transcript, and say which.
             if self.session_repo is not None:
                 try:
                     if not self.session_repo.was_last_turn_complete(sid):
-                        logger.warning("Session %s has incomplete turn — replaying", sid)
-                        last_seq = self.session_repo.get_last_sequence(sid)
-                        if last_seq >= 0:
-                            replayed = self.session_repo.load_session(sid)
-                            if replayed is not None:
-                                session["messages"] = replayed.messages
-                                _stringify_tool_call_arguments(session["messages"])
+                        self._recover_unfinished_turn(sid, session)
                 except Exception:
-                    pass  # table might not exist
+                    logger.debug("Session %s: turn recovery skipped", sid, exc_info=True)
 
             # Auto-compact before turn to prevent context overflow
             await self.maybe_compact(session)
@@ -888,7 +883,8 @@ class AgentRuntime:
                         # is "we have learned something new at some point", and
                         # a delta comparison would call an A→B→A oscillation
                         # progress on every step.
-                        if stagnation_detector is not None:
+                        if (stagnation_detector is not None
+                                and stagnation_signal is not None):
                             try:
                                 from wisp.core.action_key import action_key
                                 from wisp.core.oscillation import diff_hash
@@ -1100,7 +1096,7 @@ class AgentRuntime:
                     try:
                         from wisp.core.session import SessionEvent
                         from wisp.core.task_graph import (
-                            NodeStatus, NodeTransition, apply_transition,
+                            NodeTransition, TaskNodeState, apply_transition,
                             build_turn_graph, materialize, turn_work_units,
                         )
                         # Migration M11 — the nodes name the work units they
@@ -1117,8 +1113,8 @@ class AgentRuntime:
                         _seq = 0
                         for _i in range(len(_units)):
                             _seq += 1
-                            _to = (NodeStatus.SUCCESS if turn_succeeded
-                                   else NodeStatus.FAILURE)
+                            _to = (TaskNodeState.SUCCESS if turn_succeeded
+                                   else TaskNodeState.FAILURE)
                             _node = _graph.node(f"turn:{_i}")
                             if _node is None or _node.status is _to:
                                 continue
@@ -1134,7 +1130,7 @@ class AgentRuntime:
                                 SessionEvent.node_transition_event(
                                     0, NodeTransition(
                                         run_id=sid, node_id=f"turn:{_i}",
-                                        from_status=NodeStatus.PENDING,
+                                        from_status=TaskNodeState.PENDING,
                                         to_status=_to, seq=_seq,
                                         reason=("settled at turn end"
                                                 if turn_succeeded
@@ -1302,7 +1298,7 @@ class AgentRuntime:
                         if _decision is not None:
                             journal_events.append(
                                 _SEv.recovery_event(0, _decision.to_dict()))
-                        if _ladder.escalated:
+                        if _ladder.escalated and _ladder.escalation is not None:
                             _escalated = True
                             journal_events.append(_SEv.escalation_event(
                                 0, _ladder.escalation.to_dict()))
@@ -1374,8 +1370,17 @@ class AgentRuntime:
                 # providers require each tool reply to immediately follow
                 # its assistant tool_calls block, and splicing user
                 # messages between exchanges risks orphaning ids.
+                #
+                # Journaled beside the append, under the digest's gate: the model
+                # saw these, so a replay without them is a different transcript.
+                _journal_injected = (journal_fidelity
+                                     and self.session_repo is not None)
                 for ctx_msg in injected_context:
                     session["messages"].append(ctx_msg)
+                    if _journal_injected:
+                        from wisp.core.session import SessionEvent
+                        journal_events.append(
+                            SessionEvent.injected_context_event(0, ctx_msg))
 
                 # The transcript's digest, recorded so that replay can CHECK the
                 # transcript it rebuilds rather than assume it — F25's defect
@@ -1456,10 +1461,18 @@ class AgentRuntime:
                 model = getattr(self, "_model", None)
                 chars_per_token = getattr(self, "_chars_per_token", 4)
                 counter = TokenCounter(chars_per_token=chars_per_token)
+                # `model=` is what lets the wired cost meter charge. Without it the
+                # meter is inert and `max_cost_usd` cannot fire — the last link in
+                # the chain, and the reason it is named here rather than assumed.
+                #
+                # NOTE: the counts come from `TokenCounter`, which ESTIMATES from
+                # characters — the providers do not report usage. So a cost is an
+                # estimate of a cost, and the bound is as sharp as the estimate.
                 self.telemetry.record_turn(
                     latency_ms=latency_ms,
                     prompt_tokens=counter.count(prompt, model=model),
                     completion_tokens=counter.count("".join(assistant_content), model=model),
+                    model=model,
                 )
 
     # ── Mid-turn steering (M3) ─────────────────────────────────────
@@ -1805,6 +1818,39 @@ class AgentRuntime:
         """
         with self._core_lock:
             self._session_cores.clear()
+
+    def _recover_unfinished_turn(self, sid: str, session: dict[str, Any]) -> None:
+        """The last turn did not reach DONE: rebuild from the journal, but only a trustworthy one.
+
+        This used to log *"has incomplete turn — replaying"* and then assign whatever the journal
+        replayed to, inside `except Exception: pass`. Two failures followed. A journal whose replay
+        diverged from its recorded digest raised `ReplayDivergence`, which was swallowed, so the
+        log claimed a replay that never happened, on every resume. A journal with a GAP replayed
+        without error and REPLACED a good saved transcript with a provider-invalid one. The
+        journal is now used only when it replays consistently and has no gap (M4's rule in
+        `SessionRepository.reconstruction_source`). Otherwise the saved transcript stays, and the
+        log says which history the turn runs on and why. A journal holding only user messages is
+        still replayed, as before (`test_replay_holds_session_lock` depends on it).
+        """
+        from wisp.core.replay_digest import ReplayDivergence
+
+        assert self.session_repo is not None
+        try:
+            replayed = self.session_repo.load_session(sid)
+            unusable = ""
+        except ReplayDivergence as exc:
+            replayed, unusable = None, f"its journal does not replay consistently ({exc})"
+        if replayed is not None and replayed.gap_detected:
+            replayed, unusable = None, "its journal has a gap (a lost event)"
+        if replayed is None:
+            logger.warning(
+                "Session %s: the previous turn did not finish; keeping the saved transcript "
+                "because %s", sid, unusable or "its journal is empty")
+            return
+        session["messages"] = replayed.messages
+        _stringify_tool_call_arguments(session["messages"])
+        logger.info("Session %s: the previous turn did not finish; history rebuilt from the "
+                    "journal", sid)
 
     async def maybe_compact(self, session: dict[str, Any], max_messages: int | None = None, force: bool = False) -> dict[str, Any] | None:
         """Compact session if it exceeds max_messages.

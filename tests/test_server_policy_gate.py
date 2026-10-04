@@ -59,15 +59,44 @@ def test_file_write_denied_in_read_only(tmp_path, monkeypatch):
     assert not (tmp_path / "gate-probe.txt").exists()
 
 
-def test_file_write_allowed_in_auto_edit(tmp_path, monkeypatch):
+def _root_authorised(mode):
+    return SimpleNamespace(config=SimpleNamespace(permission_mode=mode, auto_approve=True))
+
+
+def test_file_write_denied_in_auto_edit_until_the_server_authorises_it(tmp_path, monkeypatch):
+    """No approver, no yes (0c6bcf2, ADR-0061 R4): the agent path denies `write_file` in `auto_edit` when
+    nobody could be asked, and REST, where nobody can, agrees. Until this test changed it asserted the
+    opposite, because REST used a model that auto-approved file writes."""
     import wisp.server.routes.files as files_mod
     from wisp.server.routes.files import router
 
     monkeypatch.setattr(files_mod, "WORKSPACE_ROOT", tmp_path)
     r = TestClient(_app(_root("auto_edit"), router)).post(
         "/api/files", params={"path": "gate-probe.txt"}, json={"content": "x"})
+    assert r.status_code == 403
+    assert "no approver is present over REST" in r.json()["detail"]
+    assert not (tmp_path / "gate-probe.txt").exists()
+
+
+def test_file_write_allowed_in_auto_edit_when_the_server_authorises_it(tmp_path, monkeypatch):
+    import wisp.server.routes.files as files_mod
+    from wisp.server.routes.files import router
+
+    monkeypatch.setattr(files_mod, "WORKSPACE_ROOT", tmp_path)
+    r = TestClient(_app(_root_authorised("auto_edit"), router)).post(
+        "/api/files", params={"path": "gate-probe.txt"}, json={"content": "x"})
     assert r.status_code == 200
     assert (tmp_path / "gate-probe.txt").read_text() == "x"
+
+
+def test_file_write_allowed_in_full_without_auto_approve(tmp_path, monkeypatch):
+    import wisp.server.routes.files as files_mod
+    from wisp.server.routes.files import router
+
+    monkeypatch.setattr(files_mod, "WORKSPACE_ROOT", tmp_path)
+    r = TestClient(_app(_root("full"), router)).post(
+        "/api/files", params={"path": "gate-probe.txt"}, json={"content": "x"})
+    assert r.status_code == 200
 
 
 # ── Target C: executable-config routes carry the same gate ───────────

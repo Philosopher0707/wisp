@@ -39,6 +39,7 @@ from wisp.server.routes.background import router as background_agents_router
 from wisp.server.routes.policy import router as policy_router
 from wisp.server.routes.search import router as search_router
 from wisp.server.routes.diagnostics import router as diagnostics_router
+from wisp.server.routes.capabilities import router as capabilities_router
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +153,7 @@ app.include_router(background_agents_router)
 app.include_router(policy_router)
 app.include_router(search_router)
 app.include_router(diagnostics_router)
+app.include_router(capabilities_router)
 
 
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "::"}

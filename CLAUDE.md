@@ -6,6 +6,37 @@ Project instructions for Claude Code when working in this repository.
 
 Wisp is a local-first Python coding agent with Ollama backend. Architecture: event-driven stateless core → transport layer (CLI/WebSocket/TUI/headless) → I/O. SDK-style with layered abstractions.
 
+## Read these first (session records and standing rules)
+
+Load these before changing anything; they hold state and hard-won lessons that the code alone does not show.
+
+| File | What it is |
+|---|---|
+| `AGENTS_LEARNING.md` | Lessons learned so far, one `##` section each, with evidence. Search it before repeating an experiment. |
+| `docs/sessions/2026-09-29-network-agent/CONTEXT.md` | Handoff for the 2026-09-29 session: current state, the unfinished repair of local `main`, boundaries, ranked open work. (Not the repo's `CONTEXT.md`, which is 253 KB and pinned by line number in the register scripts: do not edit it casually.) |
+| `workflow.md` | Chronological log of that session (uncommitted working file). |
+| `.agents/skills/verified-change-workflow/SKILL.md` | The method: measure, decide, apply; RED first; test through the production path; positive controls and mutation probes; baseline comparison; PR for the human to merge. |
+| `WISP_ARCHITECTURE_DECISIONS.md` | ADR log (ADR-0069..0073 the network agent, ADR-0074 no approver / no yes). |
+| `wisp_net/README.md` | The network platform, the evaluation harness and its baseline table. |
+
+Standing boundaries (also in the assistant's memory as `boundaries.md`): scope is **simulated-first research**;
+**open PRs and let the user merge**; never push the user's local-only commits, delete remote branches, spend
+money beyond a key they name, or edit their uncommitted files; widening a permission mode or changing a pinned
+policy is the user's decision, so state the trade-off and ask.
+
+## Knowledge base (BM25, for now)
+
+In **every project** keep a plain-file knowledge base: markdown files, one topic per `##` section, the search
+words in the heading and first line, searched with **BM25**. No vector store or embeddings for now; lexical
+ranking is exact about the vocabulary people search with and needs nothing installed. Reference implementation:
+`wisp_net/state/knowledge.py` (Okapi BM25 over `wisp_net/knowledge/*.md`, chunked at `##` headings).
+
+- `AGENTS_LEARNING.md` and the per-session `CONTEXT.md` are part of it. Search them before starting work.
+- **Update it after every milestone or phase, before moving on**, not at the end: add the lesson, update the
+  session state and open work, record decisions in the ADR log. Prefer editing an entry to adding a duplicate.
+- A new project starts the same way: create `AGENTS_LEARNING.md`, a session `CONTEXT.md`, and a `knowledge/`
+  folder for reference notes, then point `CLAUDE.md` at them.
+
 ## Build & test
 
 ```bash
