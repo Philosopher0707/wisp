@@ -1,0 +1,100 @@
+# The fleet: every repo wisp orchestrates, and the single source of truth for "what exists".
+# Roles are a first classification (inferred from each README); correct them freely.
+#   orchestrator  exactly one; drives the others          harness   an agent harness / kernel
+#   runtime       event or trust runtime                   agent     a task-specific agent
+#   tool          a utility or service                    app       a product
+#   archive       kept for reference; no remote required
+# Check with:  wisp fleet status   |   wisp fleet doctor --strict
+
+[fleet]
+scan = ["~/active", "~/workspace", "~/dev"]
+
+[[repo]]
+name = "wisp"
+path = "~/dev/wisp"
+role = "orchestrator"
+
+[[repo]]
+name = "archon"
+path = "~/active/workspace/archon"
+role = "harness"
+
+[[repo]]
+name = "tbrr"
+path = "~/active/workspace/tbrr"
+role = "runtime"
+
+[[repo]]
+name = "srr-runtime"
+path = "~/active/workspace/srr-runtime"
+role = "runtime"
+
+[[repo]]
+name = "libraryr"
+path = "~/active/workspace/libraryr"
+role = "runtime"
+
+[[repo]]
+name = "agent-runtime"
+path = "~/workspace/general purpose"
+role = "runtime"
+
+[[repo]]
+name = "plateform"
+path = "~/active/plateform"
+role = "runtime"
+
+[[repo]]
+name = "always-on-worker"
+path = "~/active/workspace/always-on-worker"
+role = "agent"
+
+[[repo]]
+name = "db-agent"
+path = "~/active/workspace/db-agent"
+role = "agent"
+
+[[repo]]
+name = "gump"
+path = "~/active/gump"
+role = "agent"
+
+[[repo]]
+name = "hank-mas"
+path = "~/active/MAS"
+role = "agent"
+
+[[repo]]
+name = "comp-neuroscientist"
+path = "~/active/comp-neuroscientist"
+role = "agent"
+
+[[repo]]
+name = "data-scientist"
+path = "~/active/data-scientist"
+role = "agent"
+
+[[repo]]
+name = "autopipe"
+path = "~/active/autopipe"
+role = "tool"
+
+[[repo]]
+name = "imgforge"
+path = "~/active/tools/imgforge"
+role = "tool"
+
+[[repo]]
+name = "kiro_research_api"
+path = "~/active/kiro_research_api"
+role = "tool"
+
+[[repo]]
+name = "libretutor"
+path = "~/workspace/libretutor"
+role = "app"
+
+[[repo]]
+name = "cn-d1d3-fix"
+path = "~/active/cn-d1d3-fix"
+role = "archive"
