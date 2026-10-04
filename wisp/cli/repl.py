@@ -233,6 +233,13 @@ def make_input_fn(history_file: Path | None = None, model: Any | None = None) ->
             from prompt_toolkit.history import FileHistory
 
             hist = str(history_file) if history_file is not None else str(history_path())
+            # FileHistory does not create its parent directory, and the first append_string()
+            # happens when the *first line is accepted* -- so on a fresh HOME the REPL crashed
+            # at the user's first keystroke, before /help could print anything.
+            try:
+                Path(hist).parent.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                logger.debug("could not create history parent directory", exc_info=True)
             try:
                 session: Any = PromptSession(
                     history=FileHistory(hist),
