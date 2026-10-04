@@ -141,11 +141,12 @@ def _walk(base: Path, budget: _Budget):
             seen += 1
             if seen > _MAX_ENTRIES or budget.over():
                 return
-            yield full, os.path.relpath(full, base).replace(os.sep, "/")
+            yield full, Path(os.path.relpath(full, base)).as_posix()
 
 
 def _display(full: str, workspace: str) -> str:
-    return os.path.relpath(full, os.path.realpath(workspace)).replace(os.sep, "/")
+    """A workspace-relative path for output. Containment is `_resolve_path`'s job; this only formats."""
+    return Path(os.path.relpath(full, Path(workspace).resolve())).as_posix()
 
 
 # ── glob ───────────────────────────────────────────────────────────────
