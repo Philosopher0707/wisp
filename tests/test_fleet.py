@@ -13,10 +13,13 @@ from pathlib import Path
 import pytest
 
 from wisp.fleet import (
+    MANAGED_BY,
     FleetManifestError,
     Problem,
     discover_unmanaged,
     load_manifest,
+    merge_mcp_config,
+    render_mcp_servers,
     repo_status,
     run_fleet,
 )
@@ -237,3 +240,130 @@ role = "tool"
 
     def test_unknown_action_exits_two(self, tmp_path, capsys):
         assert run_fleet(["frobnicate"]) == 2
+
+
+_WORKER_MANIFEST = '''
+[[repo]]
+name = "orch"
+path = "/o"
+role = "orchestrator"
+[[repo]]
+name = "w"
+path = "/w"
+role = "agent"
+[repo.worker]
+command = ["~/bin/py", "-m", "w.mcp"]
+timeout_seconds = 45
+[repo.worker.env]
+W_SPEC = "~/w/spec.json"
+[repo.worker.tool_risk]
+w_run = "exec"
+w_status = "read"
+'''
+
+
+class TestWorkerManifest:
+    def _load(self, tmp_path: Path, body: str = _WORKER_MANIFEST):
+        p = tmp_path / "wisp.fleet.toml"
+        p.write_text(body)
+        return load_manifest(p)
+
+    def test_worker_table_is_parsed(self, tmp_path):
+        w = self._load(tmp_path).repos[1].worker
+        assert w is not None
+        assert w.command[-2:] == ["-m", "w.mcp"]
+        assert w.timeout_seconds == 45
+        assert w.tool_risk == {"w_run": "exec", "w_status": "read"}
+
+    def test_repos_without_a_worker_table_have_none(self, tmp_path):
+        assert self._load(tmp_path).repos[0].worker is None
+
+    def test_empty_command_is_rejected(self, tmp_path):
+        with pytest.raises(FleetManifestError, match="command"):
+            self._load(tmp_path, _WORKER_MANIFEST.replace('command = ["~/bin/py", "-m", "w.mcp"]', "command = []"))
+
+    def test_unknown_risk_level_is_rejected(self, tmp_path):
+        with pytest.raises(FleetManifestError, match="risk"):
+            self._load(tmp_path, _WORKER_MANIFEST.replace('"exec"', '"yolo"'))
+
+    @pytest.mark.parametrize("role", ["archive", "orchestrator"])
+    def test_a_worker_table_is_rejected_on_roles_that_are_not_driven(self, tmp_path, role):
+        body = _WORKER_MANIFEST.replace('role = "agent"', f'role = "{role}"')
+        if role == "orchestrator":
+            body = body.replace('name = "orch"\npath = "/o"\nrole = "orchestrator"', 'name = "orch"\npath = "/o"\nrole = "tool"')
+        with pytest.raises(FleetManifestError, match="worker"):
+            self._load(tmp_path, body)
+
+
+class TestRenderMcp:
+    def test_entry_has_wisps_mcp_shape_and_is_marked_managed(self, tmp_path):
+        p = tmp_path / "wisp.fleet.toml"
+        p.write_text(_WORKER_MANIFEST)
+        (entry,) = render_mcp_servers(load_manifest(p))
+        assert entry["name"] == "w"
+        assert entry["transport"] == "stdio"
+        assert entry["command"] == str(Path.home() / "bin" / "py")
+        assert entry["args"] == ["-m", "w.mcp"]
+        assert entry["env"] == {"W_SPEC": str(Path.home() / "w" / "spec.json")}
+        assert entry["timeout_seconds"] == 45
+        assert entry["tool_risk"]["w_run"] == "exec"
+        assert entry["managedBy"] == MANAGED_BY
+
+
+class TestMergeMcpConfig:
+    def _managed(self, name="w"):
+        return [{"name": name, "command": "x", "managedBy": MANAGED_BY}]
+
+    def test_keeps_unmanaged_entries_in_a_list_config(self):
+        merged = merge_mcp_config([{"name": "browser", "command": "b"}], self._managed())
+        assert [e["name"] for e in merged] == ["browser", "w"]
+
+    def test_keeps_the_dict_container_shape(self):
+        merged = merge_mcp_config({"mcpServers": [{"name": "browser"}], "other": 1}, self._managed())
+        assert merged["other"] == 1
+        assert [e["name"] for e in merged["mcpServers"]] == ["browser", "w"]
+
+    def test_replaces_stale_managed_entries_and_drops_removed_ones(self):
+        existing = [{"name": "gone", "managedBy": MANAGED_BY}, {"name": "w", "command": "old", "managedBy": MANAGED_BY}]
+        merged = merge_mcp_config(existing, self._managed())
+        assert merged == self._managed()
+
+    def test_refuses_to_clobber_an_unmanaged_entry_with_the_same_name(self):
+        with pytest.raises(FleetManifestError, match="already defined"):
+            merge_mcp_config([{"name": "w", "command": "mine"}], self._managed())
+
+    def test_missing_config_starts_empty(self):
+        assert merge_mcp_config(None, self._managed()) == self._managed()
+
+    def test_unrecognised_shape_is_an_error_not_an_overwrite(self):
+        with pytest.raises(FleetManifestError, match="shape"):
+            merge_mcp_config("nonsense", self._managed())
+
+
+class TestWorkersCommand:
+    def _manifest(self, tmp_path):
+        p = tmp_path / "wisp.fleet.toml"
+        p.write_text(_WORKER_MANIFEST)
+        return p
+
+    def test_prints_without_writing_by_default(self, tmp_path, capsys):
+        assert run_fleet(["workers", "--manifest", str(self._manifest(tmp_path))]) == 0
+        assert json.loads(capsys.readouterr().out)[0]["name"] == "w"
+
+    def test_write_merges_into_an_existing_config_and_preserves_other_servers(self, tmp_path):
+        cfg = tmp_path / "mcp.json"
+        cfg.write_text(json.dumps([{"name": "browser", "command": "b"}]))
+        assert run_fleet(["workers", "--manifest", str(self._manifest(tmp_path)), "--write", str(cfg)]) == 0
+        assert [e["name"] for e in json.loads(cfg.read_text())] == ["browser", "w"]
+
+    def test_write_is_idempotent(self, tmp_path):
+        cfg = tmp_path / "mcp.json"
+        for _ in range(2):
+            run_fleet(["workers", "--manifest", str(self._manifest(tmp_path)), "--write", str(cfg)])
+        assert [e["name"] for e in json.loads(cfg.read_text())] == ["w"]
+
+    def test_a_corrupt_existing_config_is_left_untouched(self, tmp_path, capsys):
+        cfg = tmp_path / "mcp.json"
+        cfg.write_text("{not json")
+        assert run_fleet(["workers", "--manifest", str(self._manifest(tmp_path)), "--write", str(cfg)]) == 2
+        assert cfg.read_text() == "{not json"
