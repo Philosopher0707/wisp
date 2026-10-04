@@ -75,36 +75,67 @@ class TestConcurrentTurns:
         assert assistant_count == 2
 
     @pytest.mark.asyncio
+    @pytest.mark.timeout(20)
     async def test_per_session_locks(self, runtime):
-        """Different sessions should not block each other."""
+        """Different sessions should not block each other.
+
+        Asserted structurally, not by wall clock: the old form required two 50 ms turns to finish in under
+        90 ms, a 40 ms margin that a loaded CI runner missed (0.113 s). Here both turns must be in flight at
+        once, which a serialising lock makes impossible whatever the machine's speed.
+        """
         session1 = {"id": "s1", "messages": [], "workspace": "/tmp"}
         session2 = {"id": "s2", "messages": [], "workspace": "/tmp"}
+        in_flight = 0
+        both_running = asyncio.Event()
 
-        class SlowCore:
+        class OverlappingCore:
             async def turn(self, session, prompt, approval_handler=None, steering_drain=None):
-                await asyncio.sleep(0.05)
+                nonlocal in_flight
+                in_flight += 1
+                if in_flight == 2:
+                    both_running.set()
+                # If the sessions were serialised, the second turn can never start, so this times out.
+                await asyncio.wait_for(both_running.wait(), timeout=3)
                 yield {"type": "content", "text": "ok"}
                 yield {"type": "done"}
 
-        runtime.core_factory = lambda: SlowCore()
+        runtime.core_factory = lambda: OverlappingCore()
 
         async def turn(sess):
-            events = []
-            async for event in runtime.run_turn(sess, "test"):
-                events.append(event)
-            return events
+            return [event async for event in runtime.run_turn(sess, "test")]
 
-        start = asyncio.get_event_loop().time()
-        results = await asyncio.gather(
-            turn(session1),
-            turn(session2),
-        )
-        elapsed = asyncio.get_event_loop().time() - start
+        results = await asyncio.gather(turn(session1), turn(session2))
+        assert in_flight == 2
+        # Both turns must have produced real content. A turn that merely timed out waiting for the other would
+        # still emit an error event (and so a non-empty list), which is how this test once passed under a
+        # deliberately serialising lock.
+        for events in results:
+            assert any(e.get("type") == "content" for e in events), events
+            assert not any(e.get("type") == "error" for e in events), events
 
-        # Should complete in ~0.05s (parallel), not ~0.10s (serial)
-        assert elapsed < 0.09
-        assert len(results[0]) > 0
-        assert len(results[1]) > 0
+    @pytest.mark.asyncio
+    async def test_the_same_session_is_serialised(self, runtime):
+        """Control for the test above: one session id must never have two turns in flight."""
+        session = {"id": "same", "messages": [], "workspace": "/tmp"}
+        in_flight = peak = 0
+
+        class CountingCore:
+            async def turn(self, session, prompt, approval_handler=None, steering_drain=None):
+                nonlocal in_flight, peak
+                in_flight += 1
+                peak = max(peak, in_flight)
+                await asyncio.sleep(0.05)
+                in_flight -= 1
+                yield {"type": "content", "text": "ok"}
+                yield {"type": "done"}
+
+        runtime.core_factory = lambda: CountingCore()
+
+        async def turn():
+            return [event async for event in runtime.run_turn(session, "test")]
+
+        await asyncio.gather(turn(), turn())
+        assert peak == 1
 
 
 class TestInputValidation:
