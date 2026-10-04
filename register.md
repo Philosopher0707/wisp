@@ -22,7 +22,7 @@
 > `—` therefore means *no catch inside these roots*, which is **not** the same claim as
 > *unhandled* — see §(c).
 >
-> Generated 2026-09-30 at `4b16688` · **48 classes** · **273 raise sites** · **48 catch sites** · **7 with no test naming them**.
+> Generated 2026-09-30 at `a8d1c01` · **48 classes** · **273 raise sites** · **48 catch sites** · **7 with no test naming them**.
 
 ---
 
@@ -34,7 +34,7 @@
 | `ApprovalCancelled` | `Exception` | verdict | approval | `wisp/exceptions.py:17` | 1 | `wisp/transport/cli.py:945` | `wisp/core/approval_gate.py:117`, `wisp/core/approval_gate.py:146`, `wisp/tool_executor.py:960` | — |
 | `ApprovalTimeout` | `Exception` | verdict | approval | `wisp/exceptions.py:33` | 1 | `wisp/transport/cli.py:908` | `wisp/core/approval_gate.py:127`, `wisp/tool_executor.py:973` | — |
 | `_TransientOpenError` | `Exception` | recoverable | provider | `wisp/core/provider_stream.py:40` | 1 | `wisp/core/provider_stream.py:167` | `wisp/core/provider_stream.py:267` | — |
-| `FirstTokenTimeout` | `asyncio.TimeoutError` | recoverable | subagent | `wisp/multi_agent/_runner.py:135` | 1 | `wisp/multi_agent/_runner.py:625` | `wisp/multi_agent/_runner.py:396`, `wisp/multi_agent/_runner.py:694`, `wisp/multi_agent/_runner.py:854` | — |
+| `FirstTokenTimeout` | `asyncio.TimeoutError` | recoverable | subagent | `wisp/multi_agent/_runner.py:151` | 1 | `wisp/multi_agent/_runner.py:641` | `wisp/multi_agent/_runner.py:412`, `wisp/multi_agent/_runner.py:715`, `wisp/multi_agent/_runner.py:880` | — |
 | `CircuitOpenError` | `Exception` | recoverable | provider | `wisp/infra/circuit_breaker.py:175` | 2 | `wisp/infra/circuit_breaker.py:93` | `wisp/core/stateless.py:1275` | — |
 | `CircuitBreakerOpenError` | `Exception` | recoverable | subagent | `wisp/multi_agent/_circuit_breaker.py:102` | 1 | `wisp/multi_agent/_circuit_breaker.py:44` | — | — |
 | `OllamaError` | `Exception` | recoverable | provider | `wisp/ollama_client.py:46` | 10 | `wisp/ollama_client.py:273` | `wisp/ollama_client.py:288`, `wisp/ollama_client.py:427` | — |
