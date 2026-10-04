@@ -39,3 +39,9 @@ def test_enforce_blocks_when_a_repo_has_a_problem(tmp_path):
     result = _run(tmp_path, WISP_FLEET_ENFORCE="1")
     assert result.returncode == 1
     assert "push blocked" in result.stderr
+
+
+def test_advisory_warns_loudly_when_the_check_cannot_run(tmp_path):
+    result = _run(tmp_path, WISP_FLEET_CMD=f"{sys.executable} -c 'raise SystemExit(7)' --")
+    assert result.returncode == 0
+    assert "could not run" in result.stderr
