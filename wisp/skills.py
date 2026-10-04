@@ -31,10 +31,12 @@ SKILL_DIR_NAMES = [
     ".wisp/skills/auto",
 ]
 
+# Global skills come from ~/.agents/skills ONLY. ~/.claude/skills and ~/.warp/skills belong to other tools; loading
+# them put every skill a user had installed for those tools into wisp (one real HOME: 56 skills, a 10,398-token
+# menu against a 6,000-token prompt budget, and 53 `skill__*` tool schemas costing 10,197 tokens per request).
+# Project-level directories (SKILL_DIR_NAMES above) are unchanged.
 GLOBAL_SKILL_DIRS = [
     Path.home() / ".agents/skills",
-    Path.home() / ".warp/skills",
-    Path.home() / ".claude/skills",
 ]
 
 
@@ -175,7 +177,7 @@ def discover_skills(workspace: str) -> list[Skill]:
 
     Scans:
       1. Project dirs: <workspace>/.agents/skills/, etc. (higher priority)
-      2. Global dirs: ~/.agents/skills/, ~/.warp/skills/, etc. (lower priority)
+      2. Global dir: ~/.agents/skills/ only (lower priority)
 
     Returns skills sorted by: project first (higher priority), then global.
     Project skills shadow global skills with the same name.

@@ -218,6 +218,9 @@ DEFAULT_SYSTEM = DEFAULT_BASE_SYSTEM + VERIFICATION_LOOP_RULES
 # overshot the budget 2x whenever tiktoken happened to be installed).
 _ESTIMATOR_CHARS_PER_TOKEN = 3
 
+#: Smallest slice of the first priority-0 section kept when the budget cannot even hold its truncation header.
+_MIN_CRITICAL_CHARS = 90
+
 # Known source-code extensions — restrict deduplication to actual files
 # rather than matching version strings (v1.2.3) or pytest node IDs.
 _KNOWN_SRC_EXTS = frozenset({
@@ -610,87 +613,91 @@ class ContextAssembler:
         return counter.count(text)
 
     def _fit_sections(self, sections: list[tuple[str, int, str]], max_tokens: int) -> tuple[str, int]:
-        """Assemble sections, truncating/dropping lowest-priority ones if over budget.
+        """Assemble sections by priority so the *final text* fits ``max_tokens``.
 
-        Returns (assembled_prompt, estimated_tokens).  If even priority-0 sections
-        exceed the budget, the prompt is still returned (truncating the last
-        section with a header warning).
+        Returns ``(assembled_prompt, estimated_tokens)`` with ``estimated_tokens <= max_tokens`` whenever the
+        budget can hold the disclosure note at all. The estimator is one ruler, ``len(text) // 3``, so the
+        accounting is done in characters: exact, no rounding drift, and each section is sized once with
+        ``len()`` instead of being re-estimated at every decision.
+
+        Policy (unchanged): priority 0 and ``memory_block`` are truncated when they do not fit; every other
+        section is dropped whole. What changed is the accounting. The running total is cumulative (a truncation
+        used to overwrite it, which let later low-priority sections in and overshot the budget by up to 1.5x),
+        the ``\\n\\n`` separators, the truncation header and the closing note are all inside the budget, and any
+        section that was cut or dropped is named in the note, including one dropped for being too large.
         """
-        sorted_sections = sorted(sections, key=lambda item: item[1])
+        ordered = sorted(sections, key=lambda item: item[1])  # stable: ties keep insertion order
+        limit = max(0, max_tokens) * _ESTIMATOR_CHARS_PER_TOKEN
+        sep = "\n\n"
 
-        included: list[tuple[str, str]] = []
-        current_tokens = 0
-        last_truncate_label: str = ""
-        dropped_labels: list[str] = []
+        whole = sep.join(str(content) for _, _, content in ordered)
+        if len(whole) <= limit:
+            return whole, self._estimate_tokens(whole)
 
-        for label, priority, content in sorted_sections:
-            size = self._estimate_tokens(content)
-            projected = current_tokens + size
-            if projected <= max_tokens:
-                included.append((label, content))
-                current_tokens = projected
+        # Over budget. Reserve room for the note first, sized for the worst case of every label being listed,
+        # so the note can never push the result over the budget. A budget too small to hold a note at all keeps
+        # its critical sections instead (best effort beats an empty prompt).
+        note_head = "[NOTE: Some sections were truncated or omitted to fit the context window budget."
+        worst_note = len(sep) + len(note_head) + sum(len(f"\n- {label} (truncated)") for label, _, _ in ordered) + 1
+        budget = limit - worst_note if limit >= 2 * worst_note else limit
+
+        parts: list[str] = []
+        used = 0
+        cut: list[str] = []
+        dropped: list[str] = []
+        for label, priority, content in ordered:
+            content = str(content)
+            join = len(sep) if parts else 0
+            if used + join + len(content) <= budget:
+                parts.append(content)
+                used += join + len(content)
                 continue
 
-            # Cross-session memory is essential continuity for the next turn.
-            # It must survive budget pressure even when skills/role guidance are
-            # trimmed, so keep a truncated memory block rather than silently
-            # dropping the user's remembered preferences.
-            if label == "memory_block":
-                remaining = max_tokens - current_tokens
-                if remaining <= 0:
-                    logger.debug("ContextAssembler: dropped %s (%d tokens) to fit budget", label, size)
-                    dropped_labels.append(label)
-                    continue
-                # Slice in the ruler's own units (chars), not tiktoken
-                # tokens: the budget is accounted in chars/3, so a
-                # tiktoken-token slice systematically overshoots it.
-                truncated_text = content[:remaining * _ESTIMATOR_CHARS_PER_TOKEN]
+            # Cross-session memory is essential continuity for the next turn, and priority 0 is the rules the
+            # agent runs on: both are kept truncated rather than dropped.
+            if label == "memory_block" or priority == 0:
+                remaining_chars = budget - used - join
+                # Compact on purpose: the note at the end already says how much was cut, and a long header costs
+                # tokens the section itself needed (and consumed a whole tiny budget).
+                header = f"[SECTION TRUNCATED: {label}]\n"
+                fence_fix = "\n```\n[Code block truncated]"
+                room = remaining_chars - len(header)
+                # The first critical section never vanishes: with a budget smaller than even its header, it keeps a
+                # minimal slice (the one documented overshoot) instead of leaving an empty prompt.
+                forced = priority == 0 and not parts
+                if forced and room < _MIN_CRITICAL_CHARS:
+                    room = _MIN_CRITICAL_CHARS
+                if room > 0:
+                    body = content[:room]
+                    if body.count("```") % 2 != 0:
+                        body = content[: max(0, room - len(fence_fix))]
+                        if body.count("```") % 2 != 0:
+                            body += fence_fix
+                    truncated = header + body
+                    if forced or used + join + len(truncated) <= budget:
+                        parts.append(truncated)
+                        used += join + len(truncated)
+                        cut.append(label)
+                        continue
+            logger.debug("ContextAssembler: dropped %s (~%d tokens) to fit budget", label, len(content) // _ESTIMATOR_CHARS_PER_TOKEN)
+            dropped.append(label)
 
-                if truncated_text.count("```") % 2 != 0:
-                    truncated_text += "\n```\n[Code block truncated]"
-
-                truncated = (
-                    f"[SECTION TRUNCATED: {label} exceeded token budget "
-                    f"({size} tokens > {remaining} remaining)]\n"
-                    + truncated_text
-                )
-                included.append((label, truncated))
-                current_tokens = self._estimate_tokens(truncated)
-                last_truncate_label = label
-                continue
-
-            if priority == 0:
-                remaining = max_tokens - current_tokens
-                if remaining > 0:
-                    truncated_text = content[:remaining * _ESTIMATOR_CHARS_PER_TOKEN]
-
-                    if truncated_text.count("```") % 2 != 0:
-                        truncated_text += "\n```\n[Code block truncated]"
-
-                    truncated = (
-                        f"[SECTION TRUNCATED: {label} exceeded token budget "
-                        f"({size} tokens > {remaining} remaining)]\n"
-                        + truncated_text
-                    )
-                    included.append((label, truncated))
-                    current_tokens = self._estimate_tokens(truncated)
-                else:
-                    dropped_labels.append(label)
-                last_truncate_label = label
-            else:
-                logger.debug("ContextAssembler: dropped %s (%d tokens) to fit budget", label, size)
-                dropped_labels.append(label)
-
-        included_strings = [str(content) for _, content in included]
-        system = "\n\n".join(included_strings)
-        if last_truncate_label:
-            omitted = "".join(f"\n- {label} (omitted)" for label in dropped_labels)
-            system += (
-                "\n\n[NOTE: Some sections were truncated or omitted "
-                f"to fit the context window budget.{omitted}]"
-            )
-        current_tokens = self._estimate_tokens(system)
-        return system, current_tokens
+        system = sep.join(parts)
+        if cut or dropped:
+            lines = "".join([f"\n- {label} (truncated)" for label in cut] + [f"\n- {label} (omitted)" for label in dropped])
+            # The note goes inside the budget whenever it can: it was reserved for, so in every real configuration
+            # it fits. With a budget smaller than the note itself, a compact note is tried; if a truncation
+            # happened, the full note is still appended, because telling the model that its rules or memory were
+            # cut matters more than a few tokens. A pure drop at such a budget gets a note only if one fits.
+            full = f"{sep}{note_head}{lines}]"
+            compact = f"{sep}[NOTE: sections cut to fit the budget]"
+            if len(system) + len(full) <= limit:
+                system += full
+            elif len(system) + len(compact) <= limit:
+                system += compact
+            elif cut:
+                system += full
+        return system, self._estimate_tokens(system)
 
     def invalidate_cache(self) -> None:
         """Clear the prompt cache. Call when context changes."""
