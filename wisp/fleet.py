@@ -18,6 +18,9 @@ from pathlib import Path
 
 ROLES = frozenset({"orchestrator", "harness", "runtime", "agent", "tool", "app", "archive"})
 MANIFEST_NAME = "wisp.fleet.toml"
+MANAGED_BY = "wisp-fleet"
+_WORKER_ROLES = frozenset({"agent", "tool", "harness", "runtime", "app"})
+_RISK_LEVELS = frozenset({"read", "write", "exec", "network", "privileged"})
 _SKIP_DIRS = frozenset({"node_modules", "__pycache__", "build", "dist", "site-packages"})
 _GIT_TIMEOUT_S = 30
 
@@ -27,11 +30,23 @@ class FleetManifestError(ValueError):
 
 
 @dataclass(frozen=True)
+class WorkerSpec:
+    """How wisp reaches a repo as an MCP stdio server (ADR 2026-10-04-fleet-worker-contract)."""
+
+    command: list[str]
+    env: dict[str, str] = field(default_factory=dict)
+    timeout_seconds: int = 30
+    tool_risk: dict[str, str] = field(default_factory=dict)
+    disabled_tools: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class RepoSpec:
     name: str
     path: Path
     role: str
     remote_required: bool
+    worker: WorkerSpec | None = None
 
 
 @dataclass(frozen=True)
@@ -98,7 +113,8 @@ def load_manifest(path: Path) -> Manifest:
         remote_required = raw.get("remote_required", role != "archive")
         if not isinstance(remote_required, bool):
             raise FleetManifestError(f"repo {name!r}: remote_required must be true or false")
-        repos.append(RepoSpec(name, _resolve(raw["path"], base), role, remote_required))
+        worker = _parse_worker(name, role, raw["worker"]) if "worker" in raw else None
+        repos.append(RepoSpec(name, _resolve(raw["path"], base), role, remote_required, worker))
 
     orchestrators = [r.name for r in repos if r.role == "orchestrator"]
     if len(orchestrators) != 1:
@@ -106,6 +122,83 @@ def load_manifest(path: Path) -> Manifest:
 
     scan = [_resolve(s, base) for s in data.get("fleet", {}).get("scan", [])]
     return Manifest(repos, scan)
+
+
+def _parse_worker(name: str, role: str, raw: object) -> WorkerSpec:
+    if role not in _WORKER_ROLES:
+        raise FleetManifestError(f"repo {name!r}: a worker table is not allowed on role {role!r}")
+    if not isinstance(raw, dict):
+        raise FleetManifestError(f"repo {name!r}: worker must be a table")
+    command = raw.get("command")
+    if not isinstance(command, list) or not command or not all(isinstance(c, str) and c for c in command):
+        raise FleetManifestError(f"repo {name!r}: worker.command must be a non-empty list of strings")
+    env = raw.get("env", {})
+    if not isinstance(env, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in env.items()):
+        raise FleetManifestError(f"repo {name!r}: worker.env must be a table of strings")
+    timeout = raw.get("timeout_seconds", 30)
+    if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0:
+        raise FleetManifestError(f"repo {name!r}: worker.timeout_seconds must be a positive integer")
+    risk = raw.get("tool_risk", {})
+    if not isinstance(risk, dict) or any(v not in _RISK_LEVELS for v in risk.values()):
+        raise FleetManifestError(f"repo {name!r}: worker.tool_risk values must be one of {sorted(_RISK_LEVELS)}; unknown risk level")
+    disabled = raw.get("disabled_tools", [])
+    if not isinstance(disabled, list) or not all(isinstance(t, str) for t in disabled):
+        raise FleetManifestError(f"repo {name!r}: worker.disabled_tools must be a list of strings")
+    return WorkerSpec(list(command), dict(env), timeout, dict(risk), list(disabled))
+
+
+def _expand(token: str) -> str:
+    return os.path.expanduser(token) if token.startswith("~") else token
+
+
+def render_mcp_servers(manifest: Manifest) -> list[dict[str, object]]:
+    """The MCP entries wisp's `mcp.json` should hold for the manifest's workers.
+
+    Rendering only describes a server. Wisp's MCP trust model (origin pinning, first-use consent, scopes)
+    still decides whether it may run, and the first use still asks the human.
+    """
+    entries: list[dict[str, object]] = []
+    for repo in manifest.repos:
+        w = repo.worker
+        if w is None:
+            continue
+        entry: dict[str, object] = {
+            "name": repo.name,
+            "transport": "stdio",
+            "command": _expand(w.command[0]),
+            "args": [_expand(a) for a in w.command[1:]],
+            "env": {k: _expand(v) for k, v in w.env.items()},
+            "timeout_seconds": w.timeout_seconds,
+            "tool_risk": dict(w.tool_risk),
+            "managedBy": MANAGED_BY,
+        }
+        if w.disabled_tools:
+            entry["disabled_tools"] = list(w.disabled_tools)
+        entries.append(entry)
+    return entries
+
+
+def merge_mcp_config(existing: object, managed: list[dict[str, object]]) -> object:
+    """Fold the fleet's entries into an existing config without touching anyone else's servers."""
+    if existing is None:
+        servers: list[object] = []
+        container: dict[str, object] | None = None
+    elif isinstance(existing, list):
+        servers, container = list(existing), None
+    elif isinstance(existing, dict) and isinstance(existing.get("mcpServers"), list):
+        servers, container = list(existing["mcpServers"]), existing
+    else:
+        raise FleetManifestError("existing MCP config has an unrecognised shape; refusing to overwrite it")
+
+    kept = [s for s in servers if not (isinstance(s, dict) and s.get("managedBy") == MANAGED_BY)]
+    taken = {s.get("name") for s in kept if isinstance(s, dict)}
+    for entry in managed:
+        if entry["name"] in taken:
+            raise FleetManifestError(f"MCP server {entry['name']!r} is already defined by hand; rename one of them")
+    merged = [*kept, *managed]
+    if container is None:
+        return merged
+    return {**container, "mcpServers": merged}
 
 
 def _resolve(raw: str, base: Path) -> Path:
@@ -245,11 +338,12 @@ def _suffix(s: RepoStatus, p: Problem) -> str:
 
 def run_fleet(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="wisp fleet", description="Read-only status over the repos in wisp.fleet.toml.")
-    parser.add_argument("action", choices=["status", "doctor"])
+    parser.add_argument("action", choices=["status", "doctor", "workers"])
     parser.add_argument("--manifest", help=f"path to {MANIFEST_NAME}")
     parser.add_argument("--json", action="store_true", help="machine-readable output")
     parser.add_argument("--strict", action="store_true", help="exit 1 when any repo has a problem")
     parser.add_argument("--fetch", action="store_true", help="git fetch each repo first (updates remote refs only)")
+    parser.add_argument("--write", metavar="MCP_JSON", help="workers: merge the rendered servers into this MCP config")
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
@@ -260,6 +354,9 @@ def run_fleet(argv: list[str]) -> int:
     except FleetManifestError as exc:
         print(f"wisp fleet: {exc}", file=sys.stderr)
         return 2
+
+    if args.action == "workers":
+        return _run_workers(manifest, args.write)
 
     statuses = [repo_status(r.name, r.path, remote_required=r.remote_required, fetch=args.fetch) for r in manifest.repos]
     unmanaged = discover_unmanaged(manifest.scan, [r.path for r in manifest.repos]) if args.action == "doctor" else None
@@ -275,3 +372,31 @@ def run_fleet(argv: list[str]) -> int:
 
     failing = any(s.problems for s in statuses) or bool(unmanaged)
     return 1 if args.strict and failing else 0
+
+
+def _run_workers(manifest: Manifest, write: str | None) -> int:
+    managed = render_mcp_servers(manifest)
+    if write is None:
+        print(json.dumps(managed, indent=2))
+        return 0
+
+    target = Path(write).expanduser()
+    existing: object = None
+    if target.exists():
+        try:
+            existing = json.loads(target.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"wisp fleet: {target}: cannot read existing MCP config ({exc}); left untouched", file=sys.stderr)
+            return 2
+    try:
+        merged = merge_mcp_config(existing, managed)
+    except FleetManifestError as exc:
+        print(f"wisp fleet: {target}: {exc}", file=sys.stderr)
+        return 2
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(target.name + ".tmp")
+    tmp.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp, target)
+    print(f"wrote {len(managed)} worker server(s) to {target}; wisp still asks for consent on first use")
+    return 0

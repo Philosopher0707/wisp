@@ -48,6 +48,24 @@ role = "runtime"
 name = "always-on-worker"
 path = "~/active/workspace/always-on-worker"
 role = "agent"
+# Reached by wisp as an MCP stdio server (docs/adr/2026-10-04-fleet-worker-contract.md).
+# The shim has no approve tool: a human grants approvals with the always-on-worker CLI.
+# AOW_SPEC currently points at the repo's example spec; replace it with a real one before dispatching jobs.
+# No AOW_AUDIT_LOG yet: the audit chain needs a key the human sets up, so decisions are not evidence until then.
+[repo.worker]
+command = ["/Library/Frameworks/Python.framework/Versions/3.12/bin/python3", "-m", "always_on_worker.mcp_server"]
+timeout_seconds = 120
+[repo.worker.env]
+AOW_SPEC = "~/active/workspace/always-on-worker/examples/worker.json"
+AOW_EVENTS = "~/.local/state/wisp-fleet/always-on-worker/events.jsonl"
+PYTHONPATH = "~/active/workspace/always-on-worker/src"
+[repo.worker.tool_risk]
+worker_status = "read"
+worker_plan = "read"
+worker_events = "read"
+worker_approvals = "read"
+worker_audit = "read"
+worker_run = "exec"
 
 [[repo]]
 name = "db-agent"

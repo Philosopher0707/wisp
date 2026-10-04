@@ -1104,7 +1104,7 @@ _SUBCOMMAND_HELP: dict[str, str] = {
     "progress": 'Usage: wisp progress\n\nShow current plan progress.',
     "diagnose": 'Usage: wisp diagnose <file|->\n\nDiagnose an error from a file or stdin.',
     "locks": 'Usage: wisp locks\n\nShow active file locks in the workspace.',
-    "fleet": 'Usage: wisp fleet <status|doctor> [--manifest FILE] [--json] [--strict] [--fetch]\n\nRead-only git status over every repo in wisp.fleet.toml; doctor also lists repos under the scan roots that the manifest omits.',
+    "fleet": 'Usage: wisp fleet <status|doctor|workers> [--manifest FILE] [--json] [--strict] [--fetch] [--write MCP_JSON]\n\nRead-only git status over every repo in wisp.fleet.toml; doctor also lists repos under the scan roots that the manifest omits; workers renders the MCP servers for repos with a worker table (prints, or merges into MCP_JSON with --write).',
     "changes": 'Usage: wisp changes\n\nShow changes made in this session.',
     "acp": 'Usage: wisp acp\n\nRun Wisp as an ACP external agent (Zed editor integration).',
     "server": (
