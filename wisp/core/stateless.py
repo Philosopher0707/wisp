@@ -453,30 +453,8 @@ class WispAgentCore:
         # Build system prompt with full context awareness
         system_prompt = self._build_system_prompt(session, query=prompt)
 
-        # Get tools — built-in + extensions. Role-restricted subagents only
-        # get their allowed subset (contract.tools), not the full toolset.
-        tools = self._get_tool_schemas()
-        allowed = session.get("allowed_tools")
-        if isinstance(allowed, (list, tuple, set)) and "all" not in {str(a).lower() for a in allowed}:
-            allowed_set = {str(a) for a in allowed}
-
-            def _schema_name(t: Any) -> str:
-                if isinstance(t, dict):
-                    fn = t.get("function")
-                    if isinstance(fn, dict) and fn.get("name"):
-                        return str(fn["name"])
-                return str(t.get("name", "")) if isinstance(t, dict) else ""
-
-            tools = [t for t in tools if _schema_name(t) in allowed_set]
-
-        # 13-I2 capability partition: host-owned visibility filter over
-        # provider-bound schemas. Flag OFF (default) preserves the exact
-        # legacy surface; rollback needs no code change.
-        if self.config is not None and getattr(
-                self.config, "capability_filtering", False) is True:
-            from wisp.capability_filter import filter_schemas_for_mode
-            tools = filter_schemas_for_mode(
-                tools, getattr(self.config, "permission_mode", "auto_edit"))
+        # Tools: built-in + extensions, narrowed for role-restricted subagents (see _provider_tools).
+        tools = self._provider_tools(session)
 
         max_iterations = getattr(self.config, "max_iterations", 30)
 
@@ -1293,6 +1271,40 @@ class WispAgentCore:
         else:
             async for event in _call_provider():
                 yield event
+
+    def _provider_tools(self, session: dict[str, Any]) -> list[dict[str, Any]]:
+        """The tool schemas this session's provider calls carry: built-in plus extensions, narrowed to a role's
+        allowed subset (``session["allowed_tools"]``) and then by the capability partition, when that is on."""
+        tools = self._get_tool_schemas()
+        allowed = session.get("allowed_tools")
+        if isinstance(allowed, (list, tuple, set)) and "all" not in {str(a).lower() for a in allowed}:
+            allowed_set = {str(a) for a in allowed}
+
+            def _schema_name(t: Any) -> str:
+                if isinstance(t, dict):
+                    fn = t.get("function")
+                    if isinstance(fn, dict) and fn.get("name"):
+                        return str(fn["name"])
+                return str(t.get("name", "")) if isinstance(t, dict) else ""
+
+            tools = [t for t in tools if _schema_name(t) in allowed_set]
+
+        # 13-I2 capability partition: host-owned visibility filter over
+        # provider-bound schemas. Flag OFF (default) preserves the exact
+        # legacy surface; rollback needs no code change.
+        if self.config is not None and getattr(
+                self.config, "capability_filtering", False) is True:
+            from wisp.capability_filter import filter_schemas_for_mode
+            tools = filter_schemas_for_mode(
+                tools, getattr(self.config, "permission_mode", "auto_edit"))
+        return tools
+
+    def prompt_overhead_chars(self, session: dict[str, Any]) -> int:
+        """Characters every provider call of this session carries before any history: the system prompt and the
+        provider-bound tool schemas. Spend accounting multiplies this by the number of calls."""
+        import json
+
+        return len(self._build_system_prompt(session)) + len(json.dumps(self._provider_tools(session), default=str))
 
     def _build_system_prompt(self, session: dict[str, Any], query: str | None = None) -> str:
         """Build rich system prompt from session context."""

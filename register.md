@@ -22,7 +22,7 @@
 > `—` therefore means *no catch inside these roots*, which is **not** the same claim as
 > *unhandled* — see §(c).
 >
-> Generated 2026-09-30 at `2c0afe5` · **47 classes** · **258 raise sites** · **45 catch sites** · **7 with no test naming them**.
+> Generated 2026-09-30 at `f5f7db4` · **47 classes** · **258 raise sites** · **45 catch sites** · **7 with no test naming them**.
 
 ---
 
@@ -34,8 +34,8 @@
 | `ApprovalCancelled` | `Exception` | verdict | approval | `wisp/exceptions.py:17` | 1 | `wisp/transport/cli.py:945` | `wisp/core/approval_gate.py:117`, `wisp/core/approval_gate.py:146`, `wisp/tool_executor.py:960` | — |
 | `ApprovalTimeout` | `Exception` | verdict | approval | `wisp/exceptions.py:33` | 1 | `wisp/transport/cli.py:908` | `wisp/core/approval_gate.py:127`, `wisp/tool_executor.py:973` | — |
 | `_TransientOpenError` | `Exception` | recoverable | provider | `wisp/core/provider_stream.py:40` | 1 | `wisp/core/provider_stream.py:167` | `wisp/core/provider_stream.py:267` | — |
-| `FirstTokenTimeout` | `asyncio.TimeoutError` | recoverable | subagent | `wisp/multi_agent/_runner.py:151` | 1 | `wisp/multi_agent/_runner.py:641` | `wisp/multi_agent/_runner.py:412`, `wisp/multi_agent/_runner.py:715`, `wisp/multi_agent/_runner.py:880` | — |
-| `CircuitOpenError` | `Exception` | recoverable | provider | `wisp/infra/circuit_breaker.py:175` | 2 | `wisp/infra/circuit_breaker.py:93` | `wisp/core/stateless.py:1275` | — |
+| `FirstTokenTimeout` | `asyncio.TimeoutError` | recoverable | subagent | `wisp/multi_agent/_runner.py:151` | 1 | `wisp/multi_agent/_runner.py:644` | `wisp/multi_agent/_runner.py:415`, `wisp/multi_agent/_runner.py:718`, `wisp/multi_agent/_runner.py:884` | — |
+| `CircuitOpenError` | `Exception` | recoverable | provider | `wisp/infra/circuit_breaker.py:175` | 2 | `wisp/infra/circuit_breaker.py:93` | `wisp/core/stateless.py:1253` | — |
 | `CircuitBreakerOpenError` | `Exception` | recoverable | subagent | `wisp/multi_agent/_circuit_breaker.py:102` | 1 | `wisp/multi_agent/_circuit_breaker.py:44` | — | — |
 | `OllamaError` | `Exception` | recoverable | provider | `wisp/ollama_client.py:46` | 10 | `wisp/ollama_client.py:273` | `wisp/ollama_client.py:288`, `wisp/ollama_client.py:427` | — |
 | `OllamaConfigurationError` | `OllamaError` | recoverable | provider | `wisp/ollama_client.py:72` | 2 | `wisp/ollama_client.py:347` | — | ADR-0038 |
@@ -51,7 +51,7 @@
 | `TrustViolation` | `RuntimeError` | guard | context | `wisp/core/context_trust.py:95` | 1 | `wisp/core/context_trust.py:287` | — | — |
 | `ContextOverflow` | `RuntimeError` | guard | context | `wisp/core/context_trust.py:104` | 1 | `wisp/core/context_trust.py:314` | — | — |
 | `CriteriaDeclarationRejected` | `Exception` | guard | turn | `wisp/core/convergence.py:673` | 9 | `wisp/core/convergence.py:782` | `wisp/autonomous.py:325` | ADR-0050 |
-| `ReplayDivergence` | `RuntimeError` | guard | persist | `wisp/core/replay_digest.py:64` | 2 | `wisp/core/replay_digest.py:125` | `wisp/core/runtime.py:1841` | — |
+| `ReplayDivergence` | `RuntimeError` | guard | persist | `wisp/core/replay_digest.py:64` | 2 | `wisp/core/replay_digest.py:125` | `wisp/core/runtime.py:1845` | — |
 | `ToolError` | `Exception` | fault | tool | `wisp/tools/errors.py:8` | 78 | `agent/fast_tools.py:47` | `agent/tools/batch_reader.py:386`, `agent/tools/batch_reader.py:629`, `wisp/cli/dispatcher.py:374`, `wisp/tool_executor.py:364`, `wisp/tool_executor.py:1461`, `wisp/tool_executor.py:1574`, `wisp/tools/bash.py:160`, `wisp/tools/registry.py:1265`, `wisp/tools/registry.py:1407` | — |
 | `PlanError` | `Exception` | fault | plan | `wisp/graph/planner.py:72` | 28 | `wisp/graph/planner.py:87` | `wisp/graph/cli.py:300`, `wisp/graph/cli.py:341`, `wisp/graph/planner.py:314`, `wisp/graph/planner.py:396` | — |
 | `LSPServerError` | `Exception` | fault | tool | `wisp/lsp/client.py:24` | 16 | `wisp/lsp/client.py:78` | `wisp/lsp/client.py:529`, `wisp/lsp/manager.py:174`, `wisp/lsp/manager.py:188` | — |
