@@ -75,6 +75,7 @@ ROWS: list[tuple[str, str, str, str, str, str]] = [
     ("BoundsError", "wisp/runtime/bounds.py:59", "RuntimeError", "guard", "startup", "—"),
     ("CostError", "wisp/runtime/cost.py:48", "RuntimeError", "guard", "turn", "—"),
     ("UnknownModel", "wisp/runtime/cost.py:54", "CostError", "guard", "turn", "—"),
+    ("FleetManifestError", "wisp/fleet.py:28", "ValueError", "guard", "cli", "—"),
     ("IdempotencyError", "wisp/runtime/idempotency.py:57", "RuntimeError", "guard", "tool", "—"),
     ("KeyReuse", "wisp/runtime/idempotency.py:63", "IdempotencyError", "guard", "tool", "—"),
     ("UnstableKey", "wisp/runtime/idempotency.py:78", "IdempotencyError", "guard", "tool", "—"),
