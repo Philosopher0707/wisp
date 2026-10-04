@@ -22,7 +22,7 @@
 > `—` therefore means *no catch inside these roots*, which is **not** the same claim as
 > *unhandled* — see §(c).
 >
-> Generated 2026-09-30 at `34e3de7` · **47 classes** · **258 raise sites** · **43 catch sites** · **8 with no test naming them**.
+> Generated 2026-09-30 at `612bdb0` · **47 classes** · **258 raise sites** · **45 catch sites** · **7 with no test naming them**.
 
 ---
 
@@ -34,7 +34,7 @@
 | `ApprovalCancelled` | `Exception` | verdict | approval | `wisp/exceptions.py:17` | 1 | `wisp/transport/cli.py:945` | `wisp/core/approval_gate.py:117`, `wisp/core/approval_gate.py:146`, `wisp/tool_executor.py:960` | — |
 | `ApprovalTimeout` | `Exception` | verdict | approval | `wisp/exceptions.py:33` | 1 | `wisp/transport/cli.py:908` | `wisp/core/approval_gate.py:127`, `wisp/tool_executor.py:973` | — |
 | `_TransientOpenError` | `Exception` | recoverable | provider | `wisp/core/provider_stream.py:40` | 1 | `wisp/core/provider_stream.py:167` | `wisp/core/provider_stream.py:267` | — |
-| `FirstTokenTimeout` | `asyncio.TimeoutError` | recoverable | subagent | `wisp/multi_agent/_runner.py:131` | 1 | `wisp/multi_agent/_runner.py:618` | `wisp/multi_agent/_runner.py:389` | — |
+| `FirstTokenTimeout` | `asyncio.TimeoutError` | recoverable | subagent | `wisp/multi_agent/_runner.py:131` | 1 | `wisp/multi_agent/_runner.py:618` | `wisp/multi_agent/_runner.py:389`, `wisp/multi_agent/_runner.py:687`, `wisp/multi_agent/_runner.py:847` | — |
 | `CircuitOpenError` | `Exception` | recoverable | provider | `wisp/infra/circuit_breaker.py:175` | 2 | `wisp/infra/circuit_breaker.py:93` | `wisp/core/stateless.py:1275` | — |
 | `CircuitBreakerOpenError` | `Exception` | recoverable | subagent | `wisp/multi_agent/_circuit_breaker.py:102` | 1 | `wisp/multi_agent/_circuit_breaker.py:44` | — | — |
 | `OllamaError` | `Exception` | recoverable | provider | `wisp/ollama_client.py:46` | 10 | `wisp/ollama_client.py:273` | `wisp/ollama_client.py:288`, `wisp/ollama_client.py:427` | — |
@@ -122,7 +122,7 @@ the derivation refuses if a row's phase is absent here, or a phase here has no r
 
 ## (c) The raise/catch asymmetry
 
-**258 raise sites, 43 catch sites.** The asymmetry is large and it is mostly not a defect: a library-style module raises and lets its caller decide, and the caller is often outside the three roots this page covers.
+**258 raise sites, 45 catch sites.** The asymmetry is large and it is mostly not a defect: a library-style module raises and lets its caller decide, and the caller is often outside the three roots this page covers.
 
 What the asymmetry **does** let this page state precisely is the zero:
 
@@ -138,13 +138,13 @@ may mean the caller is out of scope. `raise_sites: 0` is strong: an AST walk ove
 whole runtime found no `raise` of that name anywhere, so the class cannot fire in this
 tree at all.
 
-**8 distinct names — 8 of 47 rows — are named by no test file.** Derived by
+**7 distinct names — 7 of 47 rows — are named by no test file.** Derived by
 searching `tests/` for each name, so it is a floor and not a proof: a test can exercise a
 path without ever naming the exception. The list is a place to look, not a verdict.
 
 The name and row counts differ because `SchemaValidationError` is defined twice (§Findings); a name-keyed count would say 8 and a row-keyed count 9, and only the pair is honest.
 
-`CancelledTurnError`, `CircuitBreakerOpenError`, `EventStreamError`, `FirstTokenTimeout`, `LSPServerError`, `LadderExhausted`, `ToolDeniedError`, `_TransientOpenError`
+`CancelledTurnError`, `CircuitBreakerOpenError`, `EventStreamError`, `LSPServerError`, `LadderExhausted`, `ToolDeniedError`, `_TransientOpenError`
 
 ---
 
@@ -170,7 +170,7 @@ The name and row counts differ because `SchemaValidationError` is defined twice 
 
 - **`adr` is `—` for 45 of 47 rows, and that is a limit, not a claim.** Only two rows carry a decision, and each is cited because the class's **own docstring** names it — `ADR-0038` for `OllamaConfigurationError`, `ADR-0050` for `CriteriaDeclarationRejected`. Most of these exceptions arrived in a phase whose ADR exists but does not name the class. **The provenance was not traced**, and a plausible ADR is worse than a blank — guessing a decision is the defect this corpus exists to prevent. `—` states *not pinned*, not *none exists*.
 
-- **`tripwire` is derived, and a derived tripwire is weaker than a declared one.** The column is the first `tests/` file that names the exception, found by search. It shows what is *referenced*, not what is *asserted*: a test that imports a name and never exercises the raise still counts. It is included because the zero is informative — 8 of 47 classes are named by no test file at all — and it is labelled derived so nobody reads it as a guard. **The number is a floor.** `LSPServerError` has 16 raise sites and no test names it; that is a live path with no assertion on its failure shape, and it is the kind of zero this column exists to surface.
+- **`tripwire` is derived, and a derived tripwire is weaker than a declared one.** The column is the first `tests/` file that names the exception, found by search. It shows what is *referenced*, not what is *asserted*: a test that imports a name and never exercises the raise still counts. It is included because the zero is informative — 7 of 47 classes are named by no test file at all — and it is labelled derived so nobody reads it as a guard. **The number is a floor.** `LSPServerError` has 16 raise sites and no test names it; that is a live path with no assertion on its failure shape, and it is the kind of zero this column exists to surface.
 
 ### What this page did not do
 

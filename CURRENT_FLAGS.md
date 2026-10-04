@@ -14,7 +14,7 @@
 > `CURRENT_FINDINGS.md` (every recorded finding and its status), `CURRENT_OPEN_ITEMS.md`
 > (what is open). All four are derived; none may decide.
 >
-> Generated 2026-09-25 at `34e3de7` · **26 switches** (23 `bool` settings in `WispConfig` + 3 read from the environment) · **11 ON**, 15 OFF.
+> Generated 2026-09-25 at `612bdb0` · **26 switches** (23 `bool` settings in `WispConfig` + 3 read from the environment) · **11 ON**, 15 OFF.
 
 ---
 
