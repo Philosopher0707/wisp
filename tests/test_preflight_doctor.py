@@ -8,6 +8,9 @@ banner/detailed formatters.
 from __future__ import annotations
 
 import asyncio
+import os
+import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -27,13 +30,47 @@ from wisp.core.doctor import (
     run_preflight_sync,
 )
 
+# A sandbox image whose repository name is not in `_BARE_OS_IMAGE_REPOS`, so the build-sequence
+# check does not short-circuit to WARN on a project image.
+_PROJECT_IMAGE = "wisp-sandbox:py311"
+
+
+@pytest.fixture(scope="module")
+def hermetic_ws() -> str:
+    """A workspace that satisfies `build_sequence` without depending on the real repo.
+
+    The check resolves `python3`/`pytest` through `credential_free_env(workspace=ws)`, which
+    prepends ``<ws>/.venv/bin`` to PATH. A developer running the suite from a repo whose `.venv`
+    exists sees OK; CI checks out a tree with no `.venv` at all (`actions/setup-python` installs
+    to a tool cache, not the workspace) and saw FAIL — "no .venv in the workspace". The tests
+    below assert on the *contract* of the check, so they must construct that contract instead
+    of inheriting whichever machine they run on.
+
+    Executables are empty shell stubs: the check only runs `shutil.which`, never the binary.
+    """
+    ws = Path(tempfile.mkdtemp(prefix="wisp-doctor-"))
+    bindir = ws / ".venv" / "bin"
+    bindir.mkdir(parents=True)
+    for name in ("python3", "python", "pytest"):
+        stub = bindir / name
+        stub.write_text("#!/bin/sh\nexit 0\n")
+        stub.chmod(0o755)
+    return str(ws)
+
+
+@pytest.fixture
+def project_image(monkeypatch: pytest.MonkeyPatch) -> str:
+    """Pin a non-bare-OS sandbox image so the check reaches its OK branch."""
+    monkeypatch.setenv("WISP_SANDBOX_IMAGE", _PROJECT_IMAGE)
+    return _PROJECT_IMAGE
+
 
 # ── Top-level: 6/6 must be healthy ──────────────────────────────────
 
 
 class TestPreflightAllChecksPass:
-    def test_all_five_checks_pass(self):
-        report = run_preflight_sync(timeout_s=2.0)
+    def test_all_five_checks_pass(self, hermetic_ws, project_image):
+        report = run_preflight_sync(workspace=hermetic_ws, timeout_s=20.0)
         statuses = {c.name: c.status for c in report.checks}
         assert set(statuses) == set(CHECK_NAMES)
         for name, status in statuses.items():
@@ -57,8 +94,8 @@ class TestPreflightAllChecksPass:
             "boot_context",
         )
 
-    def test_banner_healthy(self):
-        report = run_preflight_sync(timeout_s=2.0)
+    def test_banner_healthy(self, hermetic_ws, project_image):
+        report = run_preflight_sync(workspace=hermetic_ws, timeout_s=20.0)
         assert report.banner == format_banner(report)
         assert "7/7" in report.banner
         assert report.banner.startswith("✓")
@@ -69,8 +106,8 @@ class TestPreflightAllChecksPass:
         for name in CHECK_NAMES:
             assert name in text
 
-    def test_report_to_dict_is_jsonable(self):
-        report = run_preflight_sync(timeout_s=2.0)
+    def test_report_to_dict_is_jsonable(self, hermetic_ws, project_image):
+        report = run_preflight_sync(workspace=hermetic_ws, timeout_s=20.0)
         d = report.to_dict()
         assert d["passed"] == 7
         assert d["total"] == 7
@@ -294,8 +331,6 @@ class TestTheBuildSequenceCheck:
 
     @staticmethod
     def _run(workspace, image=None):
-        import os
-
         from wisp.core.doctor import _check_build_sequence
 
         had = "WISP_SANDBOX_IMAGE" in os.environ
@@ -318,23 +353,23 @@ class TestTheBuildSequenceCheck:
         report = run_preflight_sync(timeout_s=2.0)
         assert any(c.name == "build_sequence" for c in report.checks)
 
-    def test_ok_for_a_workspace_with_a_venv(self):
-        result = self._run(self.REPO, image="wisp-sandbox:py311")
+    def test_ok_for_a_workspace_with_a_venv(self, hermetic_ws):
+        result = self._run(hermetic_ws, image="wisp-sandbox:py311")
         assert result.status is CheckStatus.OK
         assert result.details["python_is_project_venv"] is True
         assert result.details["pytest"]
 
-    def test_a_bare_os_image_warns(self):
+    def test_a_bare_os_image_warns(self, hermetic_ws):
         """`run_bash` executes inside the container, so a bare base means no interpreter at all."""
-        result = self._run(self.REPO, image="ubuntu:22.04")
+        result = self._run(hermetic_ws, image="ubuntu:22.04")
         assert result.status is CheckStatus.WARN
         assert result.details["sandbox_image_is_bare_os"] is True
 
-    def test_a_project_image_is_not_flagged_as_bare(self):
+    def test_a_project_image_is_not_flagged_as_bare(self, hermetic_ws):
         """The check matches the *repository* part of the reference, so an image built from a bare
         base under a project name is not flagged — and a name-based "contains python" test would
         have missed `wisp-sandbox:py311` entirely."""
-        result = self._run(self.REPO, image="wisp-sandbox:py311")
+        result = self._run(hermetic_ws, image="wisp-sandbox:py311")
         assert result.details["sandbox_image_is_bare_os"] is False
 
     def test_no_venv_fails(self, tmp_path):
