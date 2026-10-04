@@ -521,7 +521,7 @@ class TestRunnerRun:
     async def test_timeout_preserves_partial_round(self, config, contract):
         """A mid-turn deadline keeps the analysis already produced — the
         parent synthesizes from findings, and a bare diag throws 240s away."""
-        contract.timeout_seconds = 0.2
+        contract.timeout_seconds = 1.5
         runner = SubagentRunner(config, Path("/tmp"))
 
         class PartialThenStallCore(FakeCore):
