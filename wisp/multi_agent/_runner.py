@@ -684,6 +684,10 @@ class SubagentRunner:
                             error_message = str(_event_field(event, "message") or "turn failed")
                             if not _event_field(event, "recoverable", True):
                                 saw_fatal_error = True
+            except FirstTokenTimeout:
+                # A stalled first token is its own failure, handled (and worded) by the caller;
+                # it subclasses TimeoutError, so without this it would read as a contract deadline.
+                raise
             except asyncio.TimeoutError:
                 timed_out_mid_run = True
                 error_message = error_message or (
@@ -840,6 +844,10 @@ class SubagentRunner:
                         error_message = str(_event_field(event, "message") or "turn failed")
                         if not _event_field(event, "recoverable", True):
                             saw_fatal_error = True
+        except FirstTokenTimeout:
+            # A stalled first token is its own failure, handled (and worded) by the caller;
+            # it subclasses TimeoutError, so without this it would read as a contract deadline.
+            raise
         except asyncio.TimeoutError:
             timed_out_mid_run = True
             error_message = error_message or (
