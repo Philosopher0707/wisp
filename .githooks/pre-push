@@ -1,0 +1,19 @@
+#!/bin/sh
+# Fleet check before every push: shows which repos in wisp.fleet.toml are dirty, unpushed,
+# remote-less or unmanaged. Advisory by default so a dirty sibling repo never blocks an unrelated push;
+# set WISP_FLEET_ENFORCE=1 to make any problem block the push.
+# Enable once per clone:  git config core.hooksPath .githooks
+if [ -n "$WISP_FLEET_CMD" ]; then
+    cmd="$WISP_FLEET_CMD"
+elif command -v wisp >/dev/null 2>&1; then
+    cmd="wisp"
+else
+    cmd="$(git rev-parse --show-toplevel)/.venv/bin/python -m wisp"
+fi
+
+if [ "${WISP_FLEET_ENFORCE:-0}" = "1" ]; then
+    $cmd fleet doctor --strict >&2 || { echo "pre-push: fleet has problems (WISP_FLEET_ENFORCE=1); push blocked" >&2; exit 1; }
+else
+    $cmd fleet doctor >&2 || true
+fi
+exit 0
