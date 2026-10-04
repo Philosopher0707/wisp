@@ -124,6 +124,8 @@ _TOOL_TRUNCATION: dict[str, tuple[int, str]] = {
     "read_file": (0, ""),               # never truncate
     "git_status": (0, ""),               # never truncate
     "list_files": (50, " files"),        # keep first N lines, suffix describes items
+    "grep": (60, " matches"),
+    "glob": (50, " files"),
     "git_diff": (100, " lines"),
     "run_bash": (80, " lines"),
     "web_search": (5, " results"),       # keep top 5 result blocks

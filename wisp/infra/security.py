@@ -41,7 +41,7 @@ class PermissionMode(StrEnum):
 
 # Tools that are "safe reads" — allowed in READ_ONLY and ASK_ALL
 _SAFE_READ_TOOLS = frozenset({
-    "read_file", "list_files", "search_codebase", "search_symbols",
+    "read_file", "list_files", "grep", "glob", "search_codebase", "search_symbols",
     "git_status", "git_diff", "git_log", "git_fetch", "gh_pr_view", "gh_pr_list", "gh_pr_checks", "gh_run_failed_logs",
     "lsp_diagnostics", "lsp_definition",
     "lsp_references", "lsp_hover", "lsp_symbols", "web_fetch",
