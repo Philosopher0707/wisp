@@ -41,7 +41,7 @@ ROWS: list[tuple[str, str, str, str, str, str, str, str]] = [
      "journal `assistant_message` / `tool_call` / `tool_result` so replay can reconstruct a turn",
      "—", "ADR-0002", "—"),
     ("turn_spans", "WISP_TURN_SPANS", "ON",
-     "`wisp/composition.py:359`, `wisp/core/runtime.py:1440`",
+     "`wisp/composition.py:369`, `wisp/core/runtime.py:1440`",
      "emit a trace span per turn and per tool call", "—", "ADR-0002", "—"),
 
     # ── P1–P4 ───────────────────────────────────────────────────────────────
@@ -305,7 +305,7 @@ def render() -> str:
     A("   apply to them, and a test double cannot opt out by setting an attribute.")
     A("2. **`verification_loop` has two consumption sites on the turn path**")
     A("   (`wisp/core/stateless.py:530` and `:1301`) and `turn_spans` has two")
-    A("   (`wisp/composition.py:359`, `wisp/core/runtime.py:1440`). ADR-0002 says *\"read at the")
+    A("   (`wisp/composition.py:369`, `wisp/core/runtime.py:1440`). ADR-0002 says *\"read at the")
     A("   consumption site\"* — **plural sites are consistent with the rule**, so this is")
     A("   recorded as a fact rather than a violation. It is worth stating because the brief for")
     A("   this mission paraphrases the rule as *\"read once, at the composition point\"*, which")

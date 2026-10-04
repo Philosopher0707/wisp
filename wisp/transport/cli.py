@@ -428,7 +428,7 @@ def _resolve_full_output(text: str, workspace: str = "") -> str:
     """Swap a collapsed sink preview for the complete log on disk.
 
     The run_bash sink ships the model a ~10-line preview plus a pointer
-    (``[✓ Full output → .agent/logs/run_….log]``); the human terminal
+    (``[<tick> Full output → .agent/logs/run_….log]``); the human terminal
     shows everything, so read the artifact the pointer names. Best-effort:
     unreadable/missing → the preview stands.
     """
