@@ -22,6 +22,7 @@ from wisp.tui.widgets.chat.input_bar import InputBar
 from wisp.tui.widgets.chat.message_list import MessageList
 from wisp.tui.widgets.chat.user_message import UserMessage
 from wisp.tui.widgets.chat.assistant_message import AssistantMessage
+from wisp.tui.widgets.chat.tool_call_card import ToolCallCard
 from wisp.tui.widgets.file_tree.tree_view import FileTree
 from wisp.tui.widgets.file_tree.code_preview import CodePreview
 from wisp.tui.widgets.file_tree.repo_map_summary import RepoMapSummary
@@ -122,6 +123,9 @@ class WorkspaceScreen(Screen):
     ):
         super().__init__(**kwargs)
         self._owned = OwnedTasks()
+        # The card for the tool call currently in flight, so the matching result
+        # lands on the right card. None whenever no call is outstanding.
+        self._pending_tool_card: ToolCallCard | None = None
         self.server_url = server_url
         self.session_id = session_id
         self.wisp_config = config or WispConfig()
@@ -349,10 +353,30 @@ class WorkspaceScreen(Screen):
             pass
 
     async def _on_tool_call(self, name: str, args: dict) -> None:
-        pass
+        """Mount a card for the in-flight tool call and remember it.
+
+        The server pushes tool calls through the callback wired in `on_mount`;
+        without this the run showed assistant text but no tool activity at all.
+        """
+        try:
+            chat = self.query_one("#chat-pane", MessageList)
+            card = ToolCallCard(name, args)
+            # Await the mount for the same reason `_run_local_turn` does: a card
+            # that is not yet committed is not addressable by `_on_tool_result`.
+            await chat.mount(card)
+            self._pending_tool_card = card
+        except Exception:
+            logger.warning("Failed to render tool call %s", name, exc_info=True)
 
     async def _on_tool_result(self, name: str, result: str, duration: float) -> None:
-        pass
+        """Fill in the result on the card mounted by `_on_tool_call`."""
+        card = self._pending_tool_card
+        self._pending_tool_card = None
+        if card is None:
+            logger.warning("Tool result for %s with no matching card", name)
+            return
+        # `duration` arrives in seconds; ToolCallCard renders milliseconds.
+        card.set_result(result, duration * 1000.0)
 
     async def _on_complete(self, session_id: str = "") -> None:
         try:

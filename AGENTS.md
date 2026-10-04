@@ -43,6 +43,7 @@ Guidance for AI coding agents working in the Wisp codebase.
 | `wisp/multi_agent/dag.py` | **Legacy DAG entry point (M8) — `wisp/graph/` is the graph engine** | `TaskNode` / `TaskDAG` / `DAGScheduler` / `DAGResult`. Kept for the two live callers (`orchestrate_dag`, `SubagentOrchestrator.run_dag`); **not** the canonical graph implementation. **ADR-0060 re-scopes its divergence from a blocker to a boundary**: `wisp/graph/` requires a single reachable entrypoint and `TaskDAG` is a general partial order, so the two answer different questions and a re-point would reject inputs `orchestrate_dag` accepts today. The removal is **not owed**; choosing which definition of a valid DAG wins is a change to a live model-callable tool. Guards: `tests/reliability/test_dag_retirement_contract.py`, `tests/reliability/test_layer_b_boundary.py` |
 | `wisp/tools/checkpoints.py` | File checkpoints | `CheckpointStore` (bounded per-workspace snapshots), `snapshot_before_mutation()`, `tool_rewind` (list/restore, rewindable rewind); auto-hooked in write/edit/edit_multi with drop-on-failed-mutation |
 | `wisp/tui/screens/subagents.py` | Worker monitor screen | `SubagentMonitorScreen` (roster + live transcript, `]`/`[` cycle — never Tab — `c` cancel, `q`/`Ctrl+O`/`Esc` exit) + `SubagentMonitorApp` standalone host for the REPL bridge |
+| `wisp/tui/screens/workspace.py` | Main chat screen | `WorkspaceScreen`: owns the message list + input bar, wires the live server-push tool callbacks (`_on_tool_call` / `_on_tool_end`, registered at construction, not decoration) to `ToolCallCard` mount + result; pending-card bookkeeping lives here |
 | `wisp/sandbox/` | Command confinement | Package (`__init__` = providers); `router.py`: `SandboxRouter` (Docker → `PtySandbox` → `NoopSandbox`, TTL-cached decision, silent failover) + `get_router()`; legacy `get_sandbox()` unchanged |
 | `wisp/tools/primitives.py` | Thin harness surface | `exec_sandbox` / `fs_mutate` / `git_checkpoint` (pydantic args, delegate to bash/filesystem/checkpoints); `PRIMITIVE_SCHEMAS`; core opts in via `thin_tools` config (schemas + prompt menu + dispatcher) |
 | `wisp/core/verification.py` | Completion gate | `VerificationFloorGuard`: blocks finish until exit-0 postdates last mutation or grind floor (`min_turns` + nudges) exhausts; `HARNESS_REJECTION` text; `resolved()` triggers auto-capture. **Also projects itself onto the acceptance model** via `floor_guard_criteria/evidence/verdict()` — read-only; the guard's own behaviour is unchanged |
@@ -575,6 +576,22 @@ wires ships a test that drives a **production entry point** (`CompositionRoot`, 
 the component. `test_proposal_boundary_no_bypass.py` extends this to a structural invariant: the
 authority consumers, the consult/record arity of `ToolExecutor.execute`, and the reachability of each
 new call edge are pinned by AST analysis.
+
+### A Textual widget that changes after mount must repaint, not just re-bind
+
+`ToolCallCard` shipped complete, tested, and **unreachable**: the two server-push callbacks registered
+in `WorkspaceScreen.__init__` had empty bodies, so a run showed assistant text and zero tool activity
+with no error anywhere. This is the same class as the eight unreachable subsystems above — the tests
+that made it look finished asserted **attribute state only** (`is_complete`, `result_text`) and never
+the rendered output, so the missing UI was invisible to them.
+
+The second half was subtler. `set_result()` assigns attributes, but `compose()` had already yielded
+`Static`s with the initial values and the widget declared no `watch_*` methods — so the assignment
+changed Python state and left the screen stale. `AssistantMessage` was already the precedent: reactive
+attributes plus watchers, with a mount guard because reactives also fire from `__init__`.
+
+**The rule:** a test that drives a real entry point must assert what the **user sees**, not what the
+object holds. Rendered-content assertions are what catch this class; attribute assertions cannot.
 
 ### RED-first for anything that touches the gate chain
 
