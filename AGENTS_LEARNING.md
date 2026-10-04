@@ -319,3 +319,27 @@ alone would have created a persistent prompt-injection path, so all three were f
 write-then-read **round trip** and the real consumer (`discover_skills`, `SkillExtension.tools()`), not the write alone;
 use a description with a colon, a newline and `---`; and when a feature is dormant, ask what the dormancy is hiding before
 you wake it. Still open: `parse_skill`'s substring split is a hazard for hand-written skills.
+
+## Lesson: how the system prompt is assembled, and where the budget leaks (2026-10-04)
+
+Search: context assembly, system prompt, ContextAssembler, _fit_sections, token budget, 6000, skills block dropped, silent omission, unbudgeted, tools block, skill__ tools, schema tokens, _build_system_prompt.
+Path: `_build_system_prompt` keys a 64-entry cache on (workspace, mtimes of `.wisp/rules.md`, `.wisp/conventions.md`, the memory
+file and the sessions file, subagent-prompt hash, allowed-tools hash, thin flag). On a miss it gathers skills, project context,
+memory, git, repo map (subagents skip the heavy ones), loads `rules.md` as `role_extra`, and `ContextAssembler.build` orders
+sections by priority (0 default_system, workspace; 1 context_files, mandatory skill, plans; 2 role_extra, skills, memory;
+3 project context, code index, summaries, git, repo map) and `_fit_sections` admits them against `max_tokens` (default 6000).
+Over budget: priority 0 and memory are truncated, **everything else is dropped whole**. Appended afterwards, outside the budget:
+tools block, lint context, module summary, then per turn the query-relevant files, compaction notice, operating context and
+environment block. Measured on this repo (clean HOME): ~6.5k tokens, ~2k of them outside the budget. Evidence and probes:
+`docs/reviews/2026-10-04-probes/context_*_probe.py`.
+- **Budget accounting resets after a truncation.** `current_tokens = estimate(truncated)` overwrites the running total with
+  one block's size, so later sections are judged against a nearly empty budget. With a 1000-token budget, a 696-token
+  system section, an over-budget memory block and a 296-token project note produced **1527 tokens on main (1.53x) and 1354
+  on PR #60 (1.35x)**, with the project note admitted after memory was truncated. #60 fixed the ruler and the footer, not this.
+- **A skills block larger than the budget vanishes silently.** On the real HOME, 56 skills are discovered (53 model-invocable)
+  and the block alone is 10,398 tokens: no `## Skills` section, no omission note (`last_truncate_label` is only set for priority 0
+  and memory), while 53 `skill__*` tools still ship 10,197 tokens of schema on every request. The prompt that explains the
+  menu is gone and the menu is paid for anyway. Global skill directories (`~/.agents`, `~/.claude`) are what flood it.
+- **~30% of the prompt is never budgeted** (tools block 1489 tokens on its own).
+Open: fix the accounting after #60 merges (RED test first: the probe is the test); decide how global skills should reach wisp.
+
