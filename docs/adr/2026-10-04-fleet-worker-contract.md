@@ -1,6 +1,6 @@
 # ADR: Fleet roles and the worker contract
 
-## Status: Proposed (Phase 2 of the fleet consolidation; needs the human's decision on the open questions)
+## Status: Accepted 2026-10-04 (decisions 1-3 implemented for two workers; 4-5 applied; see Outcome)
 
 ## Context
 
@@ -61,11 +61,21 @@ Eighteen repos are declared in `wisp.fleet.toml`. Observed on 2026-10-04:
 - The invariant review is real work and has not been done: this ADR does not claim any of the six
   explorations is redundant, only that none should be folded in untested.
 
+## Outcome (2026-10-04)
+
+The three open questions were answered by the human with "go ahead" on the recommendations:
+
+1. **First worker:** `always-on-worker`, then `gump`. Both shims exist, are pinned by tests that forbid an approve, label
+   or run tool and any path argument, and were driven through wisp's own MCP client.
+2. **`plateform` review:** done (`docs/reviews/2026-10-04-plateform-invariant-review.md`). It failed the same probes
+   wisp's audit chain failed, and it has its own approval and tenant defects. It is now role `archive`.
+3. **`feat/process-subagents`:** already contained in `main`, so there was nothing to merge.
+
+Decisions 1-3 are implemented (`wisp fleet workers`, `docs/fleet/README.md`). Decision 4 is partly done: the audit
+fix (PR #61) came from the review. Still open: harvest "bind an approval to a checkpoint id and the approved content
+to a digest", and a keyed MAC with an external witness for wisp's audit chain.
+
 ## Open questions for the human
 
-1. Which worker should be first: `always-on-worker` (already emits JSON and an event log) or `gump`
-   (already has a hash-chained trajectory and a `verify` command)?
-2. Should `plateform` (13k LOC, "AgentOS Enterprise") be reviewed for invariants first, since it is the
-   largest and the most likely to overlap wisp's control plane?
-3. Merge `feat/process-subagents` before building the first worker shim? Killability matters for a worker
-   that runs for hours.
+1. Anchor a new audit epoch so `wisp audit verify` can pass on the live log, without erasing its historical breaks?
+2. Make the pre-push hook enforcing by default once the wisp repo itself is clean?

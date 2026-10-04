@@ -159,6 +159,8 @@ Boundaries (2026-09-29): simulated-first research scope; I open PRs and the user
 skill loading and delegation with tests; I may repair local `main` as new commits. Never push the user's
 local-only commits, spend money, delete remote branches, or edit their uncommitted files. Widening a permission
 mode or changing a pinned policy is the user's decision; state the trade-off and ask.
+2026-10-04: the user explicitly told me to review the open PRs and merge them. I merged only after green CI,
+one PR at a time, with checkpoint tags first. That was a one-off instruction, not a change to the standing rule.
 
 ## Known gaps (not verified)
 
@@ -209,3 +211,75 @@ Search: sqlite corrupt, malformed, database disk image is malformed, WAL, quaran
 - **Fix (`wisp/infra/store.py`):** `_ensure_initialized` now treats corruption-marked `DatabaseError` as a file-health problem: drop WAL sidecars + retry (heals WAL-only corruption with zero loss), else quarantine main file to `wisp.db.corrupt-<epoch>` + fresh init, else temp fallback. Any sqlite error on the retry path falls through to fallback — boot never crashes on sqlite errors; non-sqlite errors still raise loud. `ImmutableAuditTrail._init_table` delegates to the store's quarantine on the same markers and retries once.
 - **Corruption lies about its shape:** the same trashed pages surfaced as `DatabaseError: malformed`, as `OperationalError: no such column` (garbage parsed as schema, which then misfired the migration ALTER into "duplicate column"), and as `OperationalError: disk I/O error`. Message-sniffing is only the fast path; anything escaping the static init DDL is file-health suspect. Tests: `tests/test_unified_store.py::TestCorruptionRecovery` (garbage file -> backup + fresh; old-schema DB + trashed data page -> backup + fresh, both deterministic).
 **How to apply:** catch `sqlite3.DatabaseError` (not just `OperationalError`) around any SQLite boot path; never delete a corrupt DB, rename it aside; distrust the error message, trust `integrity_check`.
+
+## Lesson: CI step order hides lint; red tests mask the ruff gate (2026-10-04)
+
+Search: ci, ruff, pytest, step order, masked, lint gate, main red, green main, unused import, F401.
+`ci.yml` runs pytest, then `ruff check wisp/ wisp_net/ tests/`, then mypy. A job that stops at the test step never
+reaches the lint gate, so while main was red an unused import (`tests/reliability/test_idempotency_store.py:14`)
+sat there unseen. Evidence: PR #62's first run passed its tests and failed only on Ruff; `ruff check` on a pure
+`origin/main` archive reproduces the same single F401. Rule: after fixing the first red step, read the next one;
+run the whole gate list (tests, ruff, mypy) before pushing, not only the step you were chasing.
+
+## Lesson: tests that pass on the developer machine and fail in CI (hermetic workspace) (2026-10-04)
+
+Search: hermetic, .venv, HOME, doctor, preflight, fresh HOME, repl history, e2e, local pass CI fail, cli_surface.
+Main's CI failed exactly six tests: five in `test_preflight_doctor.py` (the build-sequence check needs
+`<workspace>/.venv/bin/python3`; a CI checkout has none) and the REPL `/help` e2e (it asserted the legacy "Available
+commands" header; the Dispatcher prints "Built-in commands:"). Reproduce with an **empty `HOME` and no `.venv`** in a
+separate worktree: pure main gave 6 failed / 31 passed, the fixed branch 37 passed. A `.venv` symlink in the
+worktree hides the failure; I made that mistake first. Also found: `FileHistory` does not create its parent
+directory, so the REPL crashed at the first keystroke on a fresh HOME. Fixed in PR #62.
+
+## Lesson: an audit hash chain read from memory forks under concurrent writers (2026-10-04)
+
+Search: audit, hash chain, fork, TAMPERED, flock, concurrent writers, in-memory head, verify, truncation, keyed MAC, witness.
+`AuditTrail.record` chained onto an in-memory `_last_hash`, but the CLI, the server and the tests all append to
+`~/.config/wisp/audit.jsonl`. Evidence on the live log: 4338 entries, 8 fork points, 14 broken links since
+2026-08-29, **every entry's own hash valid** (nothing edited); `wisp audit verify` said TAMPERED at entry 1848,
+which links back to entry 1825. The false alarm trains people to ignore the verifier. Fixed in PR #61: re-read the
+head from the file under `flock` before each append; four spawned processes appending 200 entries to a copy of the
+live log added 0 broken links. **Still open:** truncation is undetectable and the chain is unkeyed (a rewrite plus
+rechain passes `verify`); the fix is a keyed MAC and a witness outside the log's directory, as in always-on-worker
+ADR-0005/0007/0008. Never rewrite the live log: its 14 breaks are evidence. Probes: `docs/reviews/2026-10-04-probes/`.
+
+## Lesson: a SQLite WAL can hold committed data; move it aside, never delete it (2026-10-04)
+
+Search: sqlite, WAL, wal, shm, sidecar, corrupt, quarantine, data loss, recover, zero loss.
+PR #60's store recovery deleted `-wal`/`-shm`/`-journal` to "heal" a corrupt database and claimed zero loss. A WAL
+holds transactions committed but not yet checkpointed, so deleting it can drop recent sessions silently. The test
+was written first and failed against that behaviour; the sidecars are now renamed to `<name>.corrupt-<epoch>`, like
+the main file, so `sqlite3 <db> ".recover"` can still reach them.
+
+## Lesson: a subclass of TimeoutError is swallowed by `except TimeoutError` (2026-10-04)
+
+Search: FirstTokenTimeout, TimeoutError, asyncio, except order, subclass, contract deadline, mislabel, subagent.
+`FirstTokenTimeout` subclasses `asyncio.TimeoutError`. A new mid-run deadline handler caught `TimeoutError` and so
+swallowed it, reporting "contract deadline reached after 60s" for a provider that streamed nothing in 0.5s. The test
+that would catch it needs `max_retries=0`, because a retry hides the difference. Re-raise the specific exception
+before the generic one.
+
+## Lesson: a timing-tight test is a flake, and the order effect is a symptom (2026-10-04)
+
+Search: flaky, flake, timeout 0.2, test_timeout_preserves_partial_round, order dependent, deadline, bisect.
+`test_timeout_preserves_partial_round` gave a whole subagent 0.2s. It passed alone, failed 4/4 in a full-class run,
+and passed in a two-test pair, which looked like pollution. Loosening only the deadline to 1.5s made it pass in the
+class and across three files, so the cause was setup time, not shared state. Measure before bisecting for pollution.
+
+## Lesson: orchestrating other repos over MCP without giving the model their authority (2026-10-04)
+
+Search: mcp, worker, shim, fleet, manifest, approve, label, consent, WISP_STRICT_ENV, environment inheritance, always-on-worker, gump.
+Each worker is an MCP stdio server that shells out to the worker's own CLI, so its guards (keys, witness path, audit
+chain) apply unchanged. The tool surface is a reviewed allowlist: no `approve` (always-on-worker), no `label` and no
+`run` (gump), and no path, model or credential arguments; a test pins each. Secrets come from an env file named in the
+manifest, never the manifest. Verified through wisp's own MCP client under `WISP_STRICT_ENV=1`: `gump_verify` reported
+"chain intact: 2410 events verified". Found on the way: wisp starts MCP servers with its **full** environment (93
+variables, including API keys) unless `WISP_STRICT_ENV=1` is set. See `docs/fleet/README.md` and
+`docs/adr/2026-10-04-fleet-worker-contract.md`.
+
+## Lesson: reading a secrets-bearing file leaks it into the transcript (2026-10-04)
+
+Search: tail, zshrc, api key, plaintext, secrets, env file, never cat, grep -c, rc file.
+`tail ~/.zshrc` printed a plaintext API key line into the session. To learn whether a setting exists, use `grep -c`
+or `grep -o '^[A-Z_]*='` (names only), never `cat`/`tail` on a shell rc file or a `.env`.
+
