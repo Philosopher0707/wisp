@@ -607,9 +607,15 @@ def _connect_stdio(server: MCPServer):
 
 
 def _connect_http(server: MCPServer):
-    """Connect to an HTTP-based MCP server."""
-    # HTTP MCP servers use SSE for streaming, but for simplicity
-    # we use the POST-based JSON-RPC endpoint
+    """No-op: HTTP MCP connections are stateless, so there is nothing to set up.
+
+    Deliberately empty. It is still CALLED (see `connect_server`) so that the
+    stdio/HTTP branches read symmetrically and a future HTTP session setup has
+    an obvious home -- but it must not be mistaken for an implementation.
+
+    HTTP MCP servers use SSE for streaming, but for simplicity
+    we use the POST-based JSON-RPC endpoint
+    """
     pass  # Connection is stateless for HTTP
 
 

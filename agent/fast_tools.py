@@ -14,12 +14,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, TypeVar
 
-from wisp.tools._utils import _resolve_path, _safe_read_text
+from wisp.tools._utils import _safe_read_text
 from wisp.tools.errors import ToolError
 
 logger = logging.getLogger(__name__)
@@ -67,7 +65,6 @@ def read_file_range(
     if len(out) > max_chars:
         out = out[: max_chars - 40] + "\n… [range truncated — see .agent/runtime.log]"
 
-    header_lines = max_lines if total > 300 else total  # not used, keep for compat
     header = f"--- FILE: {path} | LINES: {total} | SHOWING: {s}-{e} ---\n"
     return header + out
 
@@ -146,7 +143,6 @@ class BoundedRunner:
             except asyncio.CancelledError:
                 break
             async with self._sem:
-                start = time.monotonic()
                 try:
                     res = await asyncio.wait_for(fn(*args, **kwargs), timeout=self.timeout_s)
                     if not fut.done():

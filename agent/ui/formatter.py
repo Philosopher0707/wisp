@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import os
 import pydoc
-import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -125,17 +124,11 @@ def render_collapsed(payload: DisplayPayload, console: Optional[Console] = None)
     """Render collapsed view — badge + preview + link."""
     if not _RICH or console is None:
         return payload.preview
-    # Rich panel with subdued truncated hint
-    title = f"{payload.tool} · {payload.total_lines} lines"
-    if payload.truncated:
-        title += f" · {payload.total_lines - DEFAULT_MAX_LINES} hidden"
-    panel = Panel(
-        Text(payload.preview, style="dim"),
-        title=title,
-        border_style="dim",
-        subtitle=f"[dim]press 'e' / /expand — {payload.full_path or payload.last_path}[/dim]" if payload.truncated else None,
-        subtitle_align="right",
-    )
+    # A rich Panel was built here and then discarded -- `render_collapsed` has no
+    # callers in-tree (only the `__all__` export), so removing it changes no output.
+    # That panel's `title` was computed only to feed it, so `title` is gone too.
+    # Do NOT "fix" this by returning the rendered panel without first finding a
+    # caller that wants one: this returns `payload.preview` for non-rich consumers.
     # Caller prints via console; we return text for non-rich consumers
     return payload.preview
 

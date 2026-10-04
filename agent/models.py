@@ -10,7 +10,6 @@ so downstream patches can `rg` without regex scraping.
 from __future__ import annotations
 
 import re
-from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
