@@ -1806,6 +1806,10 @@ class AgentRuntime:
                     self._session_cores.pop(next(iter(self._session_cores)))
             return core
 
+    def prompt_overhead_chars(self, session: dict[str, Any]) -> int:
+        """Fixed per-call overhead (system prompt + tool schemas) of the core that serves *session*."""
+        return int(self._get_core(session.get("id")).prompt_overhead_chars(session))
+
     def get_core_provider(self) -> Any:
         """Return the provider from the cached core, if available."""
         core = self._get_core()
