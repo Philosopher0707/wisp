@@ -3,17 +3,26 @@
 # remote-less or unmanaged. Advisory by default so a dirty sibling repo never blocks an unrelated push;
 # set WISP_FLEET_ENFORCE=1 to make any problem block the push.
 # Enable once per clone:  git config core.hooksPath .githooks
+top="$(git rev-parse --show-toplevel)"
 if [ -n "$WISP_FLEET_CMD" ]; then
     cmd="$WISP_FLEET_CMD"
-elif command -v wisp >/dev/null 2>&1; then
-    cmd="wisp"
+elif [ -x "$top/.venv/bin/python" ]; then
+    cmd="$top/.venv/bin/python -m wisp"
 else
-    cmd="$(git rev-parse --show-toplevel)/.venv/bin/python -m wisp"
+    cmd="wisp"
 fi
 
 if [ "${WISP_FLEET_ENFORCE:-0}" = "1" ]; then
-    $cmd fleet doctor --strict >&2 || { echo "pre-push: fleet has problems (WISP_FLEET_ENFORCE=1); push blocked" >&2; exit 1; }
+    $cmd fleet doctor --strict >&2
+    code=$?
+    if [ "$code" -ne 0 ]; then
+        echo "pre-push: fleet check failed (exit $code) and WISP_FLEET_ENFORCE=1; push blocked" >&2
+        exit 1
+    fi
 else
-    $cmd fleet doctor >&2 || true
+    $cmd fleet doctor >&2
+    code=$?
+    # Without --strict a healthy run always exits 0, so non-zero means the check itself could not run.
+    [ "$code" -ne 0 ] && echo "pre-push: WARNING the fleet check could not run (exit $code: $cmd); nothing was verified" >&2
 fi
 exit 0
