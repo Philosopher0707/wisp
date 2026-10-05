@@ -270,9 +270,38 @@ def repo_status(name: str, path: Path, *, remote_required: bool = True, fetch: b
     return st
 
 
+def _worktree_owner(path: Path) -> Path | None:
+    """The repo a linked worktree belongs to, or None when ``path`` is not a linked worktree.
+
+    A linked worktree's ``.git`` is a file reading ``gitdir: <owner>/.git/worktrees/<name>``.
+    """
+    marker = path / ".git"
+    if not marker.is_file():
+        return None
+    try:
+        text = marker.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not text.startswith("gitdir:"):
+        return None
+    gitdir = Path(text.removeprefix("gitdir:").strip())
+    if not gitdir.is_absolute():
+        gitdir = path / gitdir
+    gitdir = gitdir.resolve()
+    if gitdir.parent.name != "worktrees":
+        return None  # a submodule's gitdir lives under .git/modules, not .git/worktrees
+    return gitdir.parent.parent.parent
+
+
 def discover_unmanaged(roots: list[Path], managed: list[Path], depth: int = 3) -> list[Path]:
-    """Repos under the scan roots that the manifest does not mention. Never descends into a repo."""
+    """Repos under the scan roots that the manifest does not mention. Never descends into a repo.
+
+    A linked worktree of a managed repo is that repo, not a new one, so it is not reported.
+    """
     known = {p.resolve() for p in managed}
+
+    def is_unmanaged(path: Path) -> bool:
+        return path.resolve() not in known and _worktree_owner(path) not in known
     found: list[Path] = []
 
     def walk(d: Path, left: int) -> None:
@@ -284,7 +313,7 @@ def discover_unmanaged(roots: list[Path], managed: list[Path], depth: int = 3) -
             if entry.name.startswith(".") or entry.name in _SKIP_DIRS or not entry.is_dir():
                 continue
             if (entry / ".git").exists():
-                if entry.resolve() not in known:
+                if is_unmanaged(entry):
                     found.append(entry)
             elif left > 1:
                 walk(entry, left - 1)
@@ -292,7 +321,7 @@ def discover_unmanaged(roots: list[Path], managed: list[Path], depth: int = 3) -
     for root in roots:
         if root.is_dir():
             if (root / ".git").exists():
-                if root.resolve() not in known:
+                if is_unmanaged(root):
                     found.append(root)
             else:
                 walk(root, depth)

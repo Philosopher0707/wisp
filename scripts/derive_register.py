@@ -124,7 +124,7 @@ ROWS: list[tuple[str, str, str, str, str, str]] = [
     ("FatalProviderError", "wisp/core/contracts.py:102", "WispError", "unwired", "—", "—"),
     ("ToolDeniedError", "wisp/core/contracts.py:110", "WispError", "unwired", "—", "—"),
     ("CancelledTurnError", "wisp/core/contracts.py:118", "WispError", "unwired", "—", "—"),
-    ("LadderExhausted", "wisp/core/recovery.py:574", "RuntimeError", "unwired", "—", "—"),
+    ("LadderExhausted", "wisp/core/recovery.py:589", "RuntimeError", "unwired", "—", "—"),
     ("EventStreamError", "wisp/stream_parser.py:17", "Exception", "unwired", "—", "—"),
     ("SchemaValidationError", "wisp/structured_output.py:37", "RuntimeError", "unwired",
      "—", "—"),

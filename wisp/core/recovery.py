@@ -204,6 +204,13 @@ TRANSIENT_MARKERS: tuple[str, ...] = (
     "429", "rate limit", "too many requests", "connection reset",
 )
 
+#: Provider refusals that will fail every request the same way, whichever agent makes it: an account or key out of
+#: credit (402), a rejected key (401). Unlike `TRANSIENT_MARKERS` there is nothing to wait for, so a fan-out that has
+#: seen one should not start the agents still queued behind it.
+SYSTEMIC_MARKERS: tuple[str, ...] = (
+    "api error 402", "refused this request on billing", "api error 401",
+)
+
 #: The failure class for each engine error code (`core/events.py`). **Total by
 #: test**: `test_every_error_code_has_a_classification` enumerates the codes and
 #: fails on one missing here, so a new code cannot silently take the default.
@@ -228,6 +235,14 @@ def is_transient_text(text: str | None) -> bool:
         return False
     lowered = text.lower()
     return any(m in lowered for m in TRANSIENT_MARKERS)
+
+
+def is_systemic_text(text: str | None) -> bool:
+    """True when ``text`` is a provider refusal that every agent in a fan-out will hit (billing, bad key)."""
+    if not text:
+        return False
+    lowered = text.lower()
+    return any(m in lowered for m in SYSTEMIC_MARKERS)
 
 
 def classify_failure_signal(message: str | None = None, recoverable: bool = False,
