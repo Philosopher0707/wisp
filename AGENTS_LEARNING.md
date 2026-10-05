@@ -362,3 +362,7 @@ Still open: ~30% of the prompt is appended after budgeting; `config.skill_dirs` 
 - REPL input: `v` and space were swallowed on an empty prompt even with nothing to open ("view" arrived as "iew"), and readline's empty in-memory history overwrote prompt_toolkit's `FileHistory` on exit. Fix: `build_key_bindings` (insert the char when there is nothing to act on) and `own_history` (one writer). Test the real library on piped input; a mock cannot show a key-binding bug. A pty relaunch confirmed history survives.
 - A source-grep test pins code by function name; extracting code from `make_input_fn` broke three of them. Move the pin to the new home, do not loosen it.
 - `wisp/core` must not import `wisp.cli` (`tests/test_layer_direction.py` ratchets it; a new edge fails CI, and the fix is to move the code, not to add the edge to `CLASSIFIED_EDGES`). A diagnostic that probes the CLI lives in `wisp/cli/`. My targeted test list had skipped the architecture tests; when adding a module, run `tests/test_layer_direction.py` too.
+
+## fleet doctor unmanaged linked worktree false alarm (2026-10-05)
+
+- A linked worktree of a managed repo (`.git` is a file: `gitdir: <owner>/.git/worktrees/<name>`) is that repo, not a new one. `discover_unmanaged` now skips it only when its owner is in the manifest; a worktree of an untracked repo is still reported, and a submodule (`.git/modules`) is not mistaken for one. Found because making `~/dev/wisp-main` for the global `wisp` made `wisp doctor` warn about it.
