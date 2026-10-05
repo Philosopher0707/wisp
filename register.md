@@ -22,7 +22,7 @@
 > `—` therefore means *no catch inside these roots*, which is **not** the same claim as
 > *unhandled* — see §(c).
 >
-> Generated 2026-09-30 at `4882888` · **50 classes** · **282 raise sites** · **52 catch sites** · **7 with no test naming them**.
+> Generated 2026-09-30 at `8614c83` · **50 classes** · **282 raise sites** · **52 catch sites** · **7 with no test naming them**.
 
 ---
 
@@ -31,8 +31,8 @@
 | exception | base | role | phase | defined_at | raise_sites | first_raise | caught_at | adr |
 |---|---|---|---|---|---|---|---|---|
 | `ExitREPL` | `Exception` | verdict | cli | `wisp/exceptions.py:13` | 1 | `wisp/repl/commands/core.py:175` | `wisp/cli/dispatcher.py:179`, `wisp/cli/dispatcher.py:208`, `wisp/entry.py:698`, `wisp/repl/commands/__init__.py:108` | — |
-| `ApprovalCancelled` | `Exception` | verdict | approval | `wisp/exceptions.py:17` | 1 | `wisp/transport/cli.py:947` | `wisp/core/approval_gate.py:117`, `wisp/core/approval_gate.py:146`, `wisp/tool_executor.py:990` | — |
-| `ApprovalTimeout` | `Exception` | verdict | approval | `wisp/exceptions.py:33` | 1 | `wisp/transport/cli.py:910` | `wisp/core/approval_gate.py:127`, `wisp/tool_executor.py:1003` | — |
+| `ApprovalCancelled` | `Exception` | verdict | approval | `wisp/exceptions.py:17` | 1 | `wisp/transport/cli.py:947` | `wisp/core/approval_gate.py:117`, `wisp/core/approval_gate.py:146`, `wisp/tool_executor.py:882` | — |
+| `ApprovalTimeout` | `Exception` | verdict | approval | `wisp/exceptions.py:33` | 1 | `wisp/transport/cli.py:910` | `wisp/core/approval_gate.py:127`, `wisp/tool_executor.py:895` | — |
 | `_TransientOpenError` | `Exception` | recoverable | provider | `wisp/core/provider_stream.py:40` | 1 | `wisp/core/provider_stream.py:167` | `wisp/core/provider_stream.py:267` | — |
 | `FirstTokenTimeout` | `asyncio.TimeoutError` | recoverable | subagent | `wisp/multi_agent/_runner.py:151` | 1 | `wisp/multi_agent/_runner.py:644` | `wisp/multi_agent/_runner.py:415`, `wisp/multi_agent/_runner.py:718`, `wisp/multi_agent/_runner.py:884` | — |
 | `CircuitOpenError` | `Exception` | recoverable | provider | `wisp/infra/circuit_breaker.py:175` | 2 | `wisp/infra/circuit_breaker.py:93` | `wisp/core/stateless.py:1269` | — |
@@ -52,10 +52,10 @@
 | `TrustViolation` | `RuntimeError` | guard | context | `wisp/core/context_trust.py:95` | 1 | `wisp/core/context_trust.py:287` | — | — |
 | `ContextOverflow` | `RuntimeError` | guard | context | `wisp/core/context_trust.py:104` | 1 | `wisp/core/context_trust.py:314` | — | — |
 | `CriteriaDeclarationRejected` | `Exception` | guard | turn | `wisp/core/convergence.py:673` | 9 | `wisp/core/convergence.py:782` | `wisp/autonomous.py:325` | ADR-0050 |
-| `ReplayDivergence` | `RuntimeError` | guard | persist | `wisp/core/replay_digest.py:64` | 2 | `wisp/core/replay_digest.py:125` | `wisp/core/runtime.py:1862` | — |
+| `ReplayDivergence` | `RuntimeError` | guard | persist | `wisp/core/replay_digest.py:64` | 2 | `wisp/core/replay_digest.py:125` | `wisp/core/runtime.py:1845` | — |
 | `ImportGraphTooLarge` | `RuntimeError` | guard | tool | `wisp/import_graph.py:25` | 1 | `wisp/import_graph.py:133` | `wisp/test_runner.py:305` | — |
 | `WalkBudgetExceeded` | `RuntimeError` | guard | tool | `wisp/core/workspace_walk.py:39` | 1 | `wisp/core/workspace_walk.py:130` | `wisp/import_graph.py:132` | — |
-| `ToolError` | `Exception` | fault | tool | `wisp/tools/errors.py:8` | 85 | `agent/fast_tools.py:47` | `agent/tools/batch_reader.py:386`, `agent/tools/batch_reader.py:629`, `wisp/cli/dispatcher.py:383`, `wisp/tool_executor.py:387`, `wisp/tool_executor.py:1517`, `wisp/tool_executor.py:1630`, `wisp/tools/bash.py:160`, `wisp/tools/registry.py:1309`, `wisp/tools/registry.py:1451` | — |
+| `ToolError` | `Exception` | fault | tool | `wisp/tools/errors.py:8` | 85 | `agent/fast_tools.py:47` | `agent/tools/batch_reader.py:386`, `agent/tools/batch_reader.py:629`, `wisp/cli/dispatcher.py:383`, `wisp/tool_executor.py:279`, `wisp/tool_executor.py:1409`, `wisp/tool_executor.py:1522`, `wisp/tools/bash.py:160`, `wisp/tools/registry.py:1309`, `wisp/tools/registry.py:1451` | — |
 | `PlanError` | `Exception` | fault | plan | `wisp/graph/planner.py:72` | 28 | `wisp/graph/planner.py:87` | `wisp/graph/cli.py:300`, `wisp/graph/cli.py:341`, `wisp/graph/planner.py:314`, `wisp/graph/planner.py:396` | — |
 | `LSPServerError` | `Exception` | fault | tool | `wisp/lsp/client.py:24` | 16 | `wisp/lsp/client.py:78` | `wisp/lsp/client.py:529`, `wisp/lsp/manager.py:174`, `wisp/lsp/manager.py:188` | — |
 | `SearchReplaceError` | `ValueError` | fault | tool | `wisp/core/mutator/search_replace.py:38` | 3 | `wisp/core/mutator/search_replace.py:59` | — | — |
@@ -76,7 +76,7 @@
 | `FatalProviderError` | `WispError` | unwired | — | `wisp/core/contracts.py:102` | 0 | — | — | — |
 | `ToolDeniedError` | `WispError` | unwired | — | `wisp/core/contracts.py:110` | 0 | — | — | — |
 | `CancelledTurnError` | `WispError` | unwired | — | `wisp/core/contracts.py:118` | 0 | — | — | — |
-| `LadderExhausted` | `RuntimeError` | unwired | — | `wisp/core/recovery.py:589` | 0 | — | — | — |
+| `LadderExhausted` | `RuntimeError` | unwired | — | `wisp/core/recovery.py:607` | 0 | — | — | — |
 | `EventStreamError` | `Exception` | unwired | — | `wisp/stream_parser.py:17` | 0 | — | `wisp/stream_parser.py:191`, `wisp/stream_parser.py:197` | — |
 | `SchemaValidationError` | `RuntimeError` | unwired | — | `wisp/structured_output.py:37` | 0 | — | — | — |
 | `SchemaValidationError` | `Exception` | unwired | — | `wisp/multi_agent/schema_validator.py:16` | 0 | — | — | — |
@@ -169,7 +169,7 @@ The name and row counts differ because `SchemaValidationError` is defined twice 
 
 - **The circuit-breaker authority is duplicated.** Two `CircuitBreakerConfig` classes and two `CircuitBreaker` classes exist — `wisp/infra/circuit_breaker.py` and `wisp/multi_agent/_circuit_breaker.py` — with two exception types for one concept, `CircuitOpenError` and `CircuitBreakerOpenError`. The provider path imports the first (`wisp/core/stateless.py:53`); the subagent runner uses the second. Two implementations of one concern is the shape this corpus has a standing name for, and the two exception names make it visible from the outside: **a caller cannot write one handler that covers both.** *Recorded; unifying them is a behaviour change with its own decision.*
 
-- **`ReplayDivergence`'s docstring states an absolute the tree does not keep.** The class docstring says a divergence *"must **escape** the loop, not be caught and reported as one more way a run can end"*. It **is** caught — at `wisp/core/runtime.py:1858`, inside `_recover_unfinished_turn`. The catch is deliberate and its own comment documents it as a repair: the divergence used to be swallowed by a bare `except Exception: pass`, so the log claimed a replay that never happened. **The code is right and the docstring is stale**: what must escape is the *turn loop*, not every handler. The catch does not reconcile silently — it discards the journal and says why. *A docstring absolute that the tree deliberately narrows is a trap for the next reader; the sentence should name the loop.*
+- **`ReplayDivergence`'s docstring states an absolute the tree does not keep.** The class docstring says a divergence *"must **escape** the loop, not be caught and reported as one more way a run can end"*. It **is** caught — at `wisp/core/runtime.py:1841`, inside `_recover_unfinished_turn`. The catch is deliberate and its own comment documents it as a repair: the divergence used to be swallowed by a bare `except Exception: pass`, so the log claimed a replay that never happened. **The code is right and the docstring is stale**: what must escape is the *turn loop*, not every handler. The catch does not reconcile silently — it discards the journal and says why. *A docstring absolute that the tree deliberately narrows is a trap for the next reader; the sentence should name the loop.*
 
 - **`adr` is `—` for 45 of 47 rows, and that is a limit, not a claim.** Only two rows carry a decision, and each is cited because the class's **own docstring** names it — `ADR-0038` for `OllamaConfigurationError`, `ADR-0050` for `CriteriaDeclarationRejected`. Most of these exceptions arrived in a phase whose ADR exists but does not name the class. **The provenance was not traced**, and a plausible ADR is worse than a blank — guessing a decision is the defect this corpus exists to prevent. `—` states *not pinned*, not *none exists*.
 

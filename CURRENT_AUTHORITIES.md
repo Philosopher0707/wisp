@@ -12,7 +12,7 @@
 > ADR superseding one it cites **refuses the derivation**. §5 is this page's own findings record —
 > **append-only**, emitted unchanged (ADR-0062 R8).
 >
-> Generated 2026-10-05 at `4882888` · covers **ADR-0001 … ADR-0076** · supersession chains in §1.1–1.6.
+> Generated 2026-10-05 at `8614c83` · covers **ADR-0001 … ADR-0076** · supersession chains in §1.1–1.6.
 > The commit, the date and the range are **read from `git` and the ADR log**, not written (F97).
 >
 > **Sibling registers:** `CURRENT_FINDINGS.md`, `CURRENT_OPEN_ITEMS.md`, `CURRENT_FLAGS.md` — all
@@ -34,10 +34,10 @@ provider terminal → stream state → turn predicate → acceptance verdict
 
 | | |
 |---|---|
-| **Current owner** | `goal.terminal_outcome_from_evidence` (`wisp/core/goal.py:132`); `turn_succeeded` is a **projection** of it, computed once per turn (`wisp/core/runtime.py:999`) |
+| **Current owner** | `goal.terminal_outcome_from_evidence` (`wisp/core/goal.py:132`); `turn_succeeded` is a **projection** of it, computed once per turn (`wisp/core/runtime.py:995`) |
 | **Cannot decide** | goal state · recovery · verification |
 | **Current ADRs** | **ADR-0035** §Decision 2 (turn level remains terminal evidence) → **ADR-0044** R1/R2 (the *only* implementation; the flag is a projection) → **ADR-0047** R2 (no longer an arbitration input; still recorded) |
-| **Durable record fields** | `terminal_outcome`, `turn_succeeded` — the goal-state record (`wisp/core/runtime.py:1342`, `wisp/core/runtime.py:1357`); `terminal_outcome`, `turn_succeeded` — the attempt journal line `{"kind":"attempt"}` (`wisp/core/convergence.py:1323`) |
+| **Durable record fields** | `terminal_outcome`, `turn_succeeded` — the goal-state record (`wisp/core/runtime.py:1338`, `wisp/core/runtime.py:1353`); `terminal_outcome`, `turn_succeeded` — the attempt journal line `{"kind":"attempt"}` (`wisp/core/convergence.py:1323`) |
 
 ### 1.2 stream state
 
@@ -55,7 +55,7 @@ provider terminal → stream state → turn predicate → acceptance verdict
 | **Current owner** | `acceptance.evaluate` (`wisp/core/acceptance.py:213`) |
 | **Cannot decide** | goal state · recovery · **whether to gate** (the gate is a separate, flag-controlled consumer) |
 | **Current ADRs** | **ADR-0016** (two stages; stage 3a does not gate) · **ADR-0017** (the floor criterion is an *implication*) · **ADR-0018** (the engine publishes the guard; the runtime only reads it) · **ADR-0042** (the verdict is an **input**, not a second authority) |
-| **Durable record fields** | `verdict` in the verdict envelope (ADR-0013, `wisp/core/acceptance.py:204`) · `acceptance_verdict` in the goal-state record (`wisp/core/runtime.py:1343`) · `verdict`, `unmet`, `evidence_ids` in the attempt journal (`wisp/core/convergence.py:1333-1334`) |
+| **Durable record fields** | `verdict` in the verdict envelope (ADR-0013, `wisp/core/acceptance.py:204`) · `acceptance_verdict` in the goal-state record (`wisp/core/runtime.py:1339`) · `verdict`, `unmet`, `evidence_ids` in the attempt journal (`wisp/core/convergence.py:1333-1334`) |
 
 ### 1.4 progress verdict
 
@@ -73,16 +73,16 @@ provider terminal → stream state → turn predicate → acceptance verdict
 | **Current owner** | `goal.derive_goal_state` (`wisp/core/goal.py:146`); the contract as data is `goal.PRECEDENCE` (`wisp/core/goal.py:108-117`), 8 rows |
 | **Cannot decide** | recovery rung · **whether `done` was withheld** |
 | **Current ADRs** | **ADR-0035** (the contract; rows 0–6) → **ADR-0036** (amends ADR-0035 by reconciling its two clauses; adds the predicate to the goal record) → **ADR-0037** (completes ADR-0036) → **ADR-0042** (states the relation ADR-0035 left implicit; no behaviour change) → **ADR-0044** (removes the duplicated predicate) → **ADR-0047** R1–R5 (rows 3–6 revised) → **ADR-0049** (makes this table canonical at eight rows; resolves older numbering by content; ratifies two cells) |
-| **Durable record fields** | `SessionEvent.goal_state_event` (`wisp/core/runtime.py:1339`), 9 keys: `goal_state`, `terminal_outcome`, `acceptance_verdict`, `stagnation_verdict`, `stagnation_allows_goal_met`, `turn_succeeded`, `cancelled`, `escalated`, `failure_code` (`wisp/core/runtime.py:1341-1362`). **`stagnation_allows_goal_met` is the one replay must read** — `stagnation_verdict` ignores `trap_fired` (F35, ADR-0036 §6) |
+| **Durable record fields** | `SessionEvent.goal_state_event` (`wisp/core/runtime.py:1335`), 9 keys: `goal_state`, `terminal_outcome`, `acceptance_verdict`, `stagnation_verdict`, `stagnation_allows_goal_met`, `turn_succeeded`, `cancelled`, `escalated`, `failure_code` (`wisp/core/runtime.py:1337-1362`). **`stagnation_allows_goal_met` is the one replay must read** — `stagnation_verdict` ignores `trap_fired` (F35, ADR-0036 §6) |
 
 ### 1.6 recovery ladder state
 
 | | |
 |---|---|
-| **Current owner** | `RecoveryLadder.ladder_state` (`wisp/core/recovery.py:757`) — **renamed** from `terminal_outcome` |
+| **Current owner** | `RecoveryLadder.ladder_state` (`wisp/core/recovery.py:775`) — **renamed** from `terminal_outcome` |
 | **Cannot decide** | completion · goal state |
 | **Current ADRs** | **ADR-0024** (denial enforced by CLASS) · **ADR-0025** (an unsafe rollback escalates) · **ADR-0026** (a mechanism, not yet consulted by the turn loop) → **ADR-0044** R6 (the rename, which removed a cross-layer name collision) → **ADR-0046** (progress widens one class's legal rungs) → **ADR-0047** R6–R13 (R5's unit is the *strategy*, not the rung) |
-| **Durable record fields** | `RecoveryDecision.seq` and `ladder_history` (`wisp/core/recovery.py:556`, `wisp/core/recovery.py:571`) · `AttemptRecord.rung`, `.directive`, `.failure_class` (`wisp/core/convergence.py:1277-1278`, `wisp/core/convergence.py:1299`) · `BudgetGovernor.snapshot()` — reports `productive_continuations` (`wisp/core/recovery.py:487`) |
+| **Durable record fields** | `RecoveryDecision.seq` and `ladder_history` (`wisp/core/recovery.py:574`, `wisp/core/recovery.py:589`) · `AttemptRecord.rung`, `.directive`, `.failure_class` (`wisp/core/convergence.py:1277-1278`, `wisp/core/convergence.py:1299`) · `BudgetGovernor.snapshot()` — reports `productive_continuations` (`wisp/core/recovery.py:505`) |
 
 ---
 
