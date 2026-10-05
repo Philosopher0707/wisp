@@ -92,6 +92,7 @@ ROWS: list[tuple[str, str, str, str, str, str]] = [
      "turn", "ADR-0050"),
     ("ReplayDivergence", "wisp/core/replay_digest.py:64", "RuntimeError", "guard",
      "persist", "—"),
+    ("ImportGraphTooLarge", "wisp/import_graph.py:32", "RuntimeError", "guard", "tool", "—"),
 
     # ── Faults: an error the caller must handle. The bulk. ─────────────────────────────
     ("ToolError", "wisp/tools/errors.py:8", "Exception", "fault", "tool", "—"),
