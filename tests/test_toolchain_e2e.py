@@ -60,6 +60,13 @@ def _scripted_provider() -> MockProvider:
 @pytest.mark.asyncio
 async def test_repl_chain_end_to_end_over_production_wiring(
         tmp_path, monkeypatch) -> None:
+    # Hermetic HOME: MCP servers load from ~/.config/wisp/mcp.json at build
+    # time, so the developer's registered workers would otherwise change the
+    # rendered output. Must be set before CompositionRoot is constructed.
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+
     ws = tmp_path / "ws"
     ws.mkdir()
     (ws / "notes.md").write_text("alpha beta gamma")
