@@ -386,3 +386,20 @@ Still open: ~30% of the prompt is appended after budgeting; `config.skill_dirs` 
 ## fleet doctor unmanaged linked worktree false alarm (2026-10-05)
 
 - A linked worktree of a managed repo (`.git` is a file: `gitdir: <owner>/.git/worktrees/<name>`) is that repo, not a new one. `discover_unmanaged` now skips it only when its owner is in the manifest; a worktree of an untracked repo is still reported, and a submodule (`.git/modules`) is not mistaken for one. Found because making `~/dev/wisp-main` for the global `wisp` made `wisp doctor` warn about it.
+
+## unattended auto approve tools NO_APPROVER background research agents web_fetch (2026-10-05)
+
+- **Symptom (live):** background research agents were refused `web_fetch` / `web_search` with `NO_APPROVER` (`auto_edit` gates every non-READ tool, and a background agent has nobody to ask). By design (ADR-0055 §3: "no approver is not an approval"); the existing remedies were global (`auto_approve`, `permission_mode=full`) and approve every write and shell call too. A policy bundle cannot help: it is narrow-only (deny / force-approve).
+- **Decision (the user's, from three options):** a narrow standing allowlist. `unattended_auto_approve_tools` (env `WISP_UNATTENDED_AUTO_APPROVE_TOOLS`, default empty) names tools a caller with NO human may run unasked.
+- **Narrow by construction:** only READ/NETWORK-class tools count (`standing_grant_applies`); a write, shell or MCP entry is ignored with a warning. Applies only with no approver; never over a bundle's forced approval; `read_only` mode and the dangerous-command guard come first; each use is audited as layer `standing-grant`. Mutation-checked: removing each condition fails its own test.
+- **Trade-off to remember:** a background agent that can `web_fetch` reads untrusted pages and can request URLs; treat fetched content as data, and keep the list to what the research needs.
+- **Not covered:** a researcher role's tool list has no `run_bash`, so a task that prescribes `curl` via `run_bash` cannot run there. Separate decision.
+- **Method:** a glob of "tests that mention X" matched a JSON fixture and pytest refused the file list; restrict to `*.py` (`grep --include`). Also: do not switch a worktree's branch while a background test run is using it.
+- **A pinned invariant is evidence of intent:** `tests/test_proposal_boundary_no_bypass.py` requires exactly one `_audit_authorization` call in `execute()` (one authority consult, one recorded verdict per path). My standing-grant audit reused that recorder and added a second call site; CI caught it. The grant is a different event (who satisfied the approval requirement), so it got its own recorder, `_audit_standing_grant`; the test was not touched.
+
+## shared run verdict failure description fanout envelope status contract (2026-10-05)
+
+- **What:** `describe_failure` (plain-words failure with its remedy) moved to `core/recovery.py` beside the billing/key markers; `verdict` (complete/partial/failed) and `distinct_failures` (one finding per distinct failure, naming every agent it hit) live in `multi_agent/verdict.py`. `/swarm` and `fanout` both use them; the REPL command lost its private copies. `fanout` gained additive `verdict` and `failures` fields.
+- **I misread a contract and nearly broke it:** I called `fanout`'s `"status": "ok"` on total failure an honesty flaw. It is a documented contract: the envelope `status` means "the tool call executed"; the agents' outcome is `data.ok` (`tests/test_spawn_fanout.py`: "tool call succeeded, subagent failed"). Read the pinned tests before calling existing behaviour a bug, and add fields rather than change a status.
+- **Method:** a new test pins the preserved contract explicitly (status stays `ok` when every agent failed) so a later "fix" cannot silently flip it. Mutation checks cover the verdict, the grouping, the billing description and the `fanout` fields.
+- **Pin tables again:** inserting `describe_failure` into `core/recovery.py` shifted four authority pins and the `LadderExhausted` row by +18; re-anchored in one pass (a regex over a mapping, so no pin shifts twice).

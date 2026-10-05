@@ -238,6 +238,29 @@ def approval_needed(config: Any, func_name: str) -> bool:
         mode != PermissionMode.FULL and not getattr(config, "auto_approve", False))
 
 
+_UNGRANTABLE_WARNED: set[str] = set()
+
+
+def standing_grant_applies(config: Any, func_name: str) -> bool:
+    """Has the USER pre-approved ``func_name`` for callers with nobody to ask (`unattended_auto_approve_tools`)?
+
+    Narrow by construction: only READ- and NETWORK-class tools can be named. A mutating, shell or MCP tool in the
+    list is ignored (once, with a warning), because the model must never be able to authorise a side effect and a
+    config typo must not widen the surface; those still need a real approver or an explicit `auto_approve`.
+    The caller decides when this may be consulted (only when there is no approver, never over a forced approval).
+    """
+    if func_name not in (getattr(config, "unattended_auto_approve_tools", ()) or ()):
+        return False
+    from wisp.core.contracts import ToolRisk, risk_for_tool
+    if risk_for_tool(func_name) in (ToolRisk.READ, ToolRisk.NETWORK):
+        return True
+    if func_name not in _UNGRANTABLE_WARNED:
+        _UNGRANTABLE_WARNED.add(func_name)
+        logger.warning("unattended_auto_approve_tools names %s, which is not a read/network tool: ignored "
+                       "(it still needs an approver or auto_approve)", func_name)
+    return False
+
+
 def _get_write_tools(config: Any = None) -> set[str]:
     """Resolve write-classification tools from config (env: WISP_WRITE_TOOLS).
 
@@ -915,7 +938,14 @@ class ToolExecutor:
         was_auto_approved = False
         # Forced approval (incl. bundle-level) always enters the branch —
         # without a handler it blocks. Otherwise the original mode logic.
-        if needs_approval and (forced_approval or (
+        # A standing grant (the user's own `unattended_auto_approve_tools`) answers "nobody could be asked" for
+        # the named read/network tools only: never with an approver present, never over a forced approval.
+        standing_grant = (needs_approval and not approval_handler and not forced_approval
+                          and standing_grant_applies(self.config, func_name))
+        if standing_grant:
+            was_auto_approved = True
+            self._audit_standing_grant(func_name, func_args, workspace)
+        elif needs_approval and (forced_approval or (
                 not is_full_mode and not getattr(self.config, "auto_approve", False))):
             if not approval_handler:
                 # ── No approver is not an approval ──
@@ -1369,6 +1399,32 @@ class ToolExecutor:
         except Exception:
             logger.warning("Authorization audit write failed for %s",
                            func_name, exc_info=True)
+
+    def _audit_standing_grant(self, func_name: str, func_args: dict, workspace: str) -> None:
+        """Record that a gated tool ran because the USER's `unattended_auto_approve_tools` said yes for callers with
+        nobody to ask. A different event from the authority's verdict (`_audit_authorization`, exactly one per
+        call): the verdict says the layers allowed the call, this says who satisfied the approval requirement.
+        Best-effort, like the other audit writers: an observability record must never fail a tool call.
+        """
+        try:
+            trail = getattr(self, "audit_trail", None)
+            if trail is None:
+                return
+            trail.record_decision(
+                action=func_name,
+                tool_name=func_name,
+                workspace=workspace,
+                allowed=True,
+                reason=f"[Allowed by standing-grant layer: {func_name} approved without a human by "
+                       f"unattended_auto_approve_tools]",
+                args_summary=json.dumps({
+                    "decision": "standing-grant",
+                    "layer": "standing-grant",
+                    "args_keys": sorted(str(k) for k in (func_args or {})),
+                }, ensure_ascii=False),
+            )
+        except Exception:
+            logger.warning("Standing-grant audit write failed for %s", func_name, exc_info=True)
 
     def _audit_denial(self, func_name: str, func_args: dict,
                         workspace: str, reason: str) -> None:

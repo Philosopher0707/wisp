@@ -116,6 +116,12 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
         "description": "Built-in tools offered to the model: core (8 core tools + grep, glob, rewind) | full (every built-in). Offer only: hidden tools stay callable and role subagents with explicit tool lists are unaffected. Rollback: full.",
         "env_var": "WISP_TOOL_PROFILE",
     },
+    "unattended_auto_approve_tools": {
+        "type": str,
+        "default": "",
+        "description": "Comma-separated tools a caller with NO human to ask (subagent, background agent, bench, ACP) may run without approval. Only READ- and NETWORK-class tools count (e.g. web_fetch,web_search); mutating, shell and MCP tools are ignored. Never applies when an approver is present, and never overrides a policy bundle's forced approval, read_only mode, or the dangerous-command guard. Default empty: nothing changes until you set it.",
+        "env_var": "WISP_UNATTENDED_AUTO_APPROVE_TOOLS",
+    },
     "show_thinking": {
         "type": bool,
         "default": True,
@@ -851,6 +857,7 @@ class WispConfig:
     # ── Modes & permissions ───────────────────────────────────────
     permission_mode: PermissionMode | str
     tool_profile: str
+    unattended_auto_approve_tools: tuple[str, ...]
     capability_filtering: bool
     plan_mode: bool
     plan_context: Optional[str]
@@ -998,6 +1005,8 @@ class WispConfig:
         from wisp.tools.profile import DEFAULT_PROFILE, parse_profile
 
         object.__setattr__(self, "tool_profile", parse_profile(get_setting("tool_profile", DEFAULT_PROFILE)))
+        object.__setattr__(self, "unattended_auto_approve_tools", tuple(
+            t.strip() for t in str(get_setting("unattended_auto_approve_tools", "") or "").split(",") if t.strip()))
         # Plan mode: agent plans only, no tool execution
         object.__setattr__(self, "plan_mode",
             _parse_bool(get_setting("plan_mode", "false"), False)

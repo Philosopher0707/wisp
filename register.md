@@ -22,7 +22,7 @@
 > `—` therefore means *no catch inside these roots*, which is **not** the same claim as
 > *unhandled* — see §(c).
 >
-> Generated 2026-09-30 at `9a501af` · **49 classes** · **281 raise sites** · **51 catch sites** · **7 with no test naming them**.
+> Generated 2026-09-30 at `d2f9da0` · **49 classes** · **281 raise sites** · **51 catch sites** · **7 with no test naming them**.
 
 ---
 
@@ -31,8 +31,8 @@
 | exception | base | role | phase | defined_at | raise_sites | first_raise | caught_at | adr |
 |---|---|---|---|---|---|---|---|---|
 | `ExitREPL` | `Exception` | verdict | cli | `wisp/exceptions.py:13` | 1 | `wisp/repl/commands/core.py:175` | `wisp/cli/dispatcher.py:179`, `wisp/cli/dispatcher.py:208`, `wisp/entry.py:698`, `wisp/repl/commands/__init__.py:108` | — |
-| `ApprovalCancelled` | `Exception` | verdict | approval | `wisp/exceptions.py:17` | 1 | `wisp/transport/cli.py:947` | `wisp/core/approval_gate.py:117`, `wisp/core/approval_gate.py:146`, `wisp/tool_executor.py:960` | — |
-| `ApprovalTimeout` | `Exception` | verdict | approval | `wisp/exceptions.py:33` | 1 | `wisp/transport/cli.py:910` | `wisp/core/approval_gate.py:127`, `wisp/tool_executor.py:973` | — |
+| `ApprovalCancelled` | `Exception` | verdict | approval | `wisp/exceptions.py:17` | 1 | `wisp/transport/cli.py:947` | `wisp/core/approval_gate.py:117`, `wisp/core/approval_gate.py:146`, `wisp/tool_executor.py:990` | — |
+| `ApprovalTimeout` | `Exception` | verdict | approval | `wisp/exceptions.py:33` | 1 | `wisp/transport/cli.py:910` | `wisp/core/approval_gate.py:127`, `wisp/tool_executor.py:1003` | — |
 | `_TransientOpenError` | `Exception` | recoverable | provider | `wisp/core/provider_stream.py:40` | 1 | `wisp/core/provider_stream.py:167` | `wisp/core/provider_stream.py:267` | — |
 | `FirstTokenTimeout` | `asyncio.TimeoutError` | recoverable | subagent | `wisp/multi_agent/_runner.py:151` | 1 | `wisp/multi_agent/_runner.py:644` | `wisp/multi_agent/_runner.py:415`, `wisp/multi_agent/_runner.py:718`, `wisp/multi_agent/_runner.py:884` | — |
 | `CircuitOpenError` | `Exception` | recoverable | provider | `wisp/infra/circuit_breaker.py:175` | 2 | `wisp/infra/circuit_breaker.py:93` | `wisp/core/stateless.py:1269` | — |
@@ -54,7 +54,7 @@
 | `CriteriaDeclarationRejected` | `Exception` | guard | turn | `wisp/core/convergence.py:673` | 9 | `wisp/core/convergence.py:782` | `wisp/autonomous.py:325` | ADR-0050 |
 | `ReplayDivergence` | `RuntimeError` | guard | persist | `wisp/core/replay_digest.py:64` | 2 | `wisp/core/replay_digest.py:125` | `wisp/core/runtime.py:1845` | — |
 | `ImportGraphTooLarge` | `RuntimeError` | guard | tool | `wisp/import_graph.py:32` | 1 | `wisp/import_graph.py:141` | `wisp/test_runner.py:304` | — |
-| `ToolError` | `Exception` | fault | tool | `wisp/tools/errors.py:8` | 85 | `agent/fast_tools.py:47` | `agent/tools/batch_reader.py:386`, `agent/tools/batch_reader.py:629`, `wisp/cli/dispatcher.py:374`, `wisp/tool_executor.py:364`, `wisp/tool_executor.py:1461`, `wisp/tool_executor.py:1574`, `wisp/tools/bash.py:160`, `wisp/tools/registry.py:1309`, `wisp/tools/registry.py:1451` | — |
+| `ToolError` | `Exception` | fault | tool | `wisp/tools/errors.py:8` | 85 | `agent/fast_tools.py:47` | `agent/tools/batch_reader.py:386`, `agent/tools/batch_reader.py:629`, `wisp/cli/dispatcher.py:374`, `wisp/tool_executor.py:387`, `wisp/tool_executor.py:1517`, `wisp/tool_executor.py:1630`, `wisp/tools/bash.py:160`, `wisp/tools/registry.py:1309`, `wisp/tools/registry.py:1451` | — |
 | `PlanError` | `Exception` | fault | plan | `wisp/graph/planner.py:72` | 28 | `wisp/graph/planner.py:87` | `wisp/graph/cli.py:300`, `wisp/graph/cli.py:341`, `wisp/graph/planner.py:314`, `wisp/graph/planner.py:396` | — |
 | `LSPServerError` | `Exception` | fault | tool | `wisp/lsp/client.py:24` | 16 | `wisp/lsp/client.py:78` | `wisp/lsp/client.py:529`, `wisp/lsp/manager.py:174`, `wisp/lsp/manager.py:188` | — |
 | `SearchReplaceError` | `ValueError` | fault | tool | `wisp/core/mutator/search_replace.py:38` | 3 | `wisp/core/mutator/search_replace.py:59` | — | — |
