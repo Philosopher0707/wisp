@@ -61,7 +61,7 @@ ROWS: list[tuple[str, str, str, str, str, str]] = [
     # ── Recoverable: expected transient faults the runtime retries or degrades around. ──
     ("_TransientOpenError", "wisp/core/provider_stream.py:40", "Exception", "recoverable",
      "provider", "—"),
-    ("FirstTokenTimeout", "wisp/multi_agent/_runner.py:151", "asyncio.TimeoutError",
+    ("FirstTokenTimeout", "wisp/multi_agent/_runner.py:168", "asyncio.TimeoutError",
      "recoverable", "subagent", "—"),
     ("CircuitOpenError", "wisp/infra/circuit_breaker.py:175", "Exception", "recoverable",
      "provider", "—"),

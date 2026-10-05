@@ -65,4 +65,7 @@ def main(argv: list[str] | None = None) -> int:
         for (stage, reason), tools in sorted(groups.items(), key=lambda kv: order.get(kv[0][0], 9)):
             shown = ", ".join(tools[:14]) + (f", ... ({len(tools)} in all)" if len(tools) > 14 else "")
             print(f"  [{stage}] {reason}\n      {shown}")
+    if args.role != "parent":
+        print("\nextension tools depend on the live session and are not listed here. An unrestricted child (generalist) inherits "
+              "MCP tools declared `tool_risk: read` in any mode, and every MCP tool in full mode; never skill tools.")
     return 0
