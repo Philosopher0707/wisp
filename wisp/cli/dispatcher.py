@@ -276,7 +276,7 @@ class Dispatcher:
             ctx.emit("\n".join(lines))
             return CommandResult.CONSUMED
 
-        @self.register("doctor", "Show pre-flight / subsystem health", usage="/doctor [deep]")
+        @self.register("doctor", "Show pre-flight / subsystem health", usage="/doctor [deep|harness]")
         def _doctor(ctx: ReplContext, args: str) -> CommandResult:
             report = ctx.runtime.get_doctor_report()
             if isinstance(report, dict):
@@ -287,6 +287,15 @@ class Dispatcher:
             else:
                 ctx.emit(str(report))
 
+            if not (args or "").strip():
+                ctx.emit("  more: /doctor harness (harness invariants) · /doctor deep (sandbox image, runs Docker)")
+            if (args or "").strip().lower() in ("harness", "--harness"):
+                # The harness invariants (tool profile, subagent budgets, context fit, skills, audit chain, REPL
+                # input, fleet). Not part of `deep`, which has always meant the Docker sandbox image.
+                from wisp.cli.doctor_harness import format_report, run_harness_checks
+
+                ctx.emit("")
+                ctx.emit(format_report(run_harness_checks()))
             if (args or "").strip().lower() in ("deep", "--deep", "-d"):
                 # The slow half. `build_sequence` judges the sandbox image by *name* because the
                 # pre-flight budget is 100 ms per check; this actually runs it. It cannot be a check
