@@ -2,7 +2,7 @@
 
 `wisp.core.doctor.run_preflight` runs at REPL launch under a 100 ms budget, so it can only hold checks that cost
 nothing. These probe behaviour (a budget meter, a prompt fit, a skill round trip), import heavier modules and
-touch the disk, so they run when asked: ``wisp doctor`` and ``/doctor --deep``.
+touch the disk, so they run when asked: ``wisp doctor`` and ``/doctor harness`` (``/doctor deep`` is the separate, slower Docker image check).
 
 Every probe is hermetic: it builds its own temp workspace and audit log and never writes to the user's real
 ``~/.config/wisp`` or workspace. The one read of real state (the live audit log) is read-only and reports a
@@ -25,7 +25,7 @@ from typing import Any, Final
 
 from wisp.core.doctor import CheckResult, CheckStatus, DoctorReport
 
-__all__ = ["HARNESS_CHECK_NAMES", "run_harness_checks"]
+__all__ = ["HARNESS_CHECK_NAMES", "format_report", "run_harness_checks"]
 
 #: A user with more global skills than this pays for them on every request (measured: 56 skills ≈ 10k tokens).
 _GLOBAL_SKILL_WARN_COUNT: Final = 30
@@ -351,11 +351,17 @@ def run_harness_checks() -> DoctorReport:
     return DoctorReport(checks=tuple(results), total_duration_ms=(time.monotonic() - start) * 1000)
 
 
-def main(argv: list[str] | None = None) -> int:
-    """``wisp doctor [--json]``: print the harness report. Exit 1 on any FAIL; a WARN is advice, not a failure."""
+def format_report(report: DoctorReport) -> str:
+    """The report as text. ``format_detailed`` ends with the boot preflight's banner, which would mislabel it."""
     from wisp.core.doctor import format_detailed
 
+    text = format_detailed(report).replace("Doctor:", "Harness:", 1)
+    return text[: text.rindex("Banner:")].rstrip() if "Banner:" in text else text
+
+
+def main(argv: list[str] | None = None) -> int:
+    """``wisp doctor [--json]``: print the harness report. Exit 1 on any FAIL; a WARN is advice, not a failure."""
     args = argv or []
     report = run_harness_checks()
-    print(json.dumps(report.to_dict(), indent=2) if "--json" in args else format_detailed(report))
+    print(json.dumps(report.to_dict(), indent=2) if "--json" in args else format_report(report))
     return 1 if report.failed else 0
