@@ -386,3 +386,11 @@ Still open: ~30% of the prompt is appended after budgeting; `config.skill_dirs` 
 ## fleet doctor unmanaged linked worktree false alarm (2026-10-05)
 
 - A linked worktree of a managed repo (`.git` is a file: `gitdir: <owner>/.git/worktrees/<name>`) is that repo, not a new one. `discover_unmanaged` now skips it only when its owner is in the manifest; a worktree of an untracked repo is still reported, and a submodule (`.git/modules`) is not mistaken for one. Found because making `~/dev/wisp-main` for the global `wisp` made `wisp doctor` warn about it.
+
+## core workspace walk one bounded pruned walk home guard (2026-10-05)
+
+- **Why:** about thirteen independent `os.walk`/`rglob` loops with at least five private skip lists. The 581 s write was one loop lacking rules another had. The mechanism (prune before descending, never follow symlinks, stable order, a file/time budget) now lives once in `wisp/core/workspace_walk.py` (stdlib only), with two budget policies: `stop` (a search's partial result is useful; the caller reports it) and `raise` (an analysis where a partial tree gives a wrong answer).
+- **A pure refactor, by construction:** each caller states its own skip set (`skip_dirs`, `skip_hidden`, `skip_venvs`), so moving a caller changes nothing until it chooses to. First two callers: the import graph (`raise`) and `grep`/`glob` (`stop`, with their own per-search clock kept for the per-line regex checks). Their existing suites (159 tests) passed unchanged. Remaining walkers (`repo_map`, `code_index`, `semantic_index`, `workspace.py`, `core/context/repomap.py`, `suggestion_watcher`, ...) move one PR each with their own pins.
+- **`is_home_directory`** is shared by the affected-test lookup (refuses to analyse `$HOME`) and the boot preflight (`path_environment` now warns once: "your home directory, not a project").
+- **The register generator reads tracked files only:** a new module's exception class raised `KeyError: 'WalkBudgetExceeded'` until the files were `git add`ed. `git add` new files before regenerating the pages. A new exception class needs a row, and moving code shifts pinned lines (`ImportGraphTooLarge` 32 -> 25).
+- **A vacuous assertion slipped into my first test** (`... or first == first`); fixed to assert the exact order before implementing. Read your own test for an escape clause.

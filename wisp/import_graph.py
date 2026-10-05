@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import ast
 import logging
-import os
-import time
 from pathlib import Path
 from typing import Optional
+
+from wisp.core.workspace_walk import STANDARD_SKIP_DIRS, WalkBudget, WalkBudgetExceeded, walk_files
 
 logger = logging.getLogger(__name__)
 
@@ -20,13 +20,6 @@ logger = logging.getLogger(__name__)
 #: this runs after every write, so an unbounded walk made `write_file` take minutes from a $HOME workspace.
 MAX_FILES = 5000
 BUDGET_SECONDS = 5.0
-
-#: Directories that hold dependencies, build output or another application's files, never the project's own tests.
-#: Virtualenvs are also recognised by their `pyvenv.cfg`, whatever they are called.
-_SKIP_DIRS = frozenset({
-    "__pycache__", "node_modules", "site-packages", "dist-packages", "venv", "env", "virtualenv",
-    "build", "dist", "Library",
-})
 
 
 class ImportGraphTooLarge(RuntimeError):
@@ -126,24 +119,19 @@ def build_import_graph(workspace: str | Path) -> dict[Path, set[Path]]:
     """
     root = Path(workspace).resolve()
     graph: dict[Path, set[Path]] = {}
-    deadline = time.monotonic() + BUDGET_SECONDS
+    budget = WalkBudget(max_files=MAX_FILES, max_seconds=BUDGET_SECONDS)
 
-    for dirpath, dirnames, filenames in os.walk(root):
-        # Prune in place so os.walk never enters them (the old rglob walked everything, then discarded paths).
-        dirnames[:] = sorted(
-            d for d in dirnames
-            if not d.startswith(".") and d not in _SKIP_DIRS and not (Path(dirpath, d) / "pyvenv.cfg").exists()
-        )
-        for name in sorted(filenames):
-            if not name.endswith(".py"):
-                continue
-            if len(graph) >= MAX_FILES or time.monotonic() > deadline:
-                raise ImportGraphTooLarge(
-                    f"{root} has more than {MAX_FILES} Python files or took longer than {BUDGET_SECONDS:g}s to read")
-            pyfile = Path(dirpath, name).resolve()
+    try:
+        # Refuse, not truncate: a partial graph would silently miss affected tests.
+        for name in walk_files(root, skip_dirs=STANDARD_SKIP_DIRS, skip_hidden=True, skip_venvs=True,
+                               suffixes=(".py",), budget=budget, on_budget="raise"):
+            pyfile = Path(name).resolve()
             imports = _extract_imports_from_file(pyfile, root)
             # Only keep imports that are inside the workspace
             graph[pyfile] = {p for p in imports if root in p.parents or p == root}
+    except WalkBudgetExceeded as exc:
+        raise ImportGraphTooLarge(
+            f"{root} has more than {MAX_FILES} Python files or took longer than {BUDGET_SECONDS:g}s to read") from exc
 
     return graph
 
