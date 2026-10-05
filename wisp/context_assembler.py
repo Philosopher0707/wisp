@@ -457,7 +457,7 @@ class ContextAssembler:
     # growth during long-running sessions with frequently-changing context.
     _MAX_CACHE_SIZE = 16
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._cache: OrderedDict[PromptContext, str] = OrderedDict()
         self.default_system = DEFAULT_SYSTEM
 

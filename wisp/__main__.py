@@ -1075,6 +1075,7 @@ _SUBCOMMAND_HELP: dict[str, str] = {
     "skills": 'Usage: wisp skills\n\nList all discovered skills.',
     "setup": 'Usage: wisp setup\n\nInteractive wizard: pick a provider, choose a model, enter credentials, validate live, save.',
     "config": 'Usage: wisp config [key] [value]\n\nView or set configuration values. With no arguments, dumps effective config.',
+    "doctor": 'Usage: wisp doctor [--json]\n\nRun the harness invariant checks (tool surface, subagent budgets, context fit, skills, skill capture, audit chain). Exit 1 on a failure; warnings are advice.',
     "check": 'Usage: wisp check\n\nVerify the provider is reachable and the configured model is usable.',
     "models": 'Usage: wisp models\n\nList models available on the Ollama endpoint.',
     "session": (
@@ -1143,7 +1144,7 @@ _SUBCOMMAND_HELP: dict[str, str] = {
 
 _SUBCOMMAND_NAMES = frozenset({
     "run", "repl", "tui", "skills", "config", "check", "models",
-    "setup",
+    "setup", "doctor",
     "session", "memory", "mcp", "policy", "trace", "replay", "audit", "task",
     "completion", "release",
     "git", "plan", "progress", "diagnose",
@@ -1379,6 +1380,9 @@ def main():
             cmd_config(set_kv, validate=validate)
         def _do_check():
             cmd_check(flags_model)
+        def _do_doctor():
+            from wisp.core.doctor_harness import main as _doctor_main
+            raise SystemExit(_doctor_main(rest))
         def _do_models():
             cmd_models()
         def _do_memory():
@@ -1497,6 +1501,7 @@ def main():
             "setup": _do_setup,
             "config": _do_config,
             "check": _do_check,
+            "doctor": _do_doctor,
             "models": _do_models,
             "memory": _do_memory,
             "mcp": _do_mcp,
