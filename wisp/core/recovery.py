@@ -245,6 +245,24 @@ def is_systemic_text(text: str | None) -> bool:
     return any(m in lowered for m in SYSTEMIC_MARKERS)
 
 
+def describe_failure(error: object, limit: int = 300) -> str:
+    """A failure in words a person can act on, on one line. Raw provider JSON is cut mid-sentence, hiding the remedy.
+
+    Billing and key refusals (the systemic ones: see ``SYSTEMIC_MARKERS``) say what happened and what to do; anything
+    else is kept in its own words, whitespace collapsed and bounded to ``limit`` characters. Shared by every surface that
+    reports an agent failure (the REPL swarm report, the ``fanout`` tool), so they cannot describe the same refusal
+    differently.
+    """
+    text = " ".join(str(error or "no error reported").split())
+    low = text.lower()
+    if "api error 402" in low or "on billing" in low:
+        return ("the provider refused the request on billing (HTTP 402): the account is out of credit or the key's "
+                "limit is too low. Add credit or raise the key's limit, then re-run.")
+    if "api error 401" in low:
+        return "the provider rejected the API key (HTTP 401): check WISP_API_KEY or run /provider."
+    return text[:limit]
+
+
 def classify_failure_signal(message: str | None = None, recoverable: bool = False,
                             code: str | None = None) -> FailureClass:
     """Map the **runtime's** failure signal onto the closed taxonomy (M12).

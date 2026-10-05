@@ -22,7 +22,7 @@
 > `—` therefore means *no catch inside these roots*, which is **not** the same claim as
 > *unhandled* — see §(c).
 >
-> Generated 2026-09-30 at `9980815` · **50 classes** · **282 raise sites** · **52 catch sites** · **7 with no test naming them**.
+> Generated 2026-09-30 at `5861f0e` · **50 classes** · **282 raise sites** · **52 catch sites** · **7 with no test naming them**.
 
 ---
 
@@ -76,7 +76,7 @@
 | `FatalProviderError` | `WispError` | unwired | — | `wisp/core/contracts.py:102` | 0 | — | — | — |
 | `ToolDeniedError` | `WispError` | unwired | — | `wisp/core/contracts.py:110` | 0 | — | — | — |
 | `CancelledTurnError` | `WispError` | unwired | — | `wisp/core/contracts.py:118` | 0 | — | — | — |
-| `LadderExhausted` | `RuntimeError` | unwired | — | `wisp/core/recovery.py:589` | 0 | — | — | — |
+| `LadderExhausted` | `RuntimeError` | unwired | — | `wisp/core/recovery.py:607` | 0 | — | — | — |
 | `EventStreamError` | `Exception` | unwired | — | `wisp/stream_parser.py:17` | 0 | — | `wisp/stream_parser.py:191`, `wisp/stream_parser.py:197` | — |
 | `SchemaValidationError` | `RuntimeError` | unwired | — | `wisp/structured_output.py:37` | 0 | — | — | — |
 | `SchemaValidationError` | `Exception` | unwired | — | `wisp/multi_agent/schema_validator.py:16` | 0 | — | — | — |

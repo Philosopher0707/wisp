@@ -409,6 +409,13 @@ Still open: ~30% of the prompt is appended after budgeting; `config.skill_dirs` 
 - **Method:** a glob of "tests that mention X" matched a JSON fixture and pytest refused the file list; restrict to `*.py` (`grep --include`). Also: do not switch a worktree's branch while a background test run is using it.
 - **A pinned invariant is evidence of intent:** `tests/test_proposal_boundary_no_bypass.py` requires exactly one `_audit_authorization` call in `execute()` (one authority consult, one recorded verdict per path). My standing-grant audit reused that recorder and added a second call site; CI caught it. The grant is a different event (who satisfied the approval requirement), so it got its own recorder, `_audit_standing_grant`; the test was not touched.
 
+## shared run verdict failure description fanout envelope status contract (2026-10-05)
+
+- **What:** `describe_failure` (plain-words failure with its remedy) moved to `core/recovery.py` beside the billing/key markers; `verdict` (complete/partial/failed) and `distinct_failures` (one finding per distinct failure, naming every agent it hit) live in `multi_agent/verdict.py`. `/swarm` and `fanout` both use them; the REPL command lost its private copies. `fanout` gained additive `verdict` and `failures` fields.
+- **I misread a contract and nearly broke it:** I called `fanout`'s `"status": "ok"` on total failure an honesty flaw. It is a documented contract: the envelope `status` means "the tool call executed"; the agents' outcome is `data.ok` (`tests/test_spawn_fanout.py`: "tool call succeeded, subagent failed"). Read the pinned tests before calling existing behaviour a bug, and add fields rather than change a status.
+- **Method:** a new test pins the preserved contract explicitly (status stays `ok` when every agent failed) so a later "fix" cannot silently flip it. Mutation checks cover the verdict, the grouping, the billing description and the `fanout` fields.
+- **Pin tables again:** inserting `describe_failure` into `core/recovery.py` shifted four authority pins and the `LadderExhausted` row by +18; re-anchored in one pass (a regex over a mapping, so no pin shifts twice).
+
 ## core approval policy pure move re-export (2026-10-05)
 
 - **What moved:** the tool approval policy (`approval_needed`, `forced_by_mode`, `get_write_tools`, `standing_grant_applies`, and the write-tool sets) from the 2,400-line `tool_executor.py` into `wisp/core/approval_policy.py`: pure, no I/O, imports nothing upward. `server/deps.py` now imports it from core instead of importing the whole executor to ask one predicate.

@@ -106,18 +106,18 @@ AUTHORITIES: list[tuple[str, str, str, str, str]] = [
      "(`wisp/core/runtime.py:1337-1362`). **`stagnation_allows_goal_met` is the one replay must "
      "read** — `stagnation_verdict` ignores `trap_fired` (F35, ADR-0036 §6)"),
     ("1.6 recovery ladder state",
-     "`RecoveryLadder.ladder_state` (`wisp/core/recovery.py:757`) — **renamed** from "
+     "`RecoveryLadder.ladder_state` (`wisp/core/recovery.py:775`) — **renamed** from "
      "`terminal_outcome`",
      "completion · goal state",
      "**ADR-0024** (denial enforced by CLASS) · **ADR-0025** (an unsafe rollback escalates) · "
      "**ADR-0026** (a mechanism, not yet consulted by the turn loop) → **ADR-0044** R6 (the "
      "rename, which removed a cross-layer name collision) → **ADR-0046** (progress widens one "
      "class's legal rungs) → **ADR-0047** R6–R13 (R5's unit is the *strategy*, not the rung)",
-     "`RecoveryDecision.seq` and `ladder_history` (`wisp/core/recovery.py:556`, "
-     "`wisp/core/recovery.py:571`) · `AttemptRecord.rung`, `.directive`, `.failure_class` "
+     "`RecoveryDecision.seq` and `ladder_history` (`wisp/core/recovery.py:574`, "
+     "`wisp/core/recovery.py:589`) · `AttemptRecord.rung`, `.directive`, `.failure_class` "
      "(`wisp/core/convergence.py:1277-1278`, `wisp/core/convergence.py:1299`) · "
      "`BudgetGovernor.snapshot()` — reports `productive_continuations` "
-     "(`wisp/core/recovery.py:487`)"),
+     "(`wisp/core/recovery.py:505`)"),
 ]
 
 CHAIN_DIAGRAM = """\
