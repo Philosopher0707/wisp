@@ -27,6 +27,15 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
 from wisp.config import WispConfig
 from wisp.core.contracts import is_declared_read
+
+# The approval policy lives in core (wisp/core/approval_policy.py). These names are re-exported because the executor's
+# own `execute()` calls them, and tests and AST pins reach them here: they are the core objects, not copies.
+from wisp.core.approval_policy import DEFAULT_WRITE_TOOLS
+from wisp.core.approval_policy import approval_needed as approval_needed  # explicit re-export (PEP 484)
+from wisp.core.approval_policy import standing_grant_applies
+from wisp.core.approval_policy import forced_by_mode as _forced_by_mode
+from wisp.core.approval_policy import get_write_tools as _get_write_tools
+
 from wisp.infra.security import PermissionMode, policy_hard_deny
 from wisp.core.events import (
     AgentEvent,
@@ -138,45 +147,8 @@ def orchestrator_event_to_agent_event(orch_ev: Any) -> AgentEvent:
         extras["error"] = str(p["error"])
     return _subagent_event(kind=kind, name=name, role=role, detail=detail, **extras)
 
-# Tools that modify workspace state and require approval when auto_approve=False
-_DEFAULT_WRITE_TOOLS: set[str] = {
-    "write_file",
-    "edit_file",
-    "edit_file_multi",
-    "run_bash",
-    # Thin-harness equivalents of the above (GH#25): same approval /
-    # plan-mode / read-only treatment as the 42-tool names they replace.
-    "exec_sandbox",
-    "fs_mutate",
-    "git_branch",
-    "git_commit",
-    "git_push",
-    "gh_pr_create",
-    "gh_pr_comment",
-    "gh_pr_close",
-    "gh_pr_merge",
-    "git_sync_base",
-    "plan_task",
-    "mark_step_done",
-    "update_plan",
-    "spawn",
-    "fanout",
-    "spawn_background",
-    "subagent_send",
-    "orchestrate_vote",
-    "orchestrate_map_reduce",
-    "orchestrate_chain",
-    "orchestrate_dag",
-    "capture_skill",
-}
-
-# Thin-harness names that are ALWAYS write-classified (GH#25) — unioned
-# into every resolution in _get_write_tools so no config default or user
-# override can leave the run_bash / write_file equivalents ungated.
-_THIN_WRITE_TOOLS: set[str] = {"exec_sandbox", "fs_mutate"}
-
-# Gated although the risk table names no row for them (fail-closed EXEC).
-_ALWAYS_GATED_TOOLS: frozenset[str] = frozenset({"rewind"})
+# The default write-tool set now lives in core; this is the same set object, kept under its old name for callers and tests.
+_DEFAULT_WRITE_TOOLS = DEFAULT_WRITE_TOOLS
 
 # Pure, network-bound tools worth memoizing against model loops.
 _REPEAT_GUARD_TOOLS: frozenset[str] = frozenset({"web_fetch", "web_search"})
@@ -203,86 +175,6 @@ _SUBAGENT_TOOLS: frozenset[str] = frozenset({
     "orchestrate_vote", "orchestrate_map_reduce", "orchestrate_chain",
     "orchestrate_dag",
 })
-
-
-#: In `auto_edit`, the tools that go through the approver even when `auto_approve` is on.
-_AUTO_EDIT_FORCED = frozenset({
-    "run_bash", "git_branch", "git_commit", "git_push", "gh_pr_create",
-    "gh_pr_comment", "gh_pr_close", "gh_pr_merge", "git_sync_base",
-})
-
-
-def _forced_by_mode(config: Any, func_name: str) -> bool:
-    """True when the permission mode forces this built-in tool through the approver (auto_approve does not waive it)."""
-    mode = getattr(config, "permission_mode", PermissionMode.AUTO_EDIT)
-    if mode == PermissionMode.ASK_ALL:
-        return func_name in _get_write_tools(config)
-    if mode == PermissionMode.AUTO_EDIT:
-        return func_name in _AUTO_EDIT_FORCED
-    return False
-
-
-def approval_needed(config: Any, func_name: str) -> bool:
-    """Would the executor stop for an approver before running this built-in tool under `config`?
-
-    The one rule behind "no approver ⇒ deny" (ADR-0061 R4), shared by the agent path and the REST gate so
-    the two cannot drift: the tool is gated as a write, and either the mode forces it through the approver
-    or nobody authorised it (`full` mode, or `auto_approve`, is the caller's explicit decision). In
-    `read_only` writes are hard-blocked earlier, so no approver is ever asked and this is False. MCP tools
-    are not covered here; they are always asked (`_is_external_call`).
-    """
-    mode = getattr(config, "permission_mode", PermissionMode.AUTO_EDIT)
-    if mode == PermissionMode.READ_ONLY or func_name not in _get_write_tools(config):
-        return False
-    return _forced_by_mode(config, func_name) or (
-        mode != PermissionMode.FULL and not getattr(config, "auto_approve", False))
-
-
-_UNGRANTABLE_WARNED: set[str] = set()
-
-
-def standing_grant_applies(config: Any, func_name: str) -> bool:
-    """Has the USER pre-approved ``func_name`` for callers with nobody to ask (`unattended_auto_approve_tools`)?
-
-    Narrow by construction: only READ- and NETWORK-class tools can be named. A mutating, shell or MCP tool in the
-    list is ignored (once, with a warning), because the model must never be able to authorise a side effect and a
-    config typo must not widen the surface; those still need a real approver or an explicit `auto_approve`.
-    The caller decides when this may be consulted (only when there is no approver, never over a forced approval).
-    """
-    if func_name not in (getattr(config, "unattended_auto_approve_tools", ()) or ()):
-        return False
-    from wisp.core.contracts import ToolRisk, risk_for_tool
-    if risk_for_tool(func_name) in (ToolRisk.READ, ToolRisk.NETWORK):
-        return True
-    if func_name not in _UNGRANTABLE_WARNED:
-        _UNGRANTABLE_WARNED.add(func_name)
-        logger.warning("unattended_auto_approve_tools names %s, which is not a read/network tool: ignored "
-                       "(it still needs an approver or auto_approve)", func_name)
-    return False
-
-
-def _get_write_tools(config: Any = None) -> set[str]:
-    """Resolve write-classification tools from config (env: WISP_WRITE_TOOLS).
-
-    Union rule (no drift by construction): every non-READ row of the risk
-    table is gated, so a new EXEC/WRITE tool can never silently skip
-    approval / plan-mode / read-only. Thin-harness names are always unioned
-    in (GH#25), and "rewind" is always gated (EXEC by fail-closed default;
-    it restores files). git_checkpoint stays read-classified by intent.
-    """
-    if config is not None and hasattr(config, "write_tools") and config.write_tools:
-        base = set(config.write_tools)
-    else:
-        base = set(_DEFAULT_WRITE_TOOLS)
-    base |= _THIN_WRITE_TOOLS | _ALWAYS_GATED_TOOLS | _non_read_table_tools()
-    return base
-
-
-def _non_read_table_tools() -> set[str]:
-    """Names the risk table classifies above READ (lazy import: this module
-    must not import wisp.core at load; precedent: _execute_tool)."""
-    from wisp.core.contracts import TOOL_RISK_TABLE, ToolRisk
-    return {name for name, risk in TOOL_RISK_TABLE.items() if risk is not ToolRisk.READ}
 
 
 def _should_block_hook(hook_results: list) -> bool:
@@ -2394,6 +2286,8 @@ class ToolExecutor:
                 "elapsed_seconds": round(r.elapsed_seconds, 1),
             })
 
+        from wisp.multi_agent.verdict import distinct_failures, verdict
+
         all_ok = all(r.success for r in results)
         total_elapsed = sum(r.elapsed_seconds for r in results)
         total_files = list({f for r in results for f in (r.files_changed or [])})
@@ -2403,6 +2297,10 @@ class ToolExecutor:
             "tool": "fanout",
             "data": {
                 "ok": all_ok,
+                # The envelope `status` means "the tool call executed"; the agents' outcome is here. `verdict` and
+                # `failures` say it in words: one entry per distinct failure (four identical refusals are one finding).
+                "verdict": verdict(results),
+                "failures": [{"reason": why, "tasks": who} for why, who in distinct_failures(results)],
                 "results": result_items,
                 "total_elapsed_seconds": round(total_elapsed, 1),
                 "all_files": total_files,

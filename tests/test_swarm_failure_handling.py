@@ -122,7 +122,7 @@ def _r(ok: bool, error: str | None = None) -> SubagentResult:
 
 
 def test_failures_are_described_in_words_a_person_can_act_on():
-    from wisp.repl.commands.agents import _describe_failure
+    from wisp.core.recovery import describe_failure as _describe_failure
 
     assert "out of credit" in _describe_failure(BILLING)
     assert "HTTP 401" in _describe_failure("Incomplete provider round (API error 401: bad key)")
@@ -131,7 +131,7 @@ def test_failures_are_described_in_words_a_person_can_act_on():
 
 
 def test_verdict_is_complete_partial_or_failed():
-    from wisp.repl.commands.agents import _swarm_verdict
+    from wisp.multi_agent.verdict import verdict as _swarm_verdict
 
     assert _swarm_verdict([_r(True), _r(True)]) == "complete"
     assert _swarm_verdict([_r(True), _r(False, "e")]) == "partial"
