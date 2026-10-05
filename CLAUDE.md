@@ -18,6 +18,9 @@ Load these before changing anything; they hold state and hard-won lessons that t
 | `.agents/skills/verified-change-workflow/SKILL.md` | The method: measure, decide, apply; RED first; test through the production path; positive controls and mutation probes; baseline comparison; PR for the human to merge. |
 | `WISP_ARCHITECTURE_DECISIONS.md` | ADR log (ADR-0069..0073 the network agent, ADR-0074 no approver / no yes). |
 | `wisp_net/README.md` | The network platform, the evaluation harness and its baseline table. |
+| `docs/fleet/README.md` | The fleet: `wisp.fleet.toml`, `wisp fleet status/doctor/workers`, MCP workers, the pre-push check. Which repos exist, and how wisp reaches them. |
+| `docs/adr/2026-10-04-fleet-worker-contract.md` | Why workers are MCP servers that cannot approve; outcome of the plateform review. |
+| `docs/reviews/2026-10-04-plateform-invariant-review.md` | Probe-backed review; the audit-chain fork on the live log and its fix. |
 
 Standing boundaries (also in the assistant's memory as `boundaries.md`): scope is **simulated-first research**;
 **open PRs and let the user merge**; never push the user's local-only commits, delete remote branches, spend
