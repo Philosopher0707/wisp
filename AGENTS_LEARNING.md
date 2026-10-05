@@ -366,3 +366,12 @@ Still open: ~30% of the prompt is appended after budgeting; `config.skill_dirs` 
 ## fleet doctor unmanaged linked worktree false alarm (2026-10-05)
 
 - A linked worktree of a managed repo (`.git` is a file: `gitdir: <owner>/.git/worktrees/<name>`) is that repo, not a new one. `discover_unmanaged` now skips it only when its owner is in the manifest; a worktree of an untracked repo is still reported, and a submodule (`.git/modules`) is not mistaken for one. Found because making `~/dev/wisp-main` for the global `wisp` made `wisp doctor` warn about it.
+
+## unattended auto approve tools NO_APPROVER background research agents web_fetch (2026-10-05)
+
+- **Symptom (live):** background research agents were refused `web_fetch` / `web_search` with `NO_APPROVER` (`auto_edit` gates every non-READ tool, and a background agent has nobody to ask). By design (ADR-0055 §3: "no approver is not an approval"); the existing remedies were global (`auto_approve`, `permission_mode=full`) and approve every write and shell call too. A policy bundle cannot help: it is narrow-only (deny / force-approve).
+- **Decision (the user's, from three options):** a narrow standing allowlist. `unattended_auto_approve_tools` (env `WISP_UNATTENDED_AUTO_APPROVE_TOOLS`, default empty) names tools a caller with NO human may run unasked.
+- **Narrow by construction:** only READ/NETWORK-class tools count (`standing_grant_applies`); a write, shell or MCP entry is ignored with a warning. Applies only with no approver; never over a bundle's forced approval; `read_only` mode and the dangerous-command guard come first; each use is audited as layer `standing-grant`. Mutation-checked: removing each condition fails its own test.
+- **Trade-off to remember:** a background agent that can `web_fetch` reads untrusted pages and can request URLs; treat fetched content as data, and keep the list to what the research needs.
+- **Not covered:** a researcher role's tool list has no `run_bash`, so a task that prescribes `curl` via `run_bash` cannot run there. Separate decision.
+- **Method:** a glob of "tests that mention X" matched a JSON fixture and pytest refused the file list; restrict to `*.py` (`grep --include`). Also: do not switch a worktree's branch while a background test run is using it.
