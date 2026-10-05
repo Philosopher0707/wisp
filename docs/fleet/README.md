@@ -17,8 +17,13 @@ wisp fleet workers                      # print the MCP servers the manifest dec
 wisp fleet workers --write ~/.config/wisp/mcp.json   # merge them into an existing MCP config
 ```
 
-Run it as `.venv/bin/python -m wisp fleet ...` (or `~/.venvs/wisp/bin/python -m wisp ...`): a stale `wisp` on PATH
-that cannot import the package fails without saying why.
+Run it as plain `wisp fleet ...`. On the maintainer's machine `~/.local/bin/wisp` is a small wrapper that runs a clean
+`main` worktree (see [the harness page](../harness/README.md#the-wisp-command)). If `wisp` fails with
+`No module named 'wisp'`, a stale install earlier on PATH is shadowing it (`type -a wisp`); in an already-open zsh,
+`hash -r` clears the cached path. `.venv/bin/python -m wisp fleet ...` always works from a checkout.
+
+A linked git worktree of a manifest repo (`git worktree add ...`) is that repo, not a new one: `doctor` does not report
+it as unmanaged. A worktree of a repo the manifest does **not** track is still reported.
 
 Exit codes: `0` ok (or problems found without `--strict`), `1` problems with `--strict`, `2` unreadable manifest or
 bad arguments, `3` (`ci` only) `gh` not on PATH, `4` (`ci --watch` only) still pending at the timeout.
