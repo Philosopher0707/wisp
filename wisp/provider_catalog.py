@@ -272,28 +272,43 @@ class Resolution:
         return self.status == "ok"
 
 
+def _rank(target: str, candidate: str) -> int:
+    """How close ``candidate`` is to ``target``: 0 equal, 1 prefix, 2 substring, 3-4 shared tokens, 9 unrelated."""
+    t = target.lower()
+    cl = candidate.lower()
+    if cl == t:
+        return 0
+    if cl.startswith(t) or t.startswith(cl):
+        return 1
+    if t in cl or cl in t:
+        return 2
+    # Tokenize across the separators real ids use (org/name, family:tag, dashed variants) so 'org/typo-model'
+    # still matches on 'org'+'model'.
+    t_tokens = {tok for tok in t.replace("/", " ").replace(":", " ").replace("-", " ").split() if tok}
+    c_tokens = {tok for tok in cl.replace("/", " ").replace(":", " ").replace("-", " ").split() if tok}
+    overlap = len(t_tokens & c_tokens)
+    if overlap >= 2:
+        return 3
+    if overlap == 1:
+        return 4
+    return 9
+
+
+#: A candidate this close (equal, prefix or substring) is a spelling of the same model. Anything looser (one shared
+#: token such as "coder") is a different model that merely resembles it, and must never be swapped in silently.
+_STRONG_RANK = 2
+
+
+def _strong_match(target: str, candidates: list[str]) -> str:
+    """The candidate that is a spelling of ``target``, or "" when there is none."""
+    ranked = sorted(candidates, key=lambda c: _rank(target, c))
+    return ranked[0] if ranked and _rank(target, ranked[0]) <= _STRONG_RANK else ""
+
+
 def _closest(target: str, candidates: list[str], limit: int = 5) -> list[str]:
     """Cheap prefix/substring/token ranking — good enough to suggest fixes."""
-    t = target.lower()
-    # Tokenize across the separators real ids use (org/name, family:tag,
-    # dashed variants) so 'org/typo-model' still matches on 'org'+'model'.
-    t_tokens = {tok for tok in t.replace("/", " ").replace(":", " ").replace("-", " ").split() if tok}
-
     def score(c: str) -> int:
-        cl = c.lower()
-        if cl == t:
-            return 0
-        if cl.startswith(t) or t.startswith(cl):
-            return 1
-        if t in cl or cl in t:
-            return 2
-        c_tokens = {tok for tok in cl.replace("/", " ").replace(":", " ").replace("-", " ").split() if tok}
-        overlap = len(t_tokens & c_tokens)
-        if overlap >= 2:
-            return 3
-        if overlap == 1:
-            return 4
-        return 9
+        return _rank(target, c)
 
     ranked = sorted(candidates, key=score)
     return [c for c in ranked if score(c) < 9][:limit]
@@ -390,9 +405,16 @@ def resolve_selection(cfg: Any) -> Resolution:
         )
     if model in available:
         return Resolution(provider=provider, model=model, status="ok")
+    close = _closest(model, available)
     return Resolution(
         provider=provider, model=model, status="unknown_model",
         detail=f"Model '{model}' is not in {provider}'s current listing.",
-        suggested=available[0],
-        alternatives=_closest(model, available),
+        # Never `available[0]` when the listing HAS look-alikes: `qwen2.5-coder` became `aion-labs/aion-2.0` (the
+        # first model alphabetically: a different family, a different price) while `qwen/qwen3-coder` sat in the
+        # alternatives. A spelling of the same model is safe to swap in; with look-alikes but no spelling, the
+        # caller serves the configured model and shows the close names. With no look-alike at all the configured
+        # name is a stale one from another provider and cannot work here, so the first listed model keeps the
+        # first turn from being a 404 (test_nvidia_unknown_autocorrects_in_composition).
+        suggested=_strong_match(model, available) or ("" if close else available[0]),
+        alternatives=close,
     )
