@@ -40,6 +40,8 @@ def rollback_preview(record: EditRecord) -> str:
 _REVERSIBILITY: dict[str, str] = {
     "read_file": "reversible",
     "list_files": "reversible",
+    "grep": "reversible",
+    "glob": "reversible",
     "write_file": "reversible",  # patch/diff record + pre-image
     "edit_file": "reversible",
     "git_status": "reversible",

@@ -268,6 +268,8 @@ class ApprovalDecision:
 TOOL_RISK_TABLE: dict[str, ToolRisk] = {
     "read_file": ToolRisk.READ,
     "list_files": ToolRisk.READ,
+    "grep": ToolRisk.READ,
+    "glob": ToolRisk.READ,
     "search_codebase": ToolRisk.READ,
     "search_symbols": ToolRisk.READ,
     "git_status": ToolRisk.READ,
