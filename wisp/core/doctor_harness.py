@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -202,6 +203,126 @@ def _check_audit_chain() -> CheckResult:
     return _result(name, commit, t0, CheckStatus.OK, "writers chain correctly; live log intact")
 
 
+def _check_repl_input() -> CheckResult:
+    """The input line: ``v`` and space are ordinary characters when they have nothing to do; one history writer."""
+    t0, name, commit = time.monotonic(), "repl_input", "repl-input"
+    try:
+        from prompt_toolkit import PromptSession
+        from prompt_toolkit.input import create_pipe_input
+        from prompt_toolkit.output import DummyOutput
+
+        from wisp.cli import repl
+        from wisp.cli.ui.blocks import ScreenModel
+    except ImportError as exc:
+        return _result(name, commit, t0, CheckStatus.WARN, f"not in this checkout: {exc}")
+    if not hasattr(repl, "build_key_bindings"):
+        return _result(name, commit, t0, CheckStatus.WARN, "key bindings are not separable in this checkout")
+
+    typed: dict[str, str] = {}
+
+    def probe() -> None:  # its own thread: prompt_toolkit wants its own event loop, and /doctor may run inside one
+        try:
+            with create_pipe_input() as pipe:
+                session: PromptSession[str] = PromptSession(
+                    input=pipe, output=DummyOutput(), key_bindings=repl.build_key_bindings(ScreenModel()))
+                pipe.send_text("   view the logs\r")
+                typed["text"] = session.prompt("> ")
+        except Exception as exc:  # reported below as a failed probe
+            typed["error"] = repr(exc)
+
+    worker = threading.Thread(target=probe, daemon=True)
+    worker.start()
+    worker.join(10)
+    if worker.is_alive() or "error" in typed:
+        return _result(name, commit, t0, CheckStatus.FAIL, f"input probe failed: {typed.get('error', 'timed out')}")
+    if typed["text"] != "   view the logs":
+        return _result(name, commit, t0, CheckStatus.FAIL,
+                       f"typed '   view the logs', the prompt returned {typed['text']!r}: a shortcut key swallowed input")
+
+    with tempfile.TemporaryDirectory(prefix="wisp-doctor-hist-") as tmp:
+        hist = Path(tmp) / "history"
+        hist.write_text("\n# 2026-10-05 00:00:00.000000\n+a prompt from an earlier launch\n")
+        before = hist.read_bytes()
+        saved = os.environ.get("WISP_HISTORY_FILE")
+        os.environ["WISP_HISTORY_FILE"] = str(hist)
+        try:
+            repl.own_history(hist)
+            repl.load_command_history()
+            repl.save_command_history()
+        finally:
+            repl.own_history(None)
+            if saved is None:
+                os.environ.pop("WISP_HISTORY_FILE", None)
+            else:
+                os.environ["WISP_HISTORY_FILE"] = saved
+        if hist.read_bytes() != before:
+            return _result(name, commit, t0, CheckStatus.FAIL, "readline rewrote a history file prompt_toolkit owns: "
+                           "history is lost on every exit")
+    return _result(name, commit, t0, CheckStatus.OK, "v and space type normally; one history writer")
+
+
+def _check_fleet() -> CheckResult:
+    """The fleet manifest loads, every declared repo exists, and the MCP config matches the manifest's workers.
+
+    Local and read-only (no ``git fetch``). A repo that is gone is a FAIL; drift (dirty, unpushed, behind,
+    stashes, unmanaged repos, stale MCP entries) is a WARN, because it is work for a human, not a broken harness.
+    """
+    t0, name, commit = time.monotonic(), "fleet", "fleet"
+    try:
+        from wisp.fleet import (
+            FleetManifestError,
+            discover_unmanaged,
+            find_manifest,
+            load_manifest,
+            merge_mcp_config,
+            render_mcp_servers,
+            repo_status,
+        )
+    except ImportError as exc:
+        return _result(name, commit, t0, CheckStatus.WARN, f"not in this checkout: {exc}")
+    path = find_manifest(None)
+    if not path.is_file():
+        return _result(name, commit, t0, CheckStatus.WARN, f"no wisp.fleet.toml at {path}: no repos are tracked")
+    try:
+        manifest = load_manifest(path)
+    except FleetManifestError as exc:
+        return _result(name, commit, t0, CheckStatus.FAIL, f"manifest is not trustworthy: {exc}")
+
+    statuses = [repo_status(r.name, r.path, remote_required=r.remote_required) for r in manifest.repos]
+    gone = [s.name for s in statuses if any(p.kind in ("missing", "not-a-repo") for p in s.problems)]
+    drift: dict[str, int] = {}
+    for st in statuses:
+        for problem in st.problems:
+            if problem.kind not in ("missing", "not-a-repo"):
+                drift[problem.kind] = drift.get(problem.kind, 0) + 1
+    unmanaged = discover_unmanaged(manifest.scan, [r.path for r in manifest.repos])
+    details: dict[str, Any] = {"repos": len(statuses), "drift": drift, "unmanaged": [str(p) for p in unmanaged]}
+    if gone:
+        return _result(name, commit, t0, CheckStatus.FAIL, f"declared repos are gone: {', '.join(gone)}", **details)
+
+    stale = ""
+    managed = render_mcp_servers(manifest)
+    target = Path.home() / ".config" / "wisp" / "mcp.json"
+    try:
+        existing = json.loads(target.read_text(encoding="utf-8")) if target.is_file() else None
+        if managed and merge_mcp_config(existing, managed) != existing:
+            stale = f"{target} does not match the manifest's workers: run `wisp fleet workers --write {target}`"
+    except FleetManifestError as exc:
+        return _result(name, commit, t0, CheckStatus.FAIL, f"MCP config conflicts with the manifest: {exc}", **details)
+    except (OSError, ValueError) as exc:
+        stale = f"{target} is unreadable ({exc})"
+
+    notes = [f"{n} {kind}" for kind, n in sorted(drift.items())]
+    if unmanaged:
+        notes.append(f"{len(unmanaged)} unmanaged repo(s)")
+    if stale:
+        notes.append(stale)
+    if notes:
+        return _result(name, commit, t0, CheckStatus.WARN, f"{len(statuses)} repos; " + "; ".join(notes), **details)
+    return _result(name, commit, t0, CheckStatus.OK, f"{len(statuses)} repos clean and published; MCP config in sync",
+                   **details)
+
+
 _CHECKS: Final[tuple[tuple[str, Callable[[], CheckResult]], ...]] = (
     ("tool_profile", _check_tool_profile),
     ("subagent_surface", _check_subagent_surface),
@@ -210,6 +331,8 @@ _CHECKS: Final[tuple[tuple[str, Callable[[], CheckResult]], ...]] = (
     ("global_skills", _check_global_skills),
     ("skill_capture", _check_skill_capture),
     ("audit_chain", _check_audit_chain),
+    ("repl_input", _check_repl_input),
+    ("fleet", _check_fleet),
 )
 
 HARNESS_CHECK_NAMES: Final[tuple[str, ...]] = tuple(n for n, _ in _CHECKS)

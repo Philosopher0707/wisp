@@ -22,7 +22,7 @@
 > `—` therefore means *no catch inside these roots*, which is **not** the same claim as
 > *unhandled* — see §(c).
 >
-> Generated 2026-09-30 at `691fdc4` · **48 classes** · **280 raise sites** · **48 catch sites** · **7 with no test naming them**.
+> Generated 2026-09-30 at `a92f6fa` · **48 classes** · **280 raise sites** · **50 catch sites** · **7 with no test naming them**.
 
 ---
 
@@ -42,7 +42,7 @@
 | `BoundsError` | `RuntimeError` | guard | startup | `wisp/runtime/bounds.py:59` | 11 | `wisp/runtime/bounds.py:95` | `wisp/composition.py:134` | — |
 | `CostError` | `RuntimeError` | guard | turn | `wisp/runtime/cost.py:48` | 4 | `wisp/runtime/cost.py:93` | — | — |
 | `UnknownModel` | `CostError` | guard | turn | `wisp/runtime/cost.py:54` | 1 | `wisp/runtime/cost.py:159` | `wisp/runtime/cost.py:183` | — |
-| `FleetManifestError` | `ValueError` | guard | cli | `wisp/fleet.py:28` | 15 | `wisp/fleet.py:98` | `wisp/fleet.py:358`, `wisp/fleet.py:397`, `wisp/fleet_ci.py:259` | — |
+| `FleetManifestError` | `ValueError` | guard | cli | `wisp/fleet.py:28` | 15 | `wisp/fleet.py:98` | `wisp/core/doctor_harness.py:288`, `wisp/core/doctor_harness.py:310`, `wisp/fleet.py:358`, `wisp/fleet.py:397`, `wisp/fleet_ci.py:259` | — |
 | `IdempotencyError` | `RuntimeError` | guard | tool | `wisp/runtime/idempotency.py:57` | 2 | `wisp/runtime/idempotency.py:295` | — | — |
 | `KeyReuse` | `IdempotencyError` | guard | tool | `wisp/runtime/idempotency.py:63` | 1 | `wisp/runtime/idempotency.py:350` | — | — |
 | `UnstableKey` | `IdempotencyError` | guard | tool | `wisp/runtime/idempotency.py:78` | 1 | `wisp/runtime/idempotency.py:376` | — | — |
@@ -123,7 +123,7 @@ the derivation refuses if a row's phase is absent here, or a phase here has no r
 
 ## (c) The raise/catch asymmetry
 
-**280 raise sites, 48 catch sites.** The asymmetry is large and it is mostly not a defect: a library-style module raises and lets its caller decide, and the caller is often outside the three roots this page covers.
+**280 raise sites, 50 catch sites.** The asymmetry is large and it is mostly not a defect: a library-style module raises and lets its caller decide, and the caller is often outside the three roots this page covers.
 
 What the asymmetry **does** let this page state precisely is the zero:
 

@@ -53,8 +53,22 @@ def history_path() -> Path:
     return Path(custom).expanduser() if custom else Path.home() / ".wisp" / "history"
 
 
+#: The history file prompt_toolkit's ``FileHistory`` owns, or None. Two writers on one file lose data: readline
+#: keeps its own in-memory list (empty, since prompt_toolkit never feeds it) and ``write_history_file`` replaced
+#: the whole file with it on exit, so every launch started with no history.
+_PTK_HISTORY: Path | None = None
+
+
+def own_history(path: Path | None) -> None:
+    """Record that prompt_toolkit owns ``path`` (None: nobody does, readline may use the file)."""
+    global _PTK_HISTORY
+    _PTK_HISTORY = path
+
+
 def load_command_history() -> bool:
     """Load prior prompts into readline so up-arrow recalls them."""
+    if _PTK_HISTORY is not None:
+        return False
     try:
         import readline
     except ImportError:
@@ -71,6 +85,8 @@ def load_command_history() -> bool:
 
 
 def save_command_history() -> bool:
+    if _PTK_HISTORY is not None:
+        return False
     try:
         import readline
     except ImportError:
@@ -212,6 +228,65 @@ PROMPT_TEXT = "wisp ❯ "
 PROMPT_CONTINUATION = "... "
 
 
+def build_key_bindings(model: Any) -> Any:
+    """Space and ``v`` are shortcuts only on an empty prompt AND only when there is something for them to do.
+
+    Otherwise they are ordinary characters. Both used to be swallowed unconditionally on an empty buffer, so a
+    command starting with ``v`` lost its first letter ("view" arrived as "iew") and leading spaces vanished.
+    """
+    from prompt_toolkit.application.current import get_app
+    from prompt_toolkit.filters import Condition
+    from prompt_toolkit.key_binding import KeyBindings
+
+    kb = KeyBindings()
+    empty = Condition(lambda: get_app().current_buffer.text == "")
+
+    @kb.add(" ", filter=empty)
+    def _toggle_block(event: Any) -> None:
+        import shutil
+        import time
+
+        from wisp.cli.ui.blocks import expand_newest
+        from wisp.transport.renderer import render_block
+
+        if not any(b.kind in ("thought", "diff") for b in model.blocks):
+            event.current_buffer.insert_text(" ")
+            return
+        b = expand_newest(model)
+        if b is not None:
+            try:
+                width = shutil.get_terminal_size((80, 24)).columns
+            except Exception:
+                width = 80
+            text = render_block(b, False, time.monotonic(), width)
+            if text:
+                try:
+                    sys.stderr.write(text + "\n")
+                    sys.stderr.flush()
+                except OSError:
+                    pass
+
+    @kb.add("v", filter=empty)
+    def _open_pager(event: Any) -> None:
+        # v here opens the diff pager (input loop, empty buffer). v inside an approval prompt means VIEW: a
+        # different loop, no key collision.
+        from wisp.cli.ui import pager as _pager
+        from wisp.cli.ui.blocks import diff_pager_effect
+
+        eff = diff_pager_effect(model, "v")
+        if eff is None:
+            event.current_buffer.insert_text("v")
+            return
+        # Inspect-only: show_diff's apply/abort verdict is intentionally unconsumed. Approval happens at the gate.
+        model.viewport = "altscreen"
+        try:
+            _pager.show_diff(eff[1])
+        finally:
+            model.viewport = "scrollback"
+
+    return kb
+
+
 def make_input_fn(history_file: Path | None = None, model: Any | None = None) -> InputFn:
     """Single-line prompt: prompt_toolkit when available+tty, else readline.
 
@@ -251,53 +326,8 @@ def make_input_fn(history_file: Path | None = None, model: Any | None = None) ->
                 return _readline_input
 
             if model is not None:
-                from prompt_toolkit.filters import Condition
-                from prompt_toolkit.application.current import get_app
-                from prompt_toolkit.key_binding import KeyBindings
-                _toggle_kb = KeyBindings()
-
-                @_toggle_kb.add(" ", filter=Condition(
-                    lambda: get_app().current_buffer.text == ""))
-                def _toggle_block(event) -> None:
-                    import sys
-                    import time
-                    import shutil
-                    from wisp.cli.ui.blocks import expand_newest
-                    from wisp.transport.renderer import render_block
-                    b = expand_newest(model)
-                    if b is not None:
-                        try:
-                            width = shutil.get_terminal_size((80, 24)).columns
-                        except Exception:
-                            width = 80
-                        text = render_block(b, False, time.monotonic(), width)
-                        if text:
-                            try:
-                                sys.stderr.write(text + "\n")
-                                sys.stderr.flush()
-                            except OSError:
-                                pass
-
-                @_toggle_kb.add("v", filter=Condition(
-                    lambda: get_app().current_buffer.text == ""))
-                def _open_pager(event) -> None:
-                    # v here opens the diff pager (input loop, empty buffer).
-                    # v inside an approval prompt means VIEW — different loop,
-                    # no key collision.
-                    from wisp.cli.ui.blocks import diff_pager_effect
-                    from wisp.cli.ui import pager as _pager
-                    eff = diff_pager_effect(model, "v")
-                    # NOTE (inspect-only): show_diff's apply/abort verdict is
-                    # intentionally unconsumed here — v means "inspect", and
-                    # approval happens at the gate, not the pager.
-                    if eff is not None:
-                        model.viewport = "altscreen"
-                        try:
-                            _pager.show_diff(eff[1])
-                        finally:
-                            model.viewport = "scrollback"
-
-                session.key_bindings = _toggle_kb
+                session.key_bindings = build_key_bindings(model)
+            own_history(Path(hist))
 
             try:
                 from prompt_toolkit.formatted_text import HTML

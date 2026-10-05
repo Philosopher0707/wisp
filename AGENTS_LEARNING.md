@@ -214,7 +214,7 @@ Search: sqlite corrupt, malformed, database disk image is malformed, WAL, quaran
 
 ## wisp doctor harness invariants checks tool profile budget context skills audit (2026-10-05)
 
-- `wisp doctor` (and `/doctor --deep`) runs `wisp/core/doctor_harness.py`: seven probes for what the 2026-10 review fixed: tool profile, subagent tool surface, spend meter, context fit, global skills, skill capture, audit chain. Exit 1 on FAIL; WARN is advice.
+- `wisp doctor` (and `/doctor --deep`) runs `wisp/core/doctor_harness.py`: nine probes for what the 2026-10 review fixed: tool profile, subagent tool surface, spend meter, context fit, global skills, skill capture, audit chain, REPL input, fleet (manifest, repos, MCP config drift; local and read-only). Exit 1 on FAIL; WARN is advice.
 - Boot preflight stays at 7 cheap checks under its 100 ms budget. Probes that import heavy modules or touch disk must not join it: a slow check shows up as a startup warning on every launch.
 - Every check has a mutation test that breaks the invariant in the code under test and expects red. A check that cannot fail is decoration.
 - The probes are hermetic (temp workspace, temp audit log). The live audit log is read-only: a historical break is a WARN with "do not rewrite", never a repair.
@@ -359,3 +359,5 @@ now with a note. Compact forms measured on the same 47 skills: 8,840 tokens (cur
 (description cut to 120 chars), 389 (name only). The user chose to trim `~/.agents/skills` by hand instead of changing the format.
 Still open: ~30% of the prompt is appended after budgeting; `config.skill_dirs` is a dormant setting.
 
+- REPL input: `v` and space were swallowed on an empty prompt even with nothing to open ("view" arrived as "iew"), and readline's empty in-memory history overwrote prompt_toolkit's `FileHistory` on exit. Fix: `build_key_bindings` (insert the char when there is nothing to act on) and `own_history` (one writer). Test the real library on piped input; a mock cannot show a key-binding bug. A pty relaunch confirmed history survives.
+- A source-grep test pins code by function name; extracting code from `make_input_fn` broke three of them. Move the pin to the new home, do not loosen it.

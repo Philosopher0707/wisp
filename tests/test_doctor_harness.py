@@ -7,6 +7,8 @@ code under test (not in the check) and the check must go red.
 from __future__ import annotations
 
 import json
+import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -23,7 +25,34 @@ def hermetic(tmp_path, monkeypatch):
     monkeypatch.setenv("WISP_AUDIT_LOG", str(tmp_path / "live-audit.jsonl"))
     monkeypatch.delenv("WISP_TOOL_PROFILE", raising=False)
     monkeypatch.setattr("wisp.skills.GLOBAL_SKILL_DIRS", [home / ".agents" / "skills"])
+    # A one-repo fleet that is clean, so no test reads the developer's real manifest or repos.
+    monkeypatch.setenv("WISP_FLEET_MANIFEST", str(_fleet(tmp_path / "fleet", ["main-repo"])))
     return home
+
+
+def _git(path: Path, *args: str) -> None:
+    subprocess.run(["git", "-C", str(path), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                   check=True, capture_output=True)
+
+
+def _fleet(root: Path, names: list[str], *, scan: Path | None = None) -> Path:
+    """A manifest over real, clean git repos; the first is the orchestrator. Returns the manifest path."""
+    root.mkdir(parents=True, exist_ok=True)
+    lines = []
+    for i, n in enumerate(names):
+        repo = root / n
+        repo.mkdir()
+        _git(repo, "init", "-q")
+        (repo / "f").write_text("x")
+        _git(repo, "add", "f")
+        _git(repo, "commit", "-q", "-m", "init")
+        role = "orchestrator" if i == 0 else "tool"
+        lines.append(f'[[repo]]\nname = "{n}"\npath = "{repo}"\nrole = "{role}"\nremote_required = false\n')
+    if scan is not None:
+        lines.append(f'[fleet]\nscan = ["{scan}"]\n')
+    manifest = root / "wisp.fleet.toml"
+    manifest.write_text("\n".join(lines))
+    return manifest
 
 
 def _run(check) -> tuple[CheckStatus, str]:
@@ -34,7 +63,7 @@ def _run(check) -> tuple[CheckStatus, str]:
 def test_names_are_pinned():
     assert dh.HARNESS_CHECK_NAMES == (
         "tool_profile", "subagent_surface", "spend_accounting", "context_budget",
-        "global_skills", "skill_capture", "audit_chain",
+        "global_skills", "skill_capture", "audit_chain", "repl_input", "fleet",
     )
 
 
@@ -170,6 +199,85 @@ def test_audit_chain_warns_on_a_broken_live_log_and_never_touches_it(tmp_path):
     status, message = _run(dh._check_audit_chain)
     assert status is CheckStatus.WARN and "historical break" in message
     assert live.read_bytes() == before, "the live audit log is evidence; the doctor must not rewrite it"
+
+
+# ── repl_input ───────────────────────────────────────────────────────────────────────────────────────────────
+
+
+def test_repl_input_fails_when_a_shortcut_swallows_the_first_letter(monkeypatch):
+    from prompt_toolkit.key_binding import KeyBindings
+
+    def swallowing(model):  # the old behaviour: `v` and space are eaten on an empty prompt
+        kb = KeyBindings()
+        kb.add("v")(lambda event: None)
+        return kb
+
+    monkeypatch.setattr("wisp.cli.repl.build_key_bindings", swallowing)
+    status, message = _run(dh._check_repl_input)
+    assert status is CheckStatus.FAIL and "swallowed" in message
+
+
+def test_repl_input_fails_when_readline_still_owns_prompt_toolkits_history(monkeypatch):
+    monkeypatch.setattr("wisp.cli.repl.own_history", lambda path: None)  # ownership never recorded
+    status, message = _run(dh._check_repl_input)
+    assert status is CheckStatus.FAIL and "history" in message
+
+
+# ── fleet ────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+def test_fleet_warns_when_there_is_no_manifest(monkeypatch, tmp_path):
+    monkeypatch.setenv("WISP_FLEET_MANIFEST", str(tmp_path / "absent.toml"))
+    assert _run(dh._check_fleet)[0] is CheckStatus.WARN
+
+
+def test_fleet_fails_on_an_untrustworthy_manifest(monkeypatch, tmp_path):
+    bad = tmp_path / "bad.toml"
+    bad.write_text("this is = = not toml")
+    monkeypatch.setenv("WISP_FLEET_MANIFEST", str(bad))
+    assert _run(dh._check_fleet)[0] is CheckStatus.FAIL
+
+
+def test_fleet_fails_when_a_declared_repo_is_gone(monkeypatch, tmp_path):
+    import shutil
+
+    manifest = _fleet(tmp_path / "gone", ["a", "b"])
+    shutil.rmtree(tmp_path / "gone" / "b")
+    monkeypatch.setenv("WISP_FLEET_MANIFEST", str(manifest))
+    status, message = _run(dh._check_fleet)
+    assert status is CheckStatus.FAIL and "b" in message
+
+
+def test_fleet_warns_on_a_dirty_repo(monkeypatch, tmp_path):
+    manifest = _fleet(tmp_path / "dirty", ["a"])
+    (tmp_path / "dirty" / "a" / "f").write_text("changed")
+    monkeypatch.setenv("WISP_FLEET_MANIFEST", str(manifest))
+    status, message = _run(dh._check_fleet)
+    assert status is CheckStatus.WARN and "1 dirty" in message
+
+
+def test_fleet_warns_on_an_unmanaged_repo(monkeypatch, tmp_path):
+    scan = tmp_path / "scan"
+    (scan / "stray").mkdir(parents=True)
+    _git(scan / "stray", "init", "-q")
+    monkeypatch.setenv("WISP_FLEET_MANIFEST", str(_fleet(tmp_path / "um", ["a"], scan=scan)))
+    status, message = _run(dh._check_fleet)
+    assert status is CheckStatus.WARN and "unmanaged" in message
+
+
+def test_fleet_warns_when_the_mcp_config_is_missing_a_worker(monkeypatch, tmp_path, hermetic):
+    manifest = _fleet(tmp_path / "wk", ["a", "w"])
+    manifest.write_text(manifest.read_text() + '\n[repo.worker]\ncommand = ["/bin/echo", "hi"]\n')  # `w` is last
+    monkeypatch.setenv("WISP_FLEET_MANIFEST", str(manifest))
+    status, message = _run(dh._check_fleet)
+    assert status is CheckStatus.WARN and "fleet workers --write" in message
+
+    from wisp.fleet import load_manifest, merge_mcp_config, render_mcp_servers
+
+    target = hermetic / ".config" / "wisp" / "mcp.json"
+    target.parent.mkdir(parents=True)
+    target.write_text(json.dumps(merge_mcp_config(None, render_mcp_servers(load_manifest(manifest)))))
+    assert _run(dh._check_fleet)[0] is CheckStatus.OK, "an in-sync MCP config is clean"
 
 
 # ── runner and CLI ───────────────────────────────────────────────────────────────────────────────────────────
