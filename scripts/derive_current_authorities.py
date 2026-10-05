@@ -506,9 +506,20 @@ def render_matrix() -> str:
     return "\n".join(L)
 
 
+def _stamp():
+    """The shared, squash-proof stamp helper (scripts/_page_stamp.py), loaded by path so it works however this script is run."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("_page_stamp", pathlib.Path(__file__).with_name("_page_stamp.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def render() -> str:
-    sha = _git("rev-parse", "--short", "HEAD")
-    date = _git("log", "-1", "--format=%cs", "HEAD")
+    stamp = _stamp()
+    sha = stamp.stamp_sha(REPO)  # the merge-base with origin/main: a squash merge cannot orphan it
+    date = stamp.stamp_date(REPO, sha)
     top = max(_defined_adrs(_decisions_text()))
     L: list[str] = []
     A = L.append

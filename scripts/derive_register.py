@@ -358,9 +358,19 @@ def _check(defined, raises, catches) -> list[str]:
     return broken
 
 
+def _stamp():
+    """The shared, squash-proof stamp helper (scripts/_page_stamp.py), loaded by path so it works however this script is run."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("_page_stamp", pathlib.Path(__file__).with_name("_page_stamp.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def _head_sha() -> str:
-    return subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=REPO,
-                          capture_output=True, text=True, check=True).stdout.strip()
+    """The commit stamped into the page: the merge-base with origin/main, so a squash merge cannot orphan it."""
+    return _stamp().stamp_sha(REPO)
 
 
 def render() -> str:
