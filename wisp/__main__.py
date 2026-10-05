@@ -1382,7 +1382,7 @@ def main():
         def _do_check():
             cmd_check(flags_model)
         def _do_doctor():
-            from wisp.core.doctor_harness import main as _doctor_main
+            from wisp.cli.doctor_harness import main as _doctor_main
             raise SystemExit(_doctor_main(rest))
         def _do_models():
             cmd_models()

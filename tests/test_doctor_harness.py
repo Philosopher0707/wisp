@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from wisp.core import doctor_harness as dh
+from wisp.cli import doctor_harness as dh
 from wisp.core.doctor import CheckStatus
 
 

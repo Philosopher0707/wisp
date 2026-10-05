@@ -35,7 +35,7 @@ def cmd_doctor(agent, args: str):
     if "--deep" in raw:
         # Harness invariants: probes that cost more than the 100 ms boot budget, so they only run on request.
         from wisp.core.doctor import format_detailed
-        from wisp.core.doctor_harness import run_harness_checks
+        from wisp.cli.doctor_harness import run_harness_checks
 
         deep = run_harness_checks()
         print(json.dumps(deep.to_dict(), indent=2) if as_json else format_detailed(deep))
