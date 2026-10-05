@@ -9,10 +9,28 @@ from __future__ import annotations
 
 import ast
 import logging
+import os
+import time
 from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+#: Past either bound the graph is refused, not truncated: a partial graph would silently miss affected tests, and
+#: this runs after every write, so an unbounded walk made `write_file` take minutes from a $HOME workspace.
+MAX_FILES = 5000
+BUDGET_SECONDS = 5.0
+
+#: Directories that hold dependencies, build output or another application's files, never the project's own tests.
+#: Virtualenvs are also recognised by their `pyvenv.cfg`, whatever they are called.
+_SKIP_DIRS = frozenset({
+    "__pycache__", "node_modules", "site-packages", "dist-packages", "venv", "env", "virtualenv",
+    "build", "dist", "Library",
+})
+
+
+class ImportGraphTooLarge(RuntimeError):
+    """The workspace has more Python files (or takes longer to read) than the affected-test lookup may spend."""
 
 
 def _resolve_import(
@@ -108,19 +126,24 @@ def build_import_graph(workspace: str | Path) -> dict[Path, set[Path]]:
     """
     root = Path(workspace).resolve()
     graph: dict[Path, set[Path]] = {}
+    deadline = time.monotonic() + BUDGET_SECONDS
 
-    for pyfile in root.rglob("*.py"):
-        # Skip common non-source directories
-        if any(part.startswith(".") for part in pyfile.relative_to(root).parts):
-            continue
-        if "__pycache__" in pyfile.parts:
-            continue
-
-        pyfile = pyfile.resolve()
-        imports = _extract_imports_from_file(pyfile, root)
-        # Only keep imports that are inside the workspace
-        local = {p for p in imports if root in p.parents or p == root}
-        graph[pyfile] = local
+    for dirpath, dirnames, filenames in os.walk(root):
+        # Prune in place so os.walk never enters them (the old rglob walked everything, then discarded paths).
+        dirnames[:] = sorted(
+            d for d in dirnames
+            if not d.startswith(".") and d not in _SKIP_DIRS and not (Path(dirpath, d) / "pyvenv.cfg").exists()
+        )
+        for name in sorted(filenames):
+            if not name.endswith(".py"):
+                continue
+            if len(graph) >= MAX_FILES or time.monotonic() > deadline:
+                raise ImportGraphTooLarge(
+                    f"{root} has more than {MAX_FILES} Python files or took longer than {BUDGET_SECONDS:g}s to read")
+            pyfile = Path(dirpath, name).resolve()
+            imports = _extract_imports_from_file(pyfile, root)
+            # Only keep imports that are inside the workspace
+            graph[pyfile] = {p for p in imports if root in p.parents or p == root}
 
     return graph
 
