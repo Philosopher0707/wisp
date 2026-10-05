@@ -613,6 +613,10 @@ class AgentRuntime:
                 if approval_handler is None:
                     approval_handler = self._autonomous_approval_handler()
 
+            # Where this turn's own messages begin: the spend estimate charges this turn's provider calls, while the
+            # earlier history still counts as input to them.
+            turn_start_index = len(session["messages"])
+
             # Add user message
             session["messages"].append({"role": "user", "content": prompt})
             seq_num += 1
@@ -1468,10 +1472,23 @@ class AgentRuntime:
                 # NOTE: the counts come from `TokenCounter`, which ESTIMATES from
                 # characters — the providers do not report usage. So a cost is an
                 # estimate of a cost, and the bound is as sharp as the estimate.
+                #
+                # What is charged is every provider call the turn made, not the size of what the user typed: each call
+                # re-sends the system prompt, the tool schemas and the history (`wisp.core.spend`). The old figure
+                # (`count(prompt)`) is kept as a floor, so a turn is never charged less than before.
+                spent_in = spent_out = 0
+                try:
+                    from wisp.core.spend import estimate_spend
+
+                    spent_in, spent_out = estimate_spend(
+                        session["messages"], self.prompt_overhead_chars(session),
+                        from_index=turn_start_index, chars_per_token=chars_per_token)
+                except Exception:
+                    logger.debug("spend estimate failed; charging the prompt and reply only", exc_info=True)
                 self.telemetry.record_turn(
                     latency_ms=latency_ms,
-                    prompt_tokens=counter.count(prompt, model=model),
-                    completion_tokens=counter.count("".join(assistant_content), model=model),
+                    prompt_tokens=max(counter.count(prompt, model=model), spent_in),
+                    completion_tokens=max(counter.count("".join(assistant_content), model=model), spent_out),
                     model=model,
                 )
 

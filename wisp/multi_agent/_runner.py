@@ -1000,27 +1000,13 @@ class SubagentRunner:
     def _estimate_spend(self, messages: list[dict], overhead_chars: int = 0) -> tuple[int, int]:
         """Estimate ``(input_tokens, output_tokens)`` the provider was actually sent and returned.
 
-        Providers report no usage in the stream, so this reconstructs it from the transcript. Each assistant message
-        is one provider call; that call's input is the fixed overhead plus every message before it, and its output
-        is the message itself (content and tool-call arguments). Summing over calls is what the child cost: the
-        transcript counted once understates it by roughly the number of calls.
+        The reconstruction is `wisp.core.spend.estimate_spend` (one function, shared with the parent's telemetry); this
+        method only supplies the ruler from the parent config.
         """
-        from wisp.infra.token_counter import TokenCounter
+        from wisp.core.spend import estimate_spend
 
-        counter = TokenCounter(chars_per_token=getattr(self.parent_config, "chars_per_token", 4))
-        history_chars = 0
-        in_tok = out_tok = 0
-        for msg in messages:
-            content = msg.get("content", "") or ""
-            chars = len(content if isinstance(content, str) else str(content))
-            if msg.get("role") == "assistant":
-                for tc in msg.get("tool_calls", []) or []:
-                    args = tc.get("function", {}).get("arguments", "")
-                    chars += len(args) if isinstance(args, str) else len(str(args))
-                in_tok += counter.estimate_chars(overhead_chars + history_chars)
-                out_tok += counter.estimate_chars(chars)
-            history_chars += chars
-        return in_tok, out_tok
+        return estimate_spend(messages, overhead_chars,
+                              chars_per_token=getattr(self.parent_config, "chars_per_token", 4))
 
     def _estimate_tokens(self, messages: list[dict]) -> tuple[int, int, int]:
         """Estimate token count from message history.
