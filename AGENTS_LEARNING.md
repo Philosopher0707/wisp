@@ -159,6 +159,8 @@ Boundaries (2026-09-29): simulated-first research scope; I open PRs and the user
 skill loading and delegation with tests; I may repair local `main` as new commits. Never push the user's
 local-only commits, spend money, delete remote branches, or edit their uncommitted files. Widening a permission
 mode or changing a pinned policy is the user's decision; state the trade-off and ask.
+2026-10-04: the user explicitly told me to review the open PRs and merge them. I merged only after green CI,
+one PR at a time, with checkpoint tags first. That was a one-off instruction, not a change to the standing rule.
 
 ## Known gaps (not verified)
 
@@ -209,3 +211,142 @@ Search: sqlite corrupt, malformed, database disk image is malformed, WAL, quaran
 - **Fix (`wisp/infra/store.py`):** `_ensure_initialized` now treats corruption-marked `DatabaseError` as a file-health problem: drop WAL sidecars + retry (heals WAL-only corruption with zero loss), else quarantine main file to `wisp.db.corrupt-<epoch>` + fresh init, else temp fallback. Any sqlite error on the retry path falls through to fallback — boot never crashes on sqlite errors; non-sqlite errors still raise loud. `ImmutableAuditTrail._init_table` delegates to the store's quarantine on the same markers and retries once.
 - **Corruption lies about its shape:** the same trashed pages surfaced as `DatabaseError: malformed`, as `OperationalError: no such column` (garbage parsed as schema, which then misfired the migration ALTER into "duplicate column"), and as `OperationalError: disk I/O error`. Message-sniffing is only the fast path; anything escaping the static init DDL is file-health suspect. Tests: `tests/test_unified_store.py::TestCorruptionRecovery` (garbage file -> backup + fresh; old-schema DB + trashed data page -> backup + fresh, both deterministic).
 **How to apply:** catch `sqlite3.DatabaseError` (not just `OperationalError`) around any SQLite boot path; never delete a corrupt DB, rename it aside; distrust the error message, trust `integrity_check`.
+
+## Lesson: CI step order hides lint; red tests mask the ruff gate (2026-10-04)
+
+Search: ci, ruff, pytest, step order, masked, lint gate, main red, green main, unused import, F401.
+`ci.yml` runs pytest, then `ruff check wisp/ wisp_net/ tests/`, then mypy. A job that stops at the test step never
+reaches the lint gate, so while main was red an unused import (`tests/reliability/test_idempotency_store.py:14`)
+sat there unseen. Evidence: PR #62's first run passed its tests and failed only on Ruff; `ruff check` on a pure
+`origin/main` archive reproduces the same single F401. Rule: after fixing the first red step, read the next one;
+run the whole gate list (tests, ruff, mypy) before pushing, not only the step you were chasing.
+
+## Lesson: tests that pass on the developer machine and fail in CI (hermetic workspace) (2026-10-04)
+
+Search: hermetic, .venv, HOME, doctor, preflight, fresh HOME, repl history, e2e, local pass CI fail, cli_surface.
+Main's CI failed exactly six tests: five in `test_preflight_doctor.py` (the build-sequence check needs
+`<workspace>/.venv/bin/python3`; a CI checkout has none) and the REPL `/help` e2e (it asserted the legacy "Available
+commands" header; the Dispatcher prints "Built-in commands:"). Reproduce with an **empty `HOME` and no `.venv`** in a
+separate worktree: pure main gave 6 failed / 31 passed, the fixed branch 37 passed. A `.venv` symlink in the
+worktree hides the failure; I made that mistake first. Also found: `FileHistory` does not create its parent
+directory, so the REPL crashed at the first keystroke on a fresh HOME. Fixed in PR #62.
+
+## Lesson: an audit hash chain read from memory forks under concurrent writers (2026-10-04)
+
+Search: audit, hash chain, fork, TAMPERED, flock, concurrent writers, in-memory head, verify, truncation, keyed MAC, witness.
+`AuditTrail.record` chained onto an in-memory `_last_hash`, but the CLI, the server and the tests all append to
+`~/.config/wisp/audit.jsonl`. Evidence on the live log: 4338 entries, 8 fork points, 14 broken links since
+2026-08-29, **every entry's own hash valid** (nothing edited); `wisp audit verify` said TAMPERED at entry 1848,
+which links back to entry 1825. The false alarm trains people to ignore the verifier. Fixed in PR #61: re-read the
+head from the file under `flock` before each append; four spawned processes appending 200 entries to a copy of the
+live log added 0 broken links. **Still open:** truncation is undetectable and the chain is unkeyed (a rewrite plus
+rechain passes `verify`); the fix is a keyed MAC and a witness outside the log's directory, as in always-on-worker
+ADR-0005/0007/0008. Never rewrite the live log: its 14 breaks are evidence. Probes: `docs/reviews/2026-10-04-probes/`.
+
+## Lesson: a SQLite WAL can hold committed data; move it aside, never delete it (2026-10-04)
+
+Search: sqlite, WAL, wal, shm, sidecar, corrupt, quarantine, data loss, recover, zero loss.
+PR #60's store recovery deleted `-wal`/`-shm`/`-journal` to "heal" a corrupt database and claimed zero loss. A WAL
+holds transactions committed but not yet checkpointed, so deleting it can drop recent sessions silently. The test
+was written first and failed against that behaviour; the sidecars are now renamed to `<name>.corrupt-<epoch>`, like
+the main file, so `sqlite3 <db> ".recover"` can still reach them.
+
+## Lesson: a subclass of TimeoutError is swallowed by `except TimeoutError` (2026-10-04)
+
+Search: FirstTokenTimeout, TimeoutError, asyncio, except order, subclass, contract deadline, mislabel, subagent.
+`FirstTokenTimeout` subclasses `asyncio.TimeoutError`. A new mid-run deadline handler caught `TimeoutError` and so
+swallowed it, reporting "contract deadline reached after 60s" for a provider that streamed nothing in 0.5s. The test
+that would catch it needs `max_retries=0`, because a retry hides the difference. Re-raise the specific exception
+before the generic one.
+
+## Lesson: a timing-tight test is a flake, and the order effect is a symptom (2026-10-04)
+
+Search: flaky, flake, timeout 0.2, test_timeout_preserves_partial_round, order dependent, deadline, bisect.
+`test_timeout_preserves_partial_round` gave a whole subagent 0.2s. It passed alone, failed 4/4 in a full-class run,
+and passed in a two-test pair, which looked like pollution. Loosening only the deadline to 1.5s made it pass in the
+class and across three files, so the cause was setup time, not shared state. Measure before bisecting for pollution.
+
+## Lesson: orchestrating other repos over MCP without giving the model their authority (2026-10-04)
+
+Search: mcp, worker, shim, fleet, manifest, approve, label, consent, WISP_STRICT_ENV, environment inheritance, always-on-worker, gump.
+Each worker is an MCP stdio server that shells out to the worker's own CLI, so its guards (keys, witness path, audit
+chain) apply unchanged. The tool surface is a reviewed allowlist: no `approve` (always-on-worker), no `label` and no
+`run` (gump), and no path, model or credential arguments; a test pins each. Secrets come from an env file named in the
+manifest, never the manifest. Verified through wisp's own MCP client under `WISP_STRICT_ENV=1`: `gump_verify` reported
+"chain intact: 2410 events verified". Found on the way: wisp starts MCP servers with its **full** environment (93
+variables, including API keys) unless `WISP_STRICT_ENV=1` is set. See `docs/fleet/README.md` and
+`docs/adr/2026-10-04-fleet-worker-contract.md`.
+
+## Lesson: reading a secrets-bearing file leaks it into the transcript (2026-10-04)
+
+Search: tail, zshrc, api key, plaintext, secrets, env file, never cat, grep -c, rc file.
+`tail ~/.zshrc` printed a plaintext API key line into the session. To learn whether a setting exists, use `grep -c`
+or `grep -o '^[A-Z_]*='` (names only), never `cat`/`tail` on a shell rc file or a `.env`.
+
+## Lesson: two nested deadlines that differ by milliseconds lose the partial result under load (2026-10-04)
+
+Search: asyncio.timeout, nested timeout, deadline, same tick, double cancel, partial round, CI only, busy loop, backstop.
+`SubagentRunner.run` wrapped `_run_agent` in `asyncio.timeout(timeout_seconds)` while the execution loop inside used
+`asyncio.timeout(remaining)` with `remaining = start + timeout_seconds - now`. The two deadlines differed only by the
+setup time. When the event loop was busy past both, their timers fired in the same tick and both cancelled the task;
+the inner `__aexit__` then did not convert its cancellation to `TimeoutError`, and the outer backstop won with an empty
+round ("Timed out after 1.5s - no tool calls were made"). That is why `test_timeout_preserves_partial_round` failed in
+CI at 0.2 s and again at 1.5 s but passed locally: it was not setup latency, and a 30,000-file workspace did not change
+it. Reproduced deterministically with a blocking `time.sleep` standing in for the busy loop. Fix: the outer backstop is
+`timeout_seconds + 2 s`. Rule: when a result must survive a deadline, the handler that preserves it needs a deadline
+strictly earlier than any backstop, by a margin larger than scheduling jitter.
+
+## Lesson: a test that cannot fail under its own mutation is not a test (2026-10-04)
+
+Search: mutation, test weakness, structural assertion, wall clock, per_session_locks, serialised, passes anyway, positive control.
+`test_per_session_locks` asserted that two 50 ms turns finished in under 90 ms; CI took 113 ms. I rewrote it to require
+both turns to be in flight at once. The first draft still **passed** when I made every session share one lock: the
+starved turn timed out, the runtime turned that into an error event, and a non-empty result satisfied the assertions.
+Strengthened to require real `content` events and no `error` events, plus a control that one session id is never
+concurrent; the mutation then fails in 3.4 s. Always run the mutation, and give a test that waits an outer timeout so it
+fails fast instead of hanging.
+
+
+## Lesson: skill capture passed 143 tests and the auto half did nothing (2026-10-04)
+
+Search: skill capture, auto skill, auto_skill_capture, discover_skills, .wisp/skills/auto, SKILL.md, YAML, frontmatter, injection, write-only, round trip.
+Auto-capture on a RESOLVED turn wrote `.wisp/skills/auto/<slug>/SKILL.md`, a directory `discover_skills` never scanned; and
+every file it wrote was invalid YAML (`description: Auto-captured RESOLVED workflow: <task>` has a `: ` in a plain scalar),
+so `parse_skill` returned None. The tests asserted the *path written* and used colon-free descriptions. A third defect hid
+behind the first two: task text and tool arguments went into the file verbatim, and `parse_skill` ends the frontmatter
+with a substring `split("---")`, so a newline or a `---` could add keys or close the frontmatter. Fixing "not loaded"
+alone would have created a persistent prompt-injection path, so all three were fixed together (PR #63). Rules: test a
+write-then-read **round trip** and the real consumer (`discover_skills`, `SkillExtension.tools()`), not the write alone;
+use a description with a colon, a newline and `---`; and when a feature is dormant, ask what the dormancy is hiding before
+you wake it. Still open: `parse_skill`'s substring split is a hazard for hand-written skills.
+
+## Lesson: how the system prompt is assembled, and where the budget leaks (2026-10-04)
+
+Search: context assembly, system prompt, ContextAssembler, _fit_sections, token budget, 6000, skills block dropped, silent omission, unbudgeted, tools block, skill__ tools, schema tokens, _build_system_prompt.
+Path: `_build_system_prompt` keys a 64-entry cache on (workspace, mtimes of `.wisp/rules.md`, `.wisp/conventions.md`, the memory
+file and the sessions file, subagent-prompt hash, allowed-tools hash, thin flag). On a miss it gathers skills, project context,
+memory, git, repo map (subagents skip the heavy ones), loads `rules.md` as `role_extra`, and `ContextAssembler.build` orders
+sections by priority (0 default_system, workspace; 1 context_files, mandatory skill, plans; 2 role_extra, skills, memory;
+3 project context, code index, summaries, git, repo map) and `_fit_sections` admits them against `max_tokens` (default 6000).
+Over budget: priority 0 and memory are truncated, **everything else is dropped whole**. Appended afterwards, outside the budget:
+tools block, lint context, module summary, then per turn the query-relevant files, compaction notice, operating context and
+environment block. Measured on this repo (clean HOME): ~6.5k tokens, ~2k of them outside the budget. Evidence and probes:
+`docs/reviews/2026-10-04-probes/context_*_probe.py`.
+- **Budget accounting resets after a truncation.** `current_tokens = estimate(truncated)` overwrites the running total with
+  one block's size, so later sections are judged against a nearly empty budget. With a 1000-token budget, a 696-token
+  system section, an over-budget memory block and a 296-token project note produced **1527 tokens on main (1.53x) and 1354
+  on PR #60 (1.35x)**, with the project note admitted after memory was truncated. #60 fixed the ruler and the footer, not this.
+- **A skills block larger than the budget vanishes silently.** On the real HOME, 56 skills are discovered (53 model-invocable)
+  and the block alone is 10,398 tokens: no `## Skills` section, no omission note (`last_truncate_label` is only set for priority 0
+  and memory), while 53 `skill__*` tools still ship 10,197 tokens of schema on every request. The prompt that explains the
+  menu is gone and the menu is paid for anyway. Global skill directories (`~/.agents`, `~/.claude`) are what flood it.
+- **~30% of the prompt is never budgeted** (tools block 1489 tokens on its own).
+Status (2026-10-05): **accounting fixed in PR #64** (cumulative, done in characters on the one ruler, separators, compact
+header and note inside the budget, every cut or dropped section named in the note; the 1000-token case now gives 989). A
+first draft returned an empty prompt for a budget smaller than the truncation header, which an existing test caught; the
+first critical section now keeps a minimal slice. **Global skills now load from `~/.agents/skills` only** (same PR): that took
+this HOME from 56 to 50 skills because `~/.agents/skills` itself holds 47, so the menu is still ~9.3k tokens and is still dropped,
+now with a note. Compact forms measured on the same 47 skills: 8,840 tokens (current), 5,440 (name plus description), 2,289
+(description cut to 120 chars), 389 (name only). The user chose to trim `~/.agents/skills` by hand instead of changing the format.
+Still open: ~30% of the prompt is appended after budgeting; `config.skill_dirs` is a dormant setting.
+
