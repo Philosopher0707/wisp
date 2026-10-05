@@ -41,13 +41,13 @@ def _run(tool: str, cfg: WispConfig, tmp_path, approval_handler=None, args: dict
         return '{"status": "ok", "data": "done"}', 0.0
 
     ex._execute_tool = body
-    original = ex._audit_authorization
+    original = ex._audit_standing_grant
 
-    def spy(func_name, func_args, workspace, decision):
-        audited.append((func_name, str(getattr(decision, "controlling_layer", ""))))
-        return original(func_name, func_args, workspace, decision)
+    def spy(func_name, func_args, workspace):
+        audited.append((func_name, "standing-grant"))
+        return original(func_name, func_args, workspace)
 
-    ex._audit_authorization = spy
+    ex._audit_standing_grant = spy
 
     async def approver(name, a, reason):
         asked.append(name)

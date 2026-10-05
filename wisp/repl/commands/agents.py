@@ -253,6 +253,39 @@ def _swarm_progress(event) -> None:
         print(warning(f"   🔄 {event.task_id} retry #{p.get('retry', 0)} (backoff {p.get('backoff_seconds', 0)}s)"))
 
 
+def _swarm_verdict(results) -> str:
+    """``complete`` when every agent succeeded, ``failed`` when none did (or none ran), else ``partial``.
+
+    ``any(success)`` used to stand for all three, so four agents refused by the provider still ended in a green
+    "Swarm complete" and a synthesized "answer" built from four error blocks.
+    """
+    ok = sum(1 for r in results if r.success)
+    if not results or ok == 0:
+        return "failed"
+    return "complete" if ok == len(results) else "partial"
+
+
+def _describe_failure(error: object) -> str:
+    """A failure in words a person can act on. Raw provider JSON is cut mid-sentence, hiding the remedy."""
+    text = " ".join(str(error or "no error reported").split())
+    low = text.lower()
+    if "api error 402" in low or "on billing" in low:
+        return ("the provider refused the request on billing (HTTP 402): the account is out of credit or the key's "
+                "limit is too low. Add credit or raise the key's limit, then re-run.")
+    if "api error 401" in low:
+        return "the provider rejected the API key (HTTP 401): check WISP_API_KEY or run /provider."
+    return text[:300]
+
+
+def _swarm_failure_report(results, roles) -> list[str]:
+    """One line per distinct failure, naming the roles it hit (four identical 402s are one finding, not four)."""
+    groups: dict[str, list[str]] = {}
+    for role, r in zip(roles, results):
+        if not r.success:
+            groups.setdefault(_describe_failure(r.error), []).append(role)
+    return [f"   {', '.join(who)}: {why}" for why, who in groups.items()]
+
+
 @register("swarm", "Launch a multi-agent swarm for a complex task",
           aliases=("multi",), usage="/swarm <task description>")
 def cmd_swarm(agent, args: str):
@@ -303,21 +336,36 @@ def cmd_swarm(agent, args: str):
             self.plan = f"Parallel execution with {len(roles)} agents: {', '.join(roles)}"
 
     result = _SwarmResult(args, results)
+    verdict = _swarm_verdict(results)
+    failed = [r for r in results if not r.success]
+
+    if verdict == "failed":
+        # Nothing to synthesize: a "final answer" built from error text is noise, and the call costs money.
+        print()
+        print(error(f"✗ Swarm failed: {len(failed)} of {len(results)} agent(s) failed, none produced output"))
+        for line in _swarm_failure_report(results, roles):
+            print(line)
+        print()
+        print(dim(f"⏱  Total time: {result.elapsed_seconds:.1f}s"))
+        return
 
     # Synthesize a proper final answer using the agent's LLM
     print()
     print(info("🐝 Synthesizing final answer..."))
     final = _swarm_synthesize(agent, result)
     print()
-    print(success("✓ Swarm complete"))
+    if verdict == "complete":
+        print(success("✓ Swarm complete"))
+    else:
+        print(warning(f"⚠ Swarm finished with {len(failed)} of {len(results)} agent(s) failed"))
+        for line in _swarm_failure_report(results, roles):
+            print(line)
     print("─" * 60)
     print(final)
     print("─" * 60)
     print()
     print(dim(f"⏱  Total time: {result.elapsed_seconds:.1f}s"))
     print(dim(f"📁 Files changed: {', '.join(result.files_changed) if result.files_changed else 'none'}"))
-    if not result.success:
-        print(warning("⚠ Some tasks failed. Review the output above."))
 
 
 def _swarm_synthesize(agent, result) -> str:

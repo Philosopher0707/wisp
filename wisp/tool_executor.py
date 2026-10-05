@@ -23,7 +23,6 @@ import logging
 import time
 import traceback
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
 from wisp.config import WispConfig
@@ -945,9 +944,7 @@ class ToolExecutor:
                           and standing_grant_applies(self.config, func_name))
         if standing_grant:
             was_auto_approved = True
-            self._audit_authorization(func_name, func_args, workspace, SimpleNamespace(
-                controlling_layer="standing-grant", approval_required=True, obligations=(),
-                reason=f"{func_name} approved without a human by unattended_auto_approve_tools"))
+            self._audit_standing_grant(func_name, func_args, workspace)
         elif needs_approval and (forced_approval or (
                 not is_full_mode and not getattr(self.config, "auto_approve", False))):
             if not approval_handler:
@@ -1402,6 +1399,32 @@ class ToolExecutor:
         except Exception:
             logger.warning("Authorization audit write failed for %s",
                            func_name, exc_info=True)
+
+    def _audit_standing_grant(self, func_name: str, func_args: dict, workspace: str) -> None:
+        """Record that a gated tool ran because the USER's `unattended_auto_approve_tools` said yes for callers with
+        nobody to ask. A different event from the authority's verdict (`_audit_authorization`, exactly one per
+        call): the verdict says the layers allowed the call, this says who satisfied the approval requirement.
+        Best-effort, like the other audit writers: an observability record must never fail a tool call.
+        """
+        try:
+            trail = getattr(self, "audit_trail", None)
+            if trail is None:
+                return
+            trail.record_decision(
+                action=func_name,
+                tool_name=func_name,
+                workspace=workspace,
+                allowed=True,
+                reason=f"[Allowed by standing-grant layer: {func_name} approved without a human by "
+                       f"unattended_auto_approve_tools]",
+                args_summary=json.dumps({
+                    "decision": "standing-grant",
+                    "layer": "standing-grant",
+                    "args_keys": sorted(str(k) for k in (func_args or {})),
+                }, ensure_ascii=False),
+            )
+        except Exception:
+            logger.warning("Standing-grant audit write failed for %s", func_name, exc_info=True)
 
     def _audit_denial(self, func_name: str, func_args: dict,
                         workspace: str, reason: str) -> None:
