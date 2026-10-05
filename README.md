@@ -109,6 +109,7 @@ Common operations:
 | `wisp server` | API + WebSocket server (auth required, see below) |
 | `wisp task/policy/trace/replay/audit/release` | Durable tasks, governance, evidence, supply chain |
 | `wisp check` / `wisp models` | Provider health / model listing |
+| `wisp fleet status/doctor/workers` | Read-only status over the repos in `wisp.fleet.toml`; render MCP workers (see `docs/fleet/README.md`) |
 
 REPL essentials: `/subagents` worker monitor · `/graph` runs/status/traces · `/rewind [seq|path]` undo · `/hooks` list hooks · `/provider` + `/model` switch backends · `/compact` · `/help`.
 
