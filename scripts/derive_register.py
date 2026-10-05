@@ -618,7 +618,7 @@ def _findings(untested: int) -> list[str]:
 
     "- **`ReplayDivergence`'s docstring states an absolute the tree does not keep.** The class "
     "docstring says a divergence *\"must **escape** the loop, not be caught and reported as one "
-    "more way a run can end\"*. It **is** caught — at `wisp/core/runtime.py:1841`, inside "
+    "more way a run can end\"*. It **is** caught — at `wisp/core/runtime.py:1858`, inside "
     "`_recover_unfinished_turn`. The catch is deliberate and its own comment documents it as a "
     "repair: the divergence used to be swallowed by a bare `except Exception: pass`, so the log "
     "claimed a replay that never happened. **The code is right and the docstring is stale**: what "

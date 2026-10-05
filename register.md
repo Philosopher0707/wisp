@@ -22,7 +22,7 @@
 > `—` therefore means *no catch inside these roots*, which is **not** the same claim as
 > *unhandled* — see §(c).
 >
-> Generated 2026-09-30 at `8614c83` · **50 classes** · **282 raise sites** · **52 catch sites** · **7 with no test naming them**.
+> Generated 2026-09-30 at `9c70b1f` · **50 classes** · **282 raise sites** · **52 catch sites** · **7 with no test naming them**.
 
 ---
 
@@ -52,7 +52,7 @@
 | `TrustViolation` | `RuntimeError` | guard | context | `wisp/core/context_trust.py:95` | 1 | `wisp/core/context_trust.py:287` | — | — |
 | `ContextOverflow` | `RuntimeError` | guard | context | `wisp/core/context_trust.py:104` | 1 | `wisp/core/context_trust.py:314` | — | — |
 | `CriteriaDeclarationRejected` | `Exception` | guard | turn | `wisp/core/convergence.py:673` | 9 | `wisp/core/convergence.py:782` | `wisp/autonomous.py:325` | ADR-0050 |
-| `ReplayDivergence` | `RuntimeError` | guard | persist | `wisp/core/replay_digest.py:64` | 2 | `wisp/core/replay_digest.py:125` | `wisp/core/runtime.py:1845` | — |
+| `ReplayDivergence` | `RuntimeError` | guard | persist | `wisp/core/replay_digest.py:64` | 2 | `wisp/core/replay_digest.py:125` | `wisp/core/runtime.py:1862` | — |
 | `ImportGraphTooLarge` | `RuntimeError` | guard | tool | `wisp/import_graph.py:25` | 1 | `wisp/import_graph.py:133` | `wisp/test_runner.py:305` | — |
 | `WalkBudgetExceeded` | `RuntimeError` | guard | tool | `wisp/core/workspace_walk.py:39` | 1 | `wisp/core/workspace_walk.py:130` | `wisp/import_graph.py:132` | — |
 | `ToolError` | `Exception` | fault | tool | `wisp/tools/errors.py:8` | 85 | `agent/fast_tools.py:47` | `agent/tools/batch_reader.py:386`, `agent/tools/batch_reader.py:629`, `wisp/cli/dispatcher.py:383`, `wisp/tool_executor.py:279`, `wisp/tool_executor.py:1409`, `wisp/tool_executor.py:1522`, `wisp/tools/bash.py:160`, `wisp/tools/registry.py:1309`, `wisp/tools/registry.py:1451` | — |
@@ -169,7 +169,7 @@ The name and row counts differ because `SchemaValidationError` is defined twice 
 
 - **The circuit-breaker authority is duplicated.** Two `CircuitBreakerConfig` classes and two `CircuitBreaker` classes exist — `wisp/infra/circuit_breaker.py` and `wisp/multi_agent/_circuit_breaker.py` — with two exception types for one concept, `CircuitOpenError` and `CircuitBreakerOpenError`. The provider path imports the first (`wisp/core/stateless.py:53`); the subagent runner uses the second. Two implementations of one concern is the shape this corpus has a standing name for, and the two exception names make it visible from the outside: **a caller cannot write one handler that covers both.** *Recorded; unifying them is a behaviour change with its own decision.*
 
-- **`ReplayDivergence`'s docstring states an absolute the tree does not keep.** The class docstring says a divergence *"must **escape** the loop, not be caught and reported as one more way a run can end"*. It **is** caught — at `wisp/core/runtime.py:1841`, inside `_recover_unfinished_turn`. The catch is deliberate and its own comment documents it as a repair: the divergence used to be swallowed by a bare `except Exception: pass`, so the log claimed a replay that never happened. **The code is right and the docstring is stale**: what must escape is the *turn loop*, not every handler. The catch does not reconcile silently — it discards the journal and says why. *A docstring absolute that the tree deliberately narrows is a trap for the next reader; the sentence should name the loop.*
+- **`ReplayDivergence`'s docstring states an absolute the tree does not keep.** The class docstring says a divergence *"must **escape** the loop, not be caught and reported as one more way a run can end"*. It **is** caught — at `wisp/core/runtime.py:1858`, inside `_recover_unfinished_turn`. The catch is deliberate and its own comment documents it as a repair: the divergence used to be swallowed by a bare `except Exception: pass`, so the log claimed a replay that never happened. **The code is right and the docstring is stale**: what must escape is the *turn loop*, not every handler. The catch does not reconcile silently — it discards the journal and says why. *A docstring absolute that the tree deliberately narrows is a trap for the next reader; the sentence should name the loop.*
 
 - **`adr` is `—` for 45 of 47 rows, and that is a limit, not a claim.** Only two rows carry a decision, and each is cited because the class's **own docstring** names it — `ADR-0038` for `OllamaConfigurationError`, `ADR-0050` for `CriteriaDeclarationRejected`. Most of these exceptions arrived in a phase whose ADR exists but does not name the class. **The provenance was not traced**, and a plausible ADR is worse than a blank — guessing a decision is the defect this corpus exists to prevent. `—` states *not pinned*, not *none exists*.
 
