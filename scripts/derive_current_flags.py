@@ -89,7 +89,7 @@ ROWS: list[tuple[str, str, str, str, str, str, str, str]] = [
 
     # ── The verification loop ───────────────────────────────────────────────
     ("verification_loop", "WISP_VERIFICATION_LOOP", "ON",
-     "`wisp/core/stateless.py:524`, `wisp/core/stateless.py:1336`",
+     "`wisp/core/stateless.py:524`, `wisp/core/stateless.py:1360`",
      "require an exit-0 verification after code edits before a turn may complete",
      "—", "ADR-0016", "—"),
 
@@ -304,7 +304,7 @@ def render() -> str:
     A("   deviation**, not an accident — but the consequence stands: ADR-0002 part 2 does not")
     A("   apply to them, and a test double cannot opt out by setting an attribute.")
     A("2. **`verification_loop` has two consumption sites on the turn path**")
-    A("   (`wisp/core/stateless.py:524` and `:1336`) and `turn_spans` has two")
+    A("   (`wisp/core/stateless.py:524` and `:1360`) and `turn_spans` has two")
     A("   (`wisp/composition.py:369`, `wisp/core/runtime.py:1440`). ADR-0002 says *\"read at the")
     A("   consumption site\"* — **plural sites are consistent with the rule**, so this is")
     A("   recorded as a fact rather than a violation. It is worth stating because the brief for")
