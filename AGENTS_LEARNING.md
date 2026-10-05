@@ -363,6 +363,15 @@ Still open: ~30% of the prompt is appended after budgeting; `config.skill_dirs` 
 - A source-grep test pins code by function name; extracting code from `make_input_fn` broke three of them. Move the pin to the new home, do not loosen it.
 - `wisp/core` must not import `wisp.cli` (`tests/test_layer_direction.py` ratchets it; a new edge fails CI, and the fix is to move the code, not to add the edge to `CLASSIFIED_EDGES`). A diagnostic that probes the CLI lives in `wisp/cli/`. My targeted test list had skipped the architecture tests; when adding a module, run `tests/test_layer_direction.py` too.
 
+## write_file slow workspace home import graph affected tests rglob (2026-10-05)
+
+- **Symptom (live):** a REPL started from `$HOME`; `write_file` of a 5 KB script took minutes. The tool itself takes 1-7 ms.
+- **Cause:** after every write/edit the executor calls `run_affected_tests`, which built `build_import_graph(workspace)`: `root.rglob("*.py")` over the whole workspace, skipping only dot-directories and `__pycache__`. From `~` that walked `Library`, `site-packages`, `node_modules` and the iTerm2 Python environments (tens of thousands of files, each parsed). Measured: **581 s** to find 0 affected tests. The 60 s `timeout` bounded only the pytest run that comes after the graph.
+- **Fix:** pruned `os.walk` (virtualenvs by `pyvenv.cfg`, dependency/build/`Library` directories), a hard budget (5,000 files, 5 s) that refuses rather than truncates (`ImportGraphTooLarge`), the home directory is never analysed, and a too-large verdict is remembered for 10 minutes so only the first write pays. Measured after: 5 ms in `$HOME`; a large non-home workspace pays one 5 s walk, then 0.1 ms.
+- **General rule:** anything that runs on every write needs a budget of its own; a timeout on a later step does not cover an earlier unbounded one. A workspace is whatever directory the user launched from, so a tool must not assume it is a project.
+- **Pin tables:** a new exception class needs a row in `scripts/derive_register.py` or `derive_register.py` refuses to run (and two reliability tests fail).
+- **Workaround for an already-running session:** start wisp from the project directory, not `~`.
+
 ## swarm all agents failed 402 billing verdict model auto-correct systemic (2026-10-05)
 
 - **Symptom (live):** `/swarm` with an out-of-credit key: four agents hit the same HTTP 402, then "✓ Swarm complete", a "Synthesizing final answer…" step, and four identical `[INCOMPLETE]` blocks; the configured model `qwen2.5-coder` had been replaced by `aion-labs/aion-2.0`.
