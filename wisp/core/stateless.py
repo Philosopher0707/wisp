@@ -1288,6 +1288,26 @@ class WispAgentCore:
             async for event in _call_provider():
                 yield event
 
+    def _profile_names(self) -> frozenset[str] | None:
+        """The built-in tool names the configured profile offers, or None for no narrowing.
+
+        A config object with no ``tool_profile`` (a hand-built partial one) is treated as ``full``: the real
+        ``WispConfig`` always carries one, so only synthetic configs reach that branch.
+        """
+        from wisp.tools.profile import builtin_names_for
+
+        if self.config is None:
+            return None
+        profile = getattr(self.config, "tool_profile", "full")
+        return builtin_names_for(profile)
+
+    @staticmethod
+    def _builtin_tool_names() -> frozenset[str]:
+        """Names in the built-in registry; anything else in a schema list is an extension tool (MCP, skills)."""
+        from wisp.tools.registry import TOOL_SCHEMAS
+
+        return frozenset(_tool_schema_name(t) for t in TOOL_SCHEMAS)
+
     def _provider_tools(self, session: dict[str, Any]) -> list[dict[str, Any]]:
         """The tool schemas this session's provider calls carry: built-in plus extensions, narrowed to a role's
         allowed subset (``session["allowed_tools"]``) and then by the capability partition, when that is on.
@@ -1303,6 +1323,10 @@ class WispAgentCore:
             tools = [t for t in tools if _tool_schema_name(t) in allowed_set]
         elif session.get("subagent_system_prompt"):
             tools = [t for t in tools if not _tool_schema_name(t).startswith(_SUBAGENT_EXCLUDED_TOOL_PREFIXES)]
+        profile_names = self._profile_names() if allowed_set is None else None
+        if profile_names is not None:
+            builtin = self._builtin_tool_names()
+            tools = [t for t in tools if _tool_schema_name(t) not in builtin or _tool_schema_name(t) in profile_names]
 
         # 13-I2 capability partition: host-owned visibility filter over
         # provider-bound schemas. Flag OFF (default) preserves the exact
@@ -1402,7 +1426,11 @@ class WispAgentCore:
         # or a thin turn reuses a 42-tool prompt from the cache.
         thin = "thin" if (self.config is not None
                           and getattr(self.config, "thin_tools", False) is True) else ""
-        cache_key = (ws, context_mt, prompt_variant, allowed_hash, thin)
+        # The profile narrows the menu only for an unrestricted session, and it is part of the key: two profiles must
+        # not share a cached prompt.
+        profile_names = self._profile_names() if allowed_set is None else None
+        profile_key = "core" if profile_names is not None else ""
+        cache_key = (ws, context_mt, prompt_variant, allowed_hash, thin, profile_key)
         static_prompt: str | None = _SYSTEM_PROMPT_CACHE.get(cache_key)
 
         if static_prompt is None:
@@ -1450,6 +1478,11 @@ class WispAgentCore:
             else:
                 _default_system = assembler.default_system
 
+            if profile_names is not None:
+                from wisp.context_assembler import adapt_system_prose
+
+                _default_system = adapt_system_prose(_default_system, profile_names)
+
             ctx = PromptContext.from_legacy(
                 workspace=ws,
                 default_system=_default_system,
@@ -1465,6 +1498,7 @@ class WispAgentCore:
             tools_block = self._build_tools_block(
                 allowed_set,
                 _SUBAGENT_EXCLUDED_TOOL_PREFIXES if is_subagent and allowed_set is None else (),
+                profile_names,
             )
             if tools_block:
                 static_prompt += "\n\n" + tools_block
@@ -1907,7 +1941,8 @@ class WispAgentCore:
         return ""
 
     def _build_tools_block(self, allowed_set: set[str] | None = None,
-                           exclude_prefixes: tuple[str, ...] = ()) -> str:
+                           exclude_prefixes: tuple[str, ...] = (),
+                           profile_names: frozenset[str] | None = None) -> str:
         """Generate the prompt's tool menu from live registries.
 
         Single source of truth: TOOL_SCHEMAS plus whatever extensions
@@ -1917,7 +1952,8 @@ class WispAgentCore:
         way — it advertised 'spawn_subagent', which never existed).
 
         *exclude_prefixes* drops tools by name prefix (an unrestricted subagent's skill tools, which its
-        provider call does not carry either).
+        provider call does not carry either). *profile_names* narrows the BUILT-IN tools to the configured profile
+        (extension tools pass through), so the menu names exactly what the provider is offered.
 
         When *allowed_set* is given (role-restricted subagents), only those
         tools are advertised — otherwise the prompt lists tools the model
@@ -1926,6 +1962,7 @@ class WispAgentCore:
         """
         entries: list[tuple[str, str]] = []
         seen: set[str] = set()
+        profile_scope = self._builtin_tool_names() if profile_names is not None else frozenset()
 
         def _describe(fn: dict[str, Any]) -> tuple[str, str]:
             name = str(fn.get("name", "") or "")
@@ -1947,6 +1984,8 @@ class WispAgentCore:
             if allowed_set is not None and name not in allowed_set:
                 continue
             if exclude_prefixes and name.startswith(exclude_prefixes):
+                continue
+            if profile_names is not None and name in profile_scope and name not in profile_names:
                 continue
             seen.add(name)
             entries.append((name, first))

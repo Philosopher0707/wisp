@@ -110,6 +110,12 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
         "description": "Filter provider-bound tool schemas by permission_mode (READ_ONLY sees the safe surface only). Visibility only; authorization unchanged. Rollback: set false for the exact legacy surface.",
         "env_var": "WISP_CAPABILITY_FILTERING",
     },
+    "tool_profile": {
+        "type": str,
+        "default": "core",
+        "description": "Built-in tools offered to the model: core (8 core tools + grep, glob, rewind) | full (every built-in). Offer only: hidden tools stay callable and role subagents with explicit tool lists are unaffected. Rollback: full.",
+        "env_var": "WISP_TOOL_PROFILE",
+    },
     "show_thinking": {
         "type": bool,
         "default": True,
@@ -844,6 +850,7 @@ class WispConfig:
 
     # ── Modes & permissions ───────────────────────────────────────
     permission_mode: PermissionMode | str
+    tool_profile: str
     capability_filtering: bool
     plan_mode: bool
     plan_context: Optional[str]
@@ -986,6 +993,11 @@ class WispConfig:
         object.__setattr__(self, "capability_filtering",
             _parse_bool(get_setting("capability_filtering", "false"), False)
         )
+        # Tool profile: which built-in tools are OFFERED (not which are callable). Unknown values fail to the
+        # smaller surface, so a typo can never widen what the model sees.
+        from wisp.tools.profile import DEFAULT_PROFILE, parse_profile
+
+        object.__setattr__(self, "tool_profile", parse_profile(get_setting("tool_profile", DEFAULT_PROFILE)))
         # Plan mode: agent plans only, no tool execution
         object.__setattr__(self, "plan_mode",
             _parse_bool(get_setting("plan_mode", "false"), False)

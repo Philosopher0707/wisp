@@ -22,7 +22,7 @@
 > `—` therefore means *no catch inside these roots*, which is **not** the same claim as
 > *unhandled* — see §(c).
 >
-> Generated 2026-09-30 at `01effa8` · **48 classes** · **280 raise sites** · **48 catch sites** · **7 with no test naming them**.
+> Generated 2026-09-30 at `6056976` · **48 classes** · **280 raise sites** · **48 catch sites** · **7 with no test naming them**.
 
 ---
 

@@ -210,6 +210,33 @@ You are NOT done when the code is merely written — you are done when it is VER
 DEFAULT_SYSTEM = DEFAULT_BASE_SYSTEM + VERIFICATION_LOOP_RULES
 
 
+_SUBAGENT_TOOLS = frozenset({"spawn", "fanout", "spawn_background", "subagent_list", "subagent_wait",
+                             "subagent_result", "subagent_send", "subagent_cancel"})
+_SUBAGENT_SECTION = re.compile(r"\n## Subagent protocol\n(?:.*\n)*?(?=\nTool schemas are generated|\Z)")
+
+
+def adapt_system_prose(system: str, offered: frozenset[str]) -> str:
+    """Make the base prompt's instructions agree with the tools actually offered.
+
+    A tool profile hides tools from the model; prose that still tells it to use them is a hallucination seed (the model
+    calls what it was never given). The adaptations are exact-string and deliberately narrow: if the base text changes
+    and one stops matching, ``tests/test_tool_profile.py`` fails loudly rather than the prompt drifting silently.
+    """
+    out = system
+    if not (_SUBAGENT_TOOLS & offered):
+        out = _SUBAGENT_SECTION.sub("", out)  # the whole protocol describes tools the model does not have
+    if "lsp_diagnostics" not in offered:
+        out = out.replace(
+            "9. Before declaring a task done, run lsp_diagnostics on changed files to catch errors.",
+            "9. Before declaring a task done, run the project's tests or linter on the changed files to catch errors.",
+        )
+        out = out.replace(
+            "verify through `run_tests`/`lsp_diagnostics`, never assume the interpreter.",
+            "verify through `run_tests`, never assume the interpreter.",
+        )
+    return out
+
+
 # Chars-per-token for this module's budget ruler. Conservative 3:1 for
 # code-heavy text — deliberately below the repo-wide convention of 4.
 # Pinned by `test_context_assembler_budget.py`. Single source of truth:
