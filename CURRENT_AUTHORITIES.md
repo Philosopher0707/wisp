@@ -12,7 +12,7 @@
 > ADR superseding one it cites **refuses the derivation**. §5 is this page's own findings record —
 > **append-only**, emitted unchanged (ADR-0062 R8).
 >
-> Generated 2026-10-05 at `efdf410` · covers **ADR-0001 … ADR-0076** · supersession chains in §1.1–1.6.
+> Generated 2026-10-05 at `9a501af` · covers **ADR-0001 … ADR-0076** · supersession chains in §1.1–1.6.
 > The commit, the date and the range are **read from `git` and the ADR log**, not written (F97).
 >
 > **Sibling registers:** `CURRENT_FINDINGS.md`, `CURRENT_OPEN_ITEMS.md`, `CURRENT_FLAGS.md` — all
@@ -79,10 +79,10 @@ provider terminal → stream state → turn predicate → acceptance verdict
 
 | | |
 |---|---|
-| **Current owner** | `RecoveryLadder.ladder_state` (`wisp/core/recovery.py:757`) — **renamed** from `terminal_outcome` |
+| **Current owner** | `RecoveryLadder.ladder_state` (`wisp/core/recovery.py:775`) — **renamed** from `terminal_outcome` |
 | **Cannot decide** | completion · goal state |
 | **Current ADRs** | **ADR-0024** (denial enforced by CLASS) · **ADR-0025** (an unsafe rollback escalates) · **ADR-0026** (a mechanism, not yet consulted by the turn loop) → **ADR-0044** R6 (the rename, which removed a cross-layer name collision) → **ADR-0046** (progress widens one class's legal rungs) → **ADR-0047** R6–R13 (R5's unit is the *strategy*, not the rung) |
-| **Durable record fields** | `RecoveryDecision.seq` and `ladder_history` (`wisp/core/recovery.py:556`, `wisp/core/recovery.py:571`) · `AttemptRecord.rung`, `.directive`, `.failure_class` (`wisp/core/convergence.py:1277-1278`, `wisp/core/convergence.py:1299`) · `BudgetGovernor.snapshot()` — reports `productive_continuations` (`wisp/core/recovery.py:487`) |
+| **Durable record fields** | `RecoveryDecision.seq` and `ladder_history` (`wisp/core/recovery.py:574`, `wisp/core/recovery.py:589`) · `AttemptRecord.rung`, `.directive`, `.failure_class` (`wisp/core/convergence.py:1277-1278`, `wisp/core/convergence.py:1299`) · `BudgetGovernor.snapshot()` — reports `productive_continuations` (`wisp/core/recovery.py:505`) |
 
 ---
 

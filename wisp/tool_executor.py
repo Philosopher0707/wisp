@@ -2338,6 +2338,8 @@ class ToolExecutor:
                 "elapsed_seconds": round(r.elapsed_seconds, 1),
             })
 
+        from wisp.multi_agent.verdict import distinct_failures, verdict
+
         all_ok = all(r.success for r in results)
         total_elapsed = sum(r.elapsed_seconds for r in results)
         total_files = list({f for r in results for f in (r.files_changed or [])})
@@ -2347,6 +2349,10 @@ class ToolExecutor:
             "tool": "fanout",
             "data": {
                 "ok": all_ok,
+                # The envelope `status` means "the tool call executed"; the agents' outcome is here. `verdict` and
+                # `failures` say it in words: one entry per distinct failure (four identical refusals are one finding).
+                "verdict": verdict(results),
+                "failures": [{"reason": why, "tasks": who} for why, who in distinct_failures(results)],
                 "results": result_items,
                 "total_elapsed_seconds": round(total_elapsed, 1),
                 "all_files": total_files,
