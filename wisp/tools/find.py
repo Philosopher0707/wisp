@@ -27,6 +27,7 @@ import re
 import time
 from pathlib import Path
 
+from wisp.core.workspace_walk import WalkBudget, walk_files
 from wisp.tools._utils import _resolve_path, _validate_int, _validate_string
 from wisp.tools.errors import ToolError
 
@@ -130,18 +131,16 @@ def _base_dir(path: str, workspace: str, *, must_be_dir: bool) -> Path:
 
 
 def _walk(base: Path, budget: _Budget):
-    """Yield ``(absolute_path, path_relative_to_base)`` for every regular, non-symlink file, in a stable order."""
-    seen = 0
-    for dirpath, dirnames, filenames in os.walk(base, followlinks=False):
-        dirnames[:] = sorted(d for d in dirnames if d not in _SKIP_DIRS and not os.path.islink(os.path.join(dirpath, d)))
-        for name in sorted(filenames):
-            full = os.path.join(dirpath, name)
-            if os.path.islink(full):
-                continue
-            seen += 1
-            if seen > _MAX_ENTRIES or budget.over():
-                return
-            yield full, Path(os.path.relpath(full, base)).as_posix()
+    """Yield ``(absolute_path, path_relative_to_base)`` for every regular, non-symlink file, in a stable order.
+
+    The mechanism is `wisp.core.workspace_walk`; the skip set and the per-search clock (shared with the per-line regex
+    checks, so it lives on ``_Budget``) are this tool's own. Truncates at either limit rather than refusing: a search's
+    partial result is still useful, and the caller reports that it stopped.
+    """
+    for full in walk_files(base, skip_dirs=_SKIP_DIRS, budget=WalkBudget(max_files=_MAX_ENTRIES)):
+        if budget.over():
+            return
+        yield full, Path(os.path.relpath(full, base)).as_posix()
 
 
 def _display(full: str, workspace: str) -> str:
