@@ -185,6 +185,21 @@ class TestDiscoverUnmanaged:
         _repo(outer / "vendor" / "inner")
         assert discover_unmanaged([tmp_path / "scan"], managed=[], depth=4) == [outer]
 
+    def test_a_linked_worktree_of_a_managed_repo_is_not_unmanaged(self, tmp_path):
+        known = _repo(tmp_path / "scan" / "known")
+        _git(known, "worktree", "add", "-q", "-b", "side", str(tmp_path / "scan" / "known-side"))
+        assert discover_unmanaged([tmp_path / "scan"], managed=[known], depth=2) == []
+
+    def test_a_linked_worktree_of_an_untracked_repo_is_still_reported(self, tmp_path):
+        stray = _repo(tmp_path / "elsewhere" / "stray")
+        _git(stray, "worktree", "add", "-q", "-b", "side", str(tmp_path / "scan" / "stray-side"))
+        assert discover_unmanaged([tmp_path / "scan"], managed=[], depth=2) == [tmp_path / "scan" / "stray-side"]
+
+    def test_a_worktree_whose_owner_is_unmanaged_does_not_hide_the_owner(self, tmp_path):
+        owner = _repo(tmp_path / "scan" / "owner")
+        _git(owner, "worktree", "add", "-q", "-b", "side", str(tmp_path / "scan" / "owner-side"))
+        assert discover_unmanaged([tmp_path / "scan"], managed=[], depth=2) == [owner, tmp_path / "scan" / "owner-side"]
+
 
 class TestRunFleet:
     def _setup(self, tmp_path: Path) -> Path:
