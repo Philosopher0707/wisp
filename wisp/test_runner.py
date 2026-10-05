@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from wisp.import_graph import build_import_graph, find_affected_tests
+from wisp.import_graph import ImportGraphTooLarge, build_import_graph, find_affected_tests
 from wisp.test_distill import distill_traceback
 
 logger = logging.getLogger(__name__)
@@ -267,6 +267,24 @@ def _parse_pytest_output(stdout: str, stderr: str, summary: UnitTestRunSummary) 
             ))
 
 
+#: Workspaces whose import graph was refused, by monotonic time. Every write and edit asks for affected tests, and
+#: re-walking a workspace that was too large a second ago would charge each of them the full budget.
+_TOO_LARGE: dict[Path, float] = {}
+_TOO_LARGE_TTL_SECONDS = 600.0
+
+
+def _lookup_skipped(ws: Path) -> str:
+    """Why affected-test analysis must not run for ``ws``, or "" when it may."""
+    if ws == Path.home().resolve():
+        return f"{ws} is the home directory, not a project"
+    seen = _TOO_LARGE.get(ws)
+    if seen is not None:
+        if time.monotonic() - seen < _TOO_LARGE_TTL_SECONDS:
+            return f"{ws} was too large to analyse a moment ago"
+        del _TOO_LARGE[ws]
+    return ""
+
+
 def run_affected_tests(
     changed_files: list[str | Path],
     workspace: str | Path,
@@ -277,8 +295,18 @@ def run_affected_tests(
     This is the main entry point for auto-test on change.
     """
     ws = Path(workspace).resolve()
+    skipped = _lookup_skipped(ws)
+    if skipped:
+        return UnitTestRunSummary(stdout=f"Affected-test lookup skipped: {skipped}")
     logger.info("Building import graph for %s", ws)
-    graph = build_import_graph(ws)
+    try:
+        graph = build_import_graph(ws)
+    except ImportGraphTooLarge as exc:
+        # Not a project-sized workspace (a monorepo root, a data directory): finding affected tests would cost
+        # more than the edit it follows. Remember it, say so, run nothing; `run_tests` on a path still works.
+        _TOO_LARGE[ws] = time.monotonic()
+        logger.warning("Affected-test lookup skipped: %s", exc)
+        return UnitTestRunSummary(stdout=f"Affected-test lookup skipped: {exc}")
 
     # Resolve changed files relative to workspace if needed
     resolved_changes = []
