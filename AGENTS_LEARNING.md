@@ -373,3 +373,7 @@ Still open: ~30% of the prompt is appended after budgeting; `config.skill_dirs` 
 - **A shared token is not a match:** `_closest` ranks "coder" alone as related, so the top "close" name for `qwen2.5-coder` was `kat-coder-pro`. Suggest only equal/prefix/substring.
 - **Tests that read the real home:** `tests/test_toolchain_e2e.py::test_repl_chain_end_to_end_over_production_wiring` fails on a machine whose `~/.config/wisp/mcp.json` registers MCP servers (the fleet workers) and passes with an empty HOME. Same lesson as before, new instance; separate task spawned.
 - **Pin tables again:** adding lines to `core/recovery.py` moved `LadderExhausted` and `derive_register.py` refused to run. Re-anchor the table, then regenerate.
+
+## fleet doctor unmanaged linked worktree false alarm (2026-10-05)
+
+- A linked worktree of a managed repo (`.git` is a file: `gitdir: <owner>/.git/worktrees/<name>`) is that repo, not a new one. `discover_unmanaged` now skips it only when its owner is in the manifest; a worktree of an untracked repo is still reported, and a submodule (`.git/modules`) is not mistaken for one. Found because making `~/dev/wisp-main` for the global `wisp` made `wisp doctor` warn about it.
