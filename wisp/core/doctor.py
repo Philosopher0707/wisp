@@ -275,6 +275,15 @@ async def _check_path_environment() -> CheckResult:
             details["shell_binaries_error"] = str(e)
 
         latency = (time.monotonic() - t0) * 1000
+        from wisp.core.workspace_walk import is_home_directory
+
+        if is_home_directory(ws):
+            # Not a failure, but every feature that reads the workspace now reads the whole machine.
+            details["workspace_is_home"] = True
+            return CheckResult(name, commit, CheckStatus.WARN,
+                               f"workspace {ws!r} is your home directory, not a project: start wisp from a "
+                               "project directory so searches, indexes and per-write checks stay small",
+                               latency, details)
         return CheckResult(name, commit, CheckStatus.OK,
                            f"safe_getcwd={cwd!r} workspace writable, run dirs ok",
                            latency, details)

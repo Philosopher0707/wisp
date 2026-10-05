@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from wisp.core.workspace_walk import is_home_directory
 from wisp.import_graph import ImportGraphTooLarge, build_import_graph, find_affected_tests
 from wisp.test_distill import distill_traceback
 
@@ -275,7 +276,7 @@ _TOO_LARGE_TTL_SECONDS = 600.0
 
 def _lookup_skipped(ws: Path) -> str:
     """Why affected-test analysis must not run for ``ws``, or "" when it may."""
-    if ws == Path.home().resolve():
+    if is_home_directory(ws):
         return f"{ws} is the home directory, not a project"
     seen = _TOO_LARGE.get(ws)
     if seen is not None:
