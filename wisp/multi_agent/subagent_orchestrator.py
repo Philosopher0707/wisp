@@ -25,6 +25,7 @@ from typing import Any, AsyncIterator, Optional
 
 from wisp.config import WispConfig
 from wisp.core.contracts import ToolRisk, risk_for_tool
+from wisp.core.recovery import is_systemic_text
 
 from ._runner import SubagentRunner
 from ._worktree_manager import WorktreeManager
@@ -1070,8 +1071,17 @@ class SubagentOrchestrator:
 
         semaphore = asyncio.Semaphore(effective_max)
 
-        async def _guarded(contract: SubagentContract) -> SubagentResult:
+        # The first systemic refusal (out of credit, rejected key) fails every agent identically, so agents still
+        # queued behind the semaphore are not started: they would only wait their turn to be refused too.
+        systemic: dict[str, str] = {}
+
+        async def _attempt(contract: SubagentContract) -> SubagentResult:
             async with semaphore:
+                if systemic:
+                    return SubagentResult(
+                        task_id=contract.name, success=False, output="", elapsed_seconds=0.0, session_id="",
+                        error=f"Not started: another agent was refused by the provider in a way that fails every "
+                              f"agent ({systemic['error'][:200]})")
                 # Live evidence (2026-08-25): six concurrent children on a
                 # rate-limited cloud endpoint all died on 429 in <3s with
                 # zero retries — run() alone has no transient handling.
@@ -1117,6 +1127,12 @@ class SubagentOrchestrator:
                     await self._emit_retry(contract, n, backoff)
                     await asyncio.sleep(backoff)
                 return result
+
+        async def _guarded(contract: SubagentContract) -> SubagentResult:
+            result = await _attempt(contract)
+            if not result.success and is_systemic_text(result.error):
+                systemic.setdefault("error", result.error or "")
+            return result
 
         if not contracts:
             return []
