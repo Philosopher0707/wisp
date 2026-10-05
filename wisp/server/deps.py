@@ -538,7 +538,7 @@ def require_tool_allowed(request: Request, action_name: str, args: dict,
     # both surfaces; a server that has authorised writes says so with `auto_approve` or `full`.
     _config = getattr(getattr(getattr(getattr(request, "app", None), "state", None), "root", None), "config", None)
     if _config is not None:
-        from wisp.tool_executor import approval_needed
+        from wisp.core.approval_policy import approval_needed
 
         if approval_needed(_config, action_name):
             raise HTTPException(
