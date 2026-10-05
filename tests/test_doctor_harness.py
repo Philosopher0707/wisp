@@ -348,6 +348,14 @@ def test_slash_doctor_deep_still_means_the_docker_check(monkeypatch):
     assert "docker probe ran" in text and "tool_profile" not in text
 
 
+def test_legacy_slash_doctor_accepts_the_bare_word_like_the_repl(capsys):
+    """`wisp /doctor harness` (one-shot, from the shell) reaches the legacy handler, not the REPL's."""
+    from wisp.repl.commands.doctor import cmd_doctor
+
+    cmd_doctor(None, "harness --json")
+    assert json.loads(capsys.readouterr().out)["total"] == len(dh.HARNESS_CHECK_NAMES)
+
+
 def test_legacy_slash_doctor_harness_flag(capsys):
     from wisp.repl.commands.doctor import cmd_doctor
 
