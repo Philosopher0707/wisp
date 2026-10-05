@@ -47,6 +47,7 @@ from wisp.tools.lsp import (
 )
 from wisp.tools.memory import tool_remember, tool_recall
 from wisp.tools.search import tool_search_symbols, tool_search_codebase
+from wisp.tools.find import tool_grep, tool_glob
 from wisp.tools.plan import tool_plan_task, tool_mark_step_done, tool_update_plan
 from wisp.tools.diagnose import tool_diagnose
 from wisp.tools.tests import tool_run_tests
@@ -185,6 +186,42 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "pattern": {"type": "string", "description": "Glob pattern (e.g., '*.py', '**/*.rs')", "default": "*"},
                 },
                 "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "grep",
+            "description": "Search file contents with a regex. Skips .git, node_modules, caches, binaries. Modes: content (path:line:text), files_with_matches, count.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "Regular expression (Python syntax)"},
+                    "path": {"type": "string", "description": "Directory or file to search", "default": "."},
+                    "glob": {"type": "string", "description": "Only files matching this glob, e.g. '*.py'"},
+                    "ignore_case": {"type": "boolean", "default": False},
+                    "context": {"type": "number", "description": "Lines of context around each match (0-5)", "default": 0},
+                    "output_mode": {"type": "string", "enum": ["content", "files_with_matches", "count"], "default": "content"},
+                    "max_results": {"type": "number", "default": 100},
+                },
+                "required": ["pattern"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "glob",
+            "description": "Find files by glob pattern, newest first. '**' spans directories, e.g. '**/*.py', 'src/**/*.{ts,tsx}'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "Glob pattern, relative to path"},
+                    "path": {"type": "string", "description": "Directory to search", "default": "."},
+                    "max_results": {"type": "number", "default": 200},
+                },
+                "required": ["pattern"],
             },
         },
     },
@@ -1026,6 +1063,8 @@ TOOL_IMPLS = {
     "rewind": tool_rewind,
     "run_bash": tool_run_bash,
     "list_files": tool_list_files,
+    "grep": tool_grep,
+    "glob": tool_glob,
     "web_fetch": _lazy_tool("wisp.tools.web", "tool_web_fetch"),
     "search_symbols": tool_search_symbols,
     "remember": tool_remember,
@@ -1106,6 +1145,11 @@ def _build_tool_metadata(name: str, args: dict, result: str) -> dict:
 
     elif name == "list_files":
         meta["entry_count"] = result.count("📄") + result.count("📁")
+
+    elif name in ("grep", "glob"):
+        meta["no_match"] = result.startswith(("No matches", "No files matched"))
+        if "truncated" in result or "showing " in result:
+            meta["truncated"] = True
 
     elif name == "web_fetch":
         if "... [truncated" in result or result.endswith("... [truncated]"):

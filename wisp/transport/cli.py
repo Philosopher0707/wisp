@@ -232,6 +232,8 @@ _FULL_OUTPUT_TOOLS: set[str] = {
     "git_push",
     "gh_pr_create",
     "list_files",
+    "grep",
+    "glob",
     "search_symbols",
     "search_codebase",
     "lsp_diagnostics",

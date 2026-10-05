@@ -71,7 +71,7 @@ _WIRE_NAME = re.compile(r"[a-zA-Z0-9_-]{1,64}")
 # Set of built-in tool names that an MCP tool must NOT shadow.
 _SHADOW_BUILTIN_TOOLS: frozenset[str] = frozenset({
     "read_file", "write_file", "edit_file", "edit_file_multi",
-    "run_bash", "list_files", "web_fetch", "web_search",
+    "run_bash", "list_files", "grep", "glob", "web_fetch", "web_search",
     "search_symbols", "search_codebase",
     "remember", "recall",
     "spawn_subagent",
