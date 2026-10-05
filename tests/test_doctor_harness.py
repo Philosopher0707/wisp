@@ -307,8 +307,57 @@ def test_wisp_doctor_is_a_registered_subcommand():
     assert "doctor" in _SUBCOMMAND_NAMES and print_subcommand_help("doctor")
 
 
-def test_slash_doctor_deep_runs_the_harness_checks(capsys):
+def _dispatch(text: str) -> str:
+    """Run a slash command through the real REPL dispatcher (the handler a user's `/doctor` reaches)."""
+    from wisp.cli.dispatcher import CommandResult, Dispatcher, ReplContext
+
+    class Runtime:
+        def get_doctor_report(self) -> dict:
+            return {"healthy": True, "passed": 7, "total": 7}
+
+    out: list[str] = []
+    ctx = ReplContext(runtime=Runtime(), transport=None,
+                      session={"id": "s", "workspace": ".", "messages": []}, config={}, out=out)
+    assert Dispatcher().dispatch(ctx, text) is CommandResult.CONSUMED
+    return "\n".join(out)
+
+
+def test_slash_doctor_harness_runs_the_harness_checks_in_the_repl(monkeypatch):
+    async def no_docker(*a, **k):
+        raise AssertionError("/doctor harness must not run the Docker check")
+
+    monkeypatch.setattr("wisp.core.doctor.check_sandbox_image_deep", no_docker)
+    text = _dispatch("/doctor harness")
+    for name in dh.HARNESS_CHECK_NAMES:
+        assert name in text
+    assert "Pre-flight" not in text, "the preflight banner does not describe the harness report"
+
+
+def test_plain_slash_doctor_points_at_the_harness_checks():
+    assert "/doctor harness" in _dispatch("/doctor")
+
+
+def test_slash_doctor_deep_still_means_the_docker_check(monkeypatch):
+    from wisp.core.doctor import CheckResult
+
+    async def fake(workspace=None, **k):
+        return CheckResult("sandbox_image_deep", "x", CheckStatus.OK, "docker probe ran", 1.0, {})
+
+    monkeypatch.setattr("wisp.core.doctor.check_sandbox_image_deep", fake)
+    text = _dispatch("/doctor deep")
+    assert "docker probe ran" in text and "tool_profile" not in text
+
+
+def test_legacy_slash_doctor_accepts_the_bare_word_like_the_repl(capsys):
+    """`wisp /doctor harness` (one-shot, from the shell) reaches the legacy handler, not the REPL's."""
     from wisp.repl.commands.doctor import cmd_doctor
 
-    cmd_doctor(None, "--deep --json")
+    cmd_doctor(None, "harness --json")
+    assert json.loads(capsys.readouterr().out)["total"] == len(dh.HARNESS_CHECK_NAMES)
+
+
+def test_legacy_slash_doctor_harness_flag(capsys):
+    from wisp.repl.commands.doctor import cmd_doctor
+
+    cmd_doctor(None, "--harness --json")
     assert json.loads(capsys.readouterr().out)["total"] == len(dh.HARNESS_CHECK_NAMES)
