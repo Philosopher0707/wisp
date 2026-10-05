@@ -129,8 +129,9 @@ def test_repl_wiring_present_in_source():
     assert "_injected_model" in src_full and "or ScreenModel()" in src_full
     assert "make_input_fn(model=" in src_full
     src_fn = inspect.getsource(repl.make_input_fn)
-    assert "expand_newest" in src_fn
-    assert "key_bindings" in src_fn
+    assert "build_key_bindings(model)" in src_fn and "key_bindings" in src_fn
+    # The bindings were extracted from make_input_fn so a real prompt_toolkit session can test them.
+    assert "expand_newest" in inspect.getsource(repl.build_key_bindings)
 
 
 def test_cli_event_renderer_without_model_is_noop_for_model_path():
@@ -239,7 +240,7 @@ def test_repl_wiring_pins_current():
     src_full = inspect.getsource(repl)
     assert "_injected_model" in src_full and "or ScreenModel()" in src_full
     assert "make_input_fn(model=" in src_full
-    src_fn = inspect.getsource(repl.make_input_fn)
+    src_fn = inspect.getsource(repl.make_input_fn) + inspect.getsource(repl.build_key_bindings)
     assert "expand_newest" in src_fn
     assert "key_bindings" in src_fn
     assert "diff_pager_effect" in src_fn

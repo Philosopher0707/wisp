@@ -1365,7 +1365,7 @@ class WispAgentCore:
         # Lazy-init assembler (module-level, shared across all core instances)
         global _ASSEMBLER
         if _ASSEMBLER is None:
-            _ASSEMBLER = ContextAssembler()  # type: ignore[no-untyped-call]  # context_assembler not yet annotated
+            _ASSEMBLER = ContextAssembler()
         assembler = _ASSEMBLER
 
         # Check cache for static prompt — include mtimes of key context files

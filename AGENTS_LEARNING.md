@@ -212,6 +212,15 @@ Search: sqlite corrupt, malformed, database disk image is malformed, WAL, quaran
 - **Corruption lies about its shape:** the same trashed pages surfaced as `DatabaseError: malformed`, as `OperationalError: no such column` (garbage parsed as schema, which then misfired the migration ALTER into "duplicate column"), and as `OperationalError: disk I/O error`. Message-sniffing is only the fast path; anything escaping the static init DDL is file-health suspect. Tests: `tests/test_unified_store.py::TestCorruptionRecovery` (garbage file -> backup + fresh; old-schema DB + trashed data page -> backup + fresh, both deterministic).
 **How to apply:** catch `sqlite3.DatabaseError` (not just `OperationalError`) around any SQLite boot path; never delete a corrupt DB, rename it aside; distrust the error message, trust `integrity_check`.
 
+## wisp doctor harness invariants checks tool profile budget context skills audit (2026-10-05)
+
+- `wisp doctor` (and `/doctor --deep`) runs `wisp/cli/doctor_harness.py`: nine probes for what the 2026-10 review fixed: tool profile, subagent tool surface, spend meter, context fit, global skills, skill capture, audit chain, REPL input, fleet (manifest, repos, MCP config drift; local and read-only). Exit 1 on FAIL; WARN is advice.
+- Boot preflight stays at 7 cheap checks under its 100 ms budget. Probes that import heavy modules or touch disk must not join it: a slow check shows up as a startup warning on every launch.
+- Every check has a mutation test that breaks the invariant in the code under test and expects red. A check that cannot fail is decoration.
+- The probes are hermetic (temp workspace, temp audit log). The live audit log is read-only: a historical break is a WARN with "do not rewrite", never a repair.
+- First real run on this machine: 43 global skills ≈ 4.8k menu tokens per request (WARN, user trims `~/.agents/skills`); live audit log breaks at entry 1848 (the known pre-fix fork).
+- Annotating `ContextAssembler.__init__` made an old `# type: ignore[no-untyped-call]` unused, and `mypy` (warn_unused_ignores) failed on it. Remove an ignore when its reason goes away.
+
 ## Lesson: CI step order hides lint; red tests mask the ruff gate (2026-10-04)
 
 Search: ci, ruff, pytest, step order, masked, lint gate, main red, green main, unused import, F401.
@@ -350,3 +359,6 @@ now with a note. Compact forms measured on the same 47 skills: 8,840 tokens (cur
 (description cut to 120 chars), 389 (name only). The user chose to trim `~/.agents/skills` by hand instead of changing the format.
 Still open: ~30% of the prompt is appended after budgeting; `config.skill_dirs` is a dormant setting.
 
+- REPL input: `v` and space were swallowed on an empty prompt even with nothing to open ("view" arrived as "iew"), and readline's empty in-memory history overwrote prompt_toolkit's `FileHistory` on exit. Fix: `build_key_bindings` (insert the char when there is nothing to act on) and `own_history` (one writer). Test the real library on piped input; a mock cannot show a key-binding bug. A pty relaunch confirmed history survives.
+- A source-grep test pins code by function name; extracting code from `make_input_fn` broke three of them. Move the pin to the new home, do not loosen it.
+- `wisp/core` must not import `wisp.cli` (`tests/test_layer_direction.py` ratchets it; a new edge fails CI, and the fix is to move the code, not to add the edge to `CLASSIFIED_EDGES`). A diagnostic that probes the CLI lives in `wisp/cli/`. My targeted test list had skipped the architecture tests; when adding a module, run `tests/test_layer_direction.py` too.

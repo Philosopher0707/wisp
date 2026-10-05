@@ -22,7 +22,7 @@ from wisp.repl.commands import register
 logger = logging.getLogger(__name__)
 
 
-@register("doctor", "Run pre-flight health checks (5 subsystems)", aliases=("check", "health"), usage="/doctor [--json]")
+@register("doctor", "Run pre-flight health checks (5 subsystems)", aliases=("check", "health"), usage="/doctor [--deep] [--json]")
 def cmd_doctor(agent, args: str):
     """Re-run the pre-flight suite and print the report.
 
@@ -32,6 +32,14 @@ def cmd_doctor(agent, args: str):
     """
     raw = (args or "").strip()
     as_json = "--json" in raw or "-j" in raw
+    if "--deep" in raw:
+        # Harness invariants: probes that cost more than the 100 ms boot budget, so they only run on request.
+        from wisp.core.doctor import format_detailed
+        from wisp.cli.doctor_harness import run_harness_checks
+
+        deep = run_harness_checks()
+        print(json.dumps(deep.to_dict(), indent=2) if as_json else format_detailed(deep))
+        return
 
     # Resolve workspace/config from adapter (live values, not bootstrap)
     workspace = None

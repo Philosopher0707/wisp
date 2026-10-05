@@ -91,7 +91,7 @@ def test_v_key_emits_open_pager_with_texts():
 def test_v_binding_consumes_open_pager_effect():
     import inspect
     import wisp.cli.repl as repl
-    src = inspect.getsource(repl.make_input_fn)
+    src = inspect.getsource(repl.make_input_fn) + inspect.getsource(repl.build_key_bindings)
     assert "diff_pager_effect" in src
     assert "show_diff" in src
     assert "enter_alt" not in src  # single owner: Textual manages alt-screen
