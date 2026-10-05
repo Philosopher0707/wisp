@@ -22,7 +22,7 @@
 > `—` therefore means *no catch inside these roots*, which is **not** the same claim as
 > *unhandled* — see §(c).
 >
-> Generated 2026-09-30 at `d061ec2` · **49 classes** · **281 raise sites** · **51 catch sites** · **8 with no test naming them**.
+> Generated 2026-09-30 at `2cb72fe` · **49 classes** · **281 raise sites** · **51 catch sites** · **7 with no test naming them**.
 
 ---
 
@@ -42,7 +42,7 @@
 | `BoundsError` | `RuntimeError` | guard | startup | `wisp/runtime/bounds.py:59` | 11 | `wisp/runtime/bounds.py:95` | `wisp/composition.py:134` | — |
 | `CostError` | `RuntimeError` | guard | turn | `wisp/runtime/cost.py:48` | 4 | `wisp/runtime/cost.py:93` | — | — |
 | `UnknownModel` | `CostError` | guard | turn | `wisp/runtime/cost.py:54` | 1 | `wisp/runtime/cost.py:159` | `wisp/runtime/cost.py:183` | — |
-| `FleetManifestError` | `ValueError` | guard | cli | `wisp/fleet.py:28` | 15 | `wisp/fleet.py:98` | `wisp/cli/doctor_harness.py:288`, `wisp/cli/doctor_harness.py:310`, `wisp/fleet.py:358`, `wisp/fleet.py:397`, `wisp/fleet_ci.py:259` | — |
+| `FleetManifestError` | `ValueError` | guard | cli | `wisp/fleet.py:28` | 15 | `wisp/fleet.py:98` | `wisp/cli/doctor_harness.py:288`, `wisp/cli/doctor_harness.py:310`, `wisp/fleet.py:387`, `wisp/fleet.py:426`, `wisp/fleet_ci.py:259` | — |
 | `IdempotencyError` | `RuntimeError` | guard | tool | `wisp/runtime/idempotency.py:57` | 2 | `wisp/runtime/idempotency.py:295` | — | — |
 | `KeyReuse` | `IdempotencyError` | guard | tool | `wisp/runtime/idempotency.py:63` | 1 | `wisp/runtime/idempotency.py:350` | — | — |
 | `UnstableKey` | `IdempotencyError` | guard | tool | `wisp/runtime/idempotency.py:78` | 1 | `wisp/runtime/idempotency.py:376` | — | — |
@@ -75,7 +75,7 @@
 | `FatalProviderError` | `WispError` | unwired | — | `wisp/core/contracts.py:102` | 0 | — | — | — |
 | `ToolDeniedError` | `WispError` | unwired | — | `wisp/core/contracts.py:110` | 0 | — | — | — |
 | `CancelledTurnError` | `WispError` | unwired | — | `wisp/core/contracts.py:118` | 0 | — | — | — |
-| `LadderExhausted` | `RuntimeError` | unwired | — | `wisp/core/recovery.py:574` | 0 | — | — | — |
+| `LadderExhausted` | `RuntimeError` | unwired | — | `wisp/core/recovery.py:589` | 0 | — | — | — |
 | `EventStreamError` | `Exception` | unwired | — | `wisp/stream_parser.py:17` | 0 | — | `wisp/stream_parser.py:191`, `wisp/stream_parser.py:197` | — |
 | `SchemaValidationError` | `RuntimeError` | unwired | — | `wisp/structured_output.py:37` | 0 | — | — | — |
 | `SchemaValidationError` | `Exception` | unwired | — | `wisp/multi_agent/schema_validator.py:16` | 0 | — | — | — |
@@ -140,13 +140,13 @@ may mean the caller is out of scope. `raise_sites: 0` is strong: an AST walk ove
 whole runtime found no `raise` of that name anywhere, so the class cannot fire in this
 tree at all.
 
-**8 distinct names — 8 of 49 rows — are named by no test file.** Derived by
+**7 distinct names — 7 of 49 rows — are named by no test file.** Derived by
 searching `tests/` for each name, so it is a floor and not a proof: a test can exercise a
 path without ever naming the exception. The list is a place to look, not a verdict.
 
 The name and row counts differ because `SchemaValidationError` is defined twice (§Findings); a name-keyed count would say 8 and a row-keyed count 9, and only the pair is honest.
 
-`CancelledTurnError`, `CircuitBreakerOpenError`, `EventStreamError`, `ImportGraphTooLarge`, `LSPServerError`, `LadderExhausted`, `ToolDeniedError`, `_TransientOpenError`
+`CancelledTurnError`, `CircuitBreakerOpenError`, `EventStreamError`, `LSPServerError`, `LadderExhausted`, `ToolDeniedError`, `_TransientOpenError`
 
 ---
 
@@ -172,7 +172,7 @@ The name and row counts differ because `SchemaValidationError` is defined twice 
 
 - **`adr` is `—` for 45 of 47 rows, and that is a limit, not a claim.** Only two rows carry a decision, and each is cited because the class's **own docstring** names it — `ADR-0038` for `OllamaConfigurationError`, `ADR-0050` for `CriteriaDeclarationRejected`. Most of these exceptions arrived in a phase whose ADR exists but does not name the class. **The provenance was not traced**, and a plausible ADR is worse than a blank — guessing a decision is the defect this corpus exists to prevent. `—` states *not pinned*, not *none exists*.
 
-- **`tripwire` is derived, and a derived tripwire is weaker than a declared one.** The column is the first `tests/` file that names the exception, found by search. It shows what is *referenced*, not what is *asserted*: a test that imports a name and never exercises the raise still counts. It is included because the zero is informative — 8 of 49 classes are named by no test file at all — and it is labelled derived so nobody reads it as a guard. **The number is a floor.** `LSPServerError` has 16 raise sites and no test names it; that is a live path with no assertion on its failure shape, and it is the kind of zero this column exists to surface.
+- **`tripwire` is derived, and a derived tripwire is weaker than a declared one.** The column is the first `tests/` file that names the exception, found by search. It shows what is *referenced*, not what is *asserted*: a test that imports a name and never exercises the raise still counts. It is included because the zero is informative — 7 of 49 classes are named by no test file at all — and it is labelled derived so nobody reads it as a guard. **The number is a floor.** `LSPServerError` has 16 raise sites and no test names it; that is a live path with no assertion on its failure shape, and it is the kind of zero this column exists to surface.
 
 ### What this page did not do
 
