@@ -498,3 +498,13 @@ Search words: overlap, header, traffic lights, hiddenInset, container query, Web
 - Auth headers are built in one pinned place (`useApi`); new endpoints (`/api/git/diff`, `/api/bash`, `/api/models`, `/api/models/select`) were added there, not as raw `fetch` in components.
 - `/api/git/diff` takes no path from the client (the file list comes from `git status -z -uall`), caps files and bytes per file; 7 tests against a real repo.
 - The Terminal tab calls `/api/bash`, which the default AUTO_EDIT policy refuses ("no approver is present over REST"). That is the policy working; the tab says so and does not bypass it. Widening it is the user's decision.
+
+## app shows "No sessions yet": sessions are per-workspace databases (2026-10-06)
+
+Search words: sessions, wisp.db, workspace store, read-only, import, session_sources, untitled.
+
+- Wisp stores sessions in `<workspace>/.wisp/wisp.db`. The app's workspace is `~/.wisp/workspace`, so its store started empty while the user's history sat in `~/.config/wisp/wisp.db` (8188 sessions) and `~/.wisp/wisp.db` (433). Measured with `sqlite3 -readonly immutable=1` counts, no content read.
+- Fix is additive: `GET /api/sessions` merges the app store with the other known stores, opened `mode=ro` (no migration, no WAL checkpoint). Opening a foreign session is an explicit copy into the app store (`POST /api/sessions/{id}/import`); delete and rename are refused (409) for sessions that exist only elsewhere. Tests hash the source files before and after list/get/import and require them unchanged (`tests/test_session_sources.py`).
+- `PATCH /api/sessions/{id}` was a stub returning `{session_id}`, so the UI's rename always reported failure; it now renames.
+- Untitled rows are labelled from the first text message via `json_extract` guarded by `json_type` (multimodal content is a list). 400 rows in 0.07 s on the real data; 40 stay untitled.
+- Not covered: per-project stores (`<project>/.wisp/wisp.db`) are not scanned; a registry of known workspaces would be needed.

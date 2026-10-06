@@ -299,3 +299,16 @@
 .chat-list-item-check:hover {
   color: var(--accent-purple);
 }
+
+.chat-list-source {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  background: var(--bg-badge);
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 16px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.chat-list-delete-btn:disabled { display: none; }

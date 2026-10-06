@@ -7,6 +7,8 @@ export interface SessionSummary {
   created_at: string;
   updated_at: string;
   msg_count: number;
+  /** Which Wisp store holds it: 'app' is this app's own; others are read-only until opened once (copied in). */
+  source?: 'app' | 'global' | 'home';
 }
 
 export interface ChatSummary {

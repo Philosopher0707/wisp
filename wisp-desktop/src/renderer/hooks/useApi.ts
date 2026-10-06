@@ -182,6 +182,7 @@ interface ApiClient {
   fetchSession: (id: string) => Promise<Message[]>;
   deleteSession: (id: string) => Promise<boolean>;
   renameSession: (id: string, title: string) => Promise<boolean>;
+  importSession: (id: string) => Promise<boolean>;
   fetchModels: () => Promise<string[]>;
   fetchFiles: (path?: string) => Promise<FileItems | null>;
   fetchGitStatus: () => Promise<GitStatus | null>;
@@ -346,6 +347,15 @@ export function useApi(serverUrl: string, apiKey: string): ApiClient {
         { method: 'PATCH', body: { title } },
       ) as { ok?: boolean };
       return data.ok === true;
+    } catch {
+      return false;
+    }
+  }, [apiFetch, authParams]);
+
+  const importSession = useCallback(async (id: string): Promise<boolean> => {
+    try {
+      await apiFetch(`/api/sessions/${encodeURIComponent(id)}/import${authParams}`, { method: 'POST' });
+      return true;
     } catch {
       return false;
     }
@@ -676,7 +686,7 @@ export function useApi(serverUrl: string, apiKey: string): ApiClient {
 
   return useMemo(
     () => ({
-      fetchSessions, fetchSession, deleteSession, renameSession, fetchModels, fetchFiles,
+      fetchSessions, fetchSession, deleteSession, renameSession, importSession, fetchModels, fetchFiles,
       fetchGitStatus, fetchGitDiff, runCommand, fetchProviders, selectProvider, forkSession, healthCheck,
       fetchCheckpoints, restoreCheckpoint, dropCheckpoint, getCheckpointDiff,
       fetchPlugins, installPlugin, uninstallPlugin, togglePlugin, searchMarketplace,
@@ -685,7 +695,7 @@ export function useApi(serverUrl: string, apiKey: string): ApiClient {
       fetchContext, updateContext, fetchCapabilities,
     }),
     [
-      fetchSessions, fetchSession, deleteSession, renameSession, fetchModels, fetchFiles,
+      fetchSessions, fetchSession, deleteSession, renameSession, importSession, fetchModels, fetchFiles,
       fetchGitStatus, fetchGitDiff, runCommand, fetchProviders, selectProvider, forkSession, healthCheck,
       fetchCheckpoints, restoreCheckpoint, dropCheckpoint, getCheckpointDiff,
       fetchPlugins, installPlugin, uninstallPlugin, togglePlugin, searchMarketplace,

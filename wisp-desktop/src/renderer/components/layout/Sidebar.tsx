@@ -35,6 +35,11 @@ export const Sidebar: React.FC = () => {
     dispatch({ type: 'SET_MESSAGES', messages: [] });
 
     try {
+      // A session from another Wisp store is copied into the app's own first, so continuing it writes to the copy.
+      const listed = state.sessions.find((x) => x.id === id);
+      if (listed && listed.source && listed.source !== 'app') {
+        if (!(await api.importSession(id))) throw new Error('import failed');
+      }
       const messages = await api.fetchSession(id);
       dispatch({ type: 'SET_SESSION_ID', id });
       dispatch({ type: 'SET_MESSAGES', messages });
@@ -97,9 +102,12 @@ export const Sidebar: React.FC = () => {
   const deleteSelected = async () => {
     if (selectedIds.size === 0) return;
     setDeleting(true);
-    const results = await Promise.allSettled(
-      [...selectedIds].map((id) => api.deleteSession(id)),
-    );
+    // Sessions that still live in another Wisp store are read-only here; only the app's own can be deleted.
+    const own = [...selectedIds].filter((id) => {
+      const src = state.sessions.find((x) => x.id === id)?.source;
+      return !src || src === 'app';
+    });
+    await Promise.allSettled(own.map((id) => api.deleteSession(id)));
     setDeleting(false);
     setSelectedIds(new Set());
     if (selectedIds.has(state.sessionId || '')) {
@@ -223,10 +231,16 @@ export const Sidebar: React.FC = () => {
                       </span>
                     )}
                   </span>
+                  {s.source && s.source !== 'app' && (
+                    <span className="chat-list-source" title={`Stored in the ${s.source} Wisp database. Opening copies it into the app; the original is untouched.`}>
+                      {s.source}
+                    </span>
+                  )}
                   <span className="chat-list-item-time">{s.msg_count} msgs</span>
                   <button
                     className="chat-list-delete-btn"
-                    title="Delete session"
+                    title={s.source && s.source !== 'app' ? 'Open it once to copy it into the app before deleting' : 'Delete session'}
+                    disabled={Boolean(s.source && s.source !== 'app')}
                     onClick={(e) => handleDeleteSession(e, s.id)}
                   >
                     <Trash2 size={13} />
