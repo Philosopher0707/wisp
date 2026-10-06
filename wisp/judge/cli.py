@@ -8,7 +8,8 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
-from wisp.judge import core, improve
+from wisp.judge import core
+from wisp.judge.improve import log_to, run_loop, wisp_proposer
 from wisp.judge.tasks import HELD_OUT
 
 STATE_DIR = Path(".wisp") / "judge"
@@ -89,10 +90,10 @@ def run_judge(argv: list[str]) -> int:
     current = addendum_path.read_text(encoding="utf-8") if addendum_path.exists() else ""
     held = [t for t in tasks.values() if t.id in HELD_OUT]
     tune = [t for t in tasks.values() if t.id not in HELD_OUT]
-    final = improve.run_loop(
+    final = run_loop(
         tune, held, tasks, repeat=args.repeat, iterations=args.iterations,
-        runner=lambda t, add: core.run_one(t, cfg, add), proposer=improve.wisp_proposer(cfg),
-        current=current, log=lambda e: improve.log_to(learnings, e))
+        runner=lambda t, add: core.run_one(t, cfg, add), proposer=wisp_proposer(cfg),
+        current=current, log=lambda e: log_to(learnings, e))
     if final.strip() != current.strip():
         state.mkdir(parents=True, exist_ok=True)
         addendum_path.write_text(final, encoding="utf-8")
