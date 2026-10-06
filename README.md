@@ -215,6 +215,7 @@ Extension points: add a tool via `TOOL_SCHEMAS` + `TOOL_IMPLS` in `wisp/tools/re
 
 ## Ecosystem / Community Interfaces
 
+- **macOS app** (`wisp-desktop/`, Electron, arm64): a self-contained app that bundles its own Python and wisp (no system Python needed), with a sessions sidebar (history from every Wisp store on the machine, read-only), a model-provider switcher, and a workbench dock with Diff, Terminal, Browser and Files. Ad-hoc signed for now. Build, verify and security model: [`wisp-desktop/README.md`](wisp-desktop/README.md); decisions: [`docs/adr/2026-10-07-desktop-host-terminal-and-workspace.md`](docs/adr/2026-10-07-desktop-host-terminal-and-workspace.md).
 - **Remote control clients** (community-maintained, experimental): build and usage guide at [`docs/archive/ANDROID_USAGE_GUIDE.md`](docs/archive/ANDROID_USAGE_GUIDE.md); cloud deploy notes at [`docs/archive/CLOUD_DEPLOYMENT_GUIDE.md`](docs/archive/CLOUD_DEPLOYMENT_GUIDE.md).
 - **Operators**: [`docs/QUICKSTART.md`](docs/QUICKSTART.md) · [`docs/ADMIN-GUIDE.md`](docs/ADMIN-GUIDE.md) · [`docs/COMPLIANCE.md`](docs/COMPLIANCE.md) · [`docs/RELEASE.md`](docs/RELEASE.md)
 

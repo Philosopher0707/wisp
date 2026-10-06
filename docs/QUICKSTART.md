@@ -40,3 +40,16 @@ wisp policy health                 # cache status, expiry, revocation_seq
 Secure default profile for sensitive work: run with the
 `offline-secure` or `read-only-review` profile posture (see
 `wisp/task/profiles.py`), or `ci-headless` in pipelines.
+
+## 6. Use the macOS app
+
+```bash
+cd wisp-desktop && npm install
+npm run package                      # bundles Python + wisp, builds, writes release/Wisp-<version>-mac.dmg (arm64)
+node scripts/verify-packaged.mjs     # checks the built app: launch, auth, session/diff/workspace routes, no orphan process
+open release/mac-arm64/Wisp.app
+```
+
+The app ships its own Python. Pick your project folder with the folder button under the composer (it must be inside your home folder; it
+is remembered). The Terminal tab is your own shell on the host, not the agent's `run_bash`. It is ad-hoc signed, so on another Mac use
+right-click, Open. Details: [`wisp-desktop/README.md`](../wisp-desktop/README.md).
