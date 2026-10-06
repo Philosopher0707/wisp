@@ -11,6 +11,7 @@ import logging
 import os
 import time
 from pathlib import Path
+from collections.abc import Iterable
 from typing import Any
 
 from wisp.config import WispConfig
@@ -21,25 +22,41 @@ from .task import EventKind, OrchestratorEvent, SubagentContract, SubagentResult
 
 
 def _effective_child_tools(
-    contract_tools: list[str] | None, permission_mode: str
+    contract_tools: list[str] | None, permission_mode: str, extension_tools: Iterable[str] = ()
 ) -> list[str]:
     """Advertise only tools the child's inherited mode can execute.
 
     Children run under the parent's permission mode with no approval
     handler; a blocked tool in their schema just buys a wasted turn on a
     guaranteed '[Blocked: ...]' result (live fanout evidence, 2026-08-25).
+
+    For an unrestricted role ("all", or no list) the list is the built-in registry plus the extension (MCP) tools a child may
+    inherit (`wisp.core.tool_surface.inherited_extension_tools`): declared-read MCP tools in every mode, the other MCP tools in
+    full mode, never the skill menu. ``extension_tools`` is the host's tool names (only full mode needs it). The list is also
+    the child's authorization identity, so an inherited tool is permitted at the authority layer and not just offered.
     """
     from wisp.infra.policy_engine import filter_allowed_for_mode
 
     if contract_tools and "all" not in [t.lower() for t in contract_tools]:
         requested: list[str] = list(contract_tools)
     else:
+        from wisp.core.tool_surface import inherited_extension_tools
         from wisp.tools.registry import TOOL_SCHEMAS
 
         requested = [
             s.get("function", {}).get("name", "") for s in TOOL_SCHEMAS
         ]
+        requested += sorted(inherited_extension_tools(permission_mode, extension_tools) - set(requested))
     return filter_allowed_for_mode(permission_mode, requested)
+
+
+def _extension_tool_names(runtime: Any) -> list[str]:
+    """Names of the tools the runtime's extension host offers, or [] when there is no host or it fails."""
+    try:
+        host = getattr(runtime, "extensions", None)
+        return [str(t.get("function", {}).get("name", "")) for t in (host.tools() if host is not None else [])]
+    except Exception:
+        return []
 
 
 def _stricter(a: int | float | None, b: int | float | None):
@@ -311,7 +328,8 @@ class SubagentRunner:
             _start_mode = str(
                 getattr(child_cfg, "permission_mode", "auto_edit") or "auto_edit"
             )
-            _start_capabilities = _effective_child_tools(contract.tools, _start_mode)
+            _start_capabilities = _effective_child_tools(
+                contract.tools, _start_mode, _extension_tool_names(self._agent_runtime))
             _start_unbounded = _start_mode.strip().lower() == "full"
             await self._emit(
                 progress_callback,
@@ -788,6 +806,7 @@ class SubagentRunner:
         _effective = _effective_child_tools(
             contract.tools,
             str(getattr(config, "permission_mode", "auto_edit") or "auto_edit"),
+            _extension_tool_names(self._agent_runtime),
         )
         session_dict["allowed_tools"] = _effective
         session_dict["principal"] = self._child_principal(contract, _effective)

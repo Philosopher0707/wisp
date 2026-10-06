@@ -20,6 +20,13 @@ def test_a_researcher_child_in_auto_edit_shows_why_run_bash_is_missing(capsys):
     assert "run_bash" in lines[i + 1], "the tool is listed under the reason that removed it"
 
 
+def test_a_child_role_says_what_it_cannot_show_about_extension_tools(capsys):
+    code, out = _run(capsys, "--role", "generalist", "--mode", "auto_edit")
+    assert code == 0 and "declared `tool_risk: read`" in out and "never skill tools" in out
+    code, out = _run(capsys, "--role", "parent")
+    assert "inherits" not in out
+
+
 def test_the_parent_under_the_core_profile_names_the_switch(capsys):
     code, out = _run(capsys, "--role", "parent", "--profile", "core")
     assert code == 0 and "WISP_TOOL_PROFILE=full" in out

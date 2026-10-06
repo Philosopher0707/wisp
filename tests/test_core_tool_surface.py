@@ -15,6 +15,7 @@ import itertools
 import pytest
 
 from tests.test_tool_profile import BUILTIN, SUB, _core, _names, _session
+from wisp.core.contracts import ToolRisk, declare_tool_risk, forget_declared_risk
 from wisp.core.tool_surface import Absence, Surface, explain_surface
 from wisp.multi_agent._runner import _effective_child_tools
 from wisp.multi_agent.roles import ROLE_CONFIGS
@@ -70,13 +71,27 @@ def test_an_unrestricted_subagent_loses_the_parents_skill_menu():
     assert _why(s, "skill__alpha").stage == "subagent"
 
 
-def test_a_generalist_child_is_never_offered_extension_tools():
-    """Found by the differential test: the runner turns a child's "all" into the built-in registry, so MCP and skill tools
-    are not inherited, and (the list being explicit) neither does the profile apply to it."""
-    s = explain_surface(ALL, role_tools=["all"], child=True, permission_mode="full", builtin_names=BUILTIN)
-    assert not EXT & set(s.offered)
-    assert _why(s, "mcp__srv__lookup").stage == "role" and "extension" in _why(s, "mcp__srv__lookup").reason
-    assert "spawn" in s.offered, "an explicit child list is not narrowed by the tool profile"
+def test_a_generalist_child_inherits_only_the_extension_tools_it_could_actually_run():
+    """The runner expands a child's "all" into the built-in registry plus the MCP tools it may inherit (declared tool_risk: read in
+    any mode; any MCP tool in full mode); skill tools never. As the list is explicit, the tool profile does not apply to it."""
+    ext = sorted(EXT)
+    full = explain_surface(ALL, role_tools=["all"], child=True, permission_mode="full", builtin_names=BUILTIN,
+                           extension_tools=ext)
+    assert "mcp__srv__lookup" in full.offered and "skill__alpha" not in full.offered
+    assert _why(full, "skill__alpha").stage == "role" and "skill tools are never inherited" in _why(full, "skill__alpha").reason
+    assert "spawn" in full.offered, "an explicit child list is not narrowed by the tool profile"
+
+    auto = explain_surface(ALL, role_tools=["all"], child=True, permission_mode="auto_edit", builtin_names=BUILTIN,
+                           extension_tools=ext)
+    assert "mcp__srv__lookup" not in auto.offered, "undeclared: it would need an approver a child does not have"
+
+    declare_tool_risk("mcp__srv__lookup", ToolRisk.READ)
+    try:
+        read = explain_surface(ALL, role_tools=["all"], child=True, permission_mode="auto_edit", builtin_names=BUILTIN,
+                               extension_tools=ext)
+    finally:
+        forget_declared_risk("srv")
+    assert "mcp__srv__lookup" in read.offered, "declared tool_risk: read executes unprompted, so it is inherited in any mode"
 
 
 def test_every_input_tool_is_either_offered_or_explained_exactly_once():
@@ -114,12 +129,18 @@ def test_unrestricted_subagent_surface_matches_the_real_pipeline(mode, profile, 
 
 
 @pytest.mark.parametrize("role", list(ROLE_CONFIGS))
-@pytest.mark.parametrize("mode,cap", list(itertools.product(MODES, (False, True))))
-def test_child_surface_matches_the_runner_then_the_real_pipeline(role, mode, cap, tmp_path):
+@pytest.mark.parametrize("mode,cap,declared", list(itertools.product(MODES, (False, True), (False, True))))
+def test_child_surface_matches_the_runner_then_the_real_pipeline(role, mode, cap, declared, tmp_path):
     tools = list(ROLE_CONFIGS[role].allowed_tools)
-    allowed = _effective_child_tools(tools, mode)  # what the runner stores as the child's allowed_tools
-    core = _core(tmp_path, permission_mode=mode, capability_filtering=cap)
-    real = _names(core._provider_tools(_session(tmp_path, allowed_tools=allowed, **SUB)))
-    got = explain_surface(ALL, role_tools=tools, child=True, permission_mode=mode, capability_filtering=cap,
-                          builtin_names=BUILTIN)
-    assert set(got.offered) == real, f"{role}/{mode}/cap={cap}: {sorted(set(got.offered) ^ real)}"
+    ext = sorted(EXT)
+    if declared:
+        declare_tool_risk("mcp__srv__lookup", ToolRisk.READ)
+    try:
+        allowed = _effective_child_tools(tools, mode, ext)  # what the runner stores as the child's allowed_tools
+        core = _core(tmp_path, permission_mode=mode, capability_filtering=cap)
+        real = _names(core._provider_tools(_session(tmp_path, allowed_tools=allowed, **SUB)))
+        got = explain_surface(ALL, role_tools=tools, child=True, permission_mode=mode, capability_filtering=cap,
+                              builtin_names=BUILTIN, extension_tools=ext)
+    finally:
+        forget_declared_risk("srv")
+    assert set(got.offered) == real, f"{role}/{mode}/cap={cap}/declared={declared}: {sorted(set(got.offered) ^ real)}"

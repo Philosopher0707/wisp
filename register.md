@@ -34,7 +34,7 @@
 | `ApprovalCancelled` | `Exception` | verdict | approval | `wisp/exceptions.py:17` | 1 | `wisp/transport/cli.py:947` | `wisp/core/approval_gate.py:117`, `wisp/core/approval_gate.py:146`, `wisp/tool_executor.py:882` | — |
 | `ApprovalTimeout` | `Exception` | verdict | approval | `wisp/exceptions.py:33` | 1 | `wisp/transport/cli.py:910` | `wisp/core/approval_gate.py:127`, `wisp/tool_executor.py:895` | — |
 | `_TransientOpenError` | `Exception` | recoverable | provider | `wisp/core/provider_stream.py:40` | 1 | `wisp/core/provider_stream.py:167` | `wisp/core/provider_stream.py:267` | — |
-| `FirstTokenTimeout` | `asyncio.TimeoutError` | recoverable | subagent | `wisp/multi_agent/_runner.py:151` | 1 | `wisp/multi_agent/_runner.py:644` | `wisp/multi_agent/_runner.py:415`, `wisp/multi_agent/_runner.py:718`, `wisp/multi_agent/_runner.py:884` | — |
+| `FirstTokenTimeout` | `asyncio.TimeoutError` | recoverable | subagent | `wisp/multi_agent/_runner.py:168` | 1 | `wisp/multi_agent/_runner.py:662` | `wisp/multi_agent/_runner.py:433`, `wisp/multi_agent/_runner.py:736`, `wisp/multi_agent/_runner.py:903` | — |
 | `CircuitOpenError` | `Exception` | recoverable | provider | `wisp/infra/circuit_breaker.py:175` | 2 | `wisp/infra/circuit_breaker.py:93` | `wisp/core/stateless.py:1269` | — |
 | `CircuitBreakerOpenError` | `Exception` | recoverable | subagent | `wisp/multi_agent/_circuit_breaker.py:102` | 1 | `wisp/multi_agent/_circuit_breaker.py:44` | — | — |
 | `OllamaError` | `Exception` | recoverable | provider | `wisp/ollama_client.py:46` | 10 | `wisp/ollama_client.py:273` | `wisp/ollama_client.py:288`, `wisp/ollama_client.py:427` | — |

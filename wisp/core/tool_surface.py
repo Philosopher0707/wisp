@@ -19,7 +19,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-__all__ = ["Absence", "Surface", "explain_surface"]
+__all__ = ["Absence", "Surface", "explain_surface", "inherited_extension_tools"]
 
 #: Stage names, in the order the real pipeline applies them.
 STAGES = ("subagent", "role", "mode", "profile", "capability")
@@ -38,6 +38,30 @@ class Absence:
 class Surface:
     offered: tuple[str, ...]
     absent: tuple[Absence, ...]
+
+
+def inherited_extension_tools(permission_mode: Any, extension_tools: Iterable[str] = ()) -> frozenset[str]:
+    """The extension (MCP) tools an unrestricted subagent child inherits under ``permission_mode``.
+
+    The runner used to expand a child's "all" into the built-in registry only, so a generalist child never saw an extension
+    tool. The rule is narrow, and it is ONE function, used by the runner (`_effective_child_tools`) and by `explain_surface`, so
+    the two cannot drift:
+
+    * every MCP tool whose operator declared ``tool_risk: read`` (``declared_read_names``), in every mode: it executes
+      unprompted and ``read_only`` mode already permits it, so this adds no authority;
+    * in ``full`` mode also the other MCP tools in ``extension_tools`` (the user has already authorised everything, and the child
+      gets ``run_bash`` there too);
+    * never a ``skill__*`` tool (the parent's skill menu, about 10k tokens per call), and never an undeclared MCP tool in
+      ``auto_edit`` or ``ask_all``: it always needs an approver and a child has none, so offering it only buys a turn that ends in
+      a guaranteed block.
+    """
+    from wisp.core.contracts import declared_read_names
+
+    mode = str(getattr(permission_mode, "value", permission_mode) or "auto_edit").lower()
+    inherited = set(declared_read_names())
+    if mode == "full":
+        inherited |= {t for t in extension_tools if t.startswith("mcp__")}
+    return frozenset(inherited)
 
 
 def _mode_reason(mode: str) -> str:
@@ -59,6 +83,7 @@ def explain_surface(
     profile: str = "core",
     capability_filtering: bool = False,
     builtin_names: frozenset[str] | set[str] | None = None,
+    extension_tools: Sequence[str] = (),
 ) -> Surface:
     """Offered tools and per-tool absence reasons for one agent.
 
@@ -95,12 +120,13 @@ def explain_surface(
              "an unrestricted subagent does not inherit the parent's skill menu (skill__* tools)")
 
     # 2. The role's explicit list. A child's list is ALWAYS explicit: the runner expands "all" (or no list) into the built-in
-    #    registry (`_effective_child_tools`), so a generalist child is never offered extension (MCP, skill) tools, and as the
-    #    list is explicit the profile does not apply to it either.
+    #    registry plus the MCP tools it may inherit (`inherited_extension_tools`), so as the list is explicit the profile does
+    #    not apply to it either, and skill tools are never inherited.
     if child and not restricted:
         restricted = True
-        drop(set(builtin_names), "role",
-             "a child's tool list is the built-in registry; extension (MCP, skill) tools are not inherited by children")
+        drop(set(builtin_names) | inherited_extension_tools(mode, extension_tools), "role",
+             "a child's tool list is the built-in registry plus the MCP tools it may inherit (declared tool_risk: read in any "
+             "mode; any MCP tool in full mode); skill tools are never inherited")
     elif restricted:
         allowed = {str(t) for t in role_tools or ()}
         drop(allowed, "role", "not in this role's tool list")
