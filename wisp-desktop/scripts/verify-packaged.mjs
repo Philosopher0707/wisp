@@ -51,12 +51,14 @@ let port = 0;
 try {
   electronApp = await electron.launch({
     executablePath: exe,
+    args: [`--user-data-dir=${path.join(home, 'user-data')}`],
     env: { ...process.env, HOME: home, WISP_AUTO_UPDATE: 'false', ELECTRON_ENABLE_LOGGING: '1' },
     timeout: 60_000,
   });
   const win = await electronApp.firstWindow({ timeout: 60_000 });
   win.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
   win.on('console', (m) => m.type() === 'error' && errors.push(`console: ${m.text()}`));
+  win.on('response', (r) => { if (r.status() >= 400) errors.push(`http ${r.status()} ${r.request().method()} ${r.url().replace(/^https?:\/\/[^/]+/, '').replace(/[?&]api_key=[^&]+/, '')}`); });
   await win.waitForLoadState('domcontentloaded');
   await sleep(2500);
 

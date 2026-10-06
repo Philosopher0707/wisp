@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdtempSync, readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { parsePrefs, loadPrefs, savePrefs } from './prefs.js';
+import { parsePrefs, loadPrefs, savePrefs, withoutWorkspace } from './prefs.js';
 
 describe('prefs', () => {
   it('keeps only a plausible absolute workspace path', () => {
@@ -27,6 +27,15 @@ describe('prefs', () => {
     expect(loadPrefs(path.join(dir, 'none.json'))).toEqual({});
     writeFileSync(path.join(dir, 'bad.json'), '{{{');
     expect(loadPrefs(path.join(dir, 'bad.json'))).toEqual({});
+  });
+
+  it('can forget the remembered workspace', () => {
+    expect(withoutWorkspace({ workspace: '/x' })).toEqual({});
+    const dir = mkdtempSync(path.join(tmpdir(), 'wisp-prefs-'));
+    const file = path.join(dir, 'p.json');
+    savePrefs(file, { workspace: '/x' });
+    savePrefs(file, withoutWorkspace(loadPrefs(file)));
+    expect(loadPrefs(file)).toEqual({});
   });
 
   it('does not write unknown keys', () => {

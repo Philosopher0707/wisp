@@ -26,6 +26,12 @@ export function loadPrefs(file: string): Prefs {
   }
 }
 
+/** Forget the remembered project (the folder is gone or no longer allowed). */
+export function withoutWorkspace(prefs: Prefs): Prefs {
+  const { workspace: _dropped, ...rest } = prefs;
+  return rest;
+}
+
 export function savePrefs(file: string, prefs: Prefs): void {
   mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.tmp`;

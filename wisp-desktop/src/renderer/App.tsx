@@ -200,6 +200,9 @@ export const App: React.FC<Props> = ({ serverUrl, apiKey }) => {
           }).catch(() => null);
           if (resp?.ok) {
             current = ((await resp.json()) as { path?: string }).path ?? current;
+          } else if (resp) {
+            // The backend refused it (folder deleted, or outside the allowed folders): forget it instead of failing every launch.
+            void window.wisp?.clearSavedWorkspace?.();
           }
         }
         if (current) dispatch({ type: 'SET_WORKSPACE', path: current });

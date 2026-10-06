@@ -51,6 +51,7 @@ export interface WispAPI {
   getBackendStatus: () => Promise<BackendStatus>;
   getSavedWorkspace: () => Promise<string | null>;
   setSavedWorkspace: (path: string) => Promise<boolean>;
+  clearSavedWorkspace: () => Promise<boolean>;
 }
 
 contextBridge.exposeInMainWorld('wisp', {
@@ -119,4 +120,6 @@ contextBridge.exposeInMainWorld('wisp', {
   getSavedWorkspace: () => ipcRenderer.invoke('prefs:getWorkspace'),
 
   setSavedWorkspace: (path: string) => ipcRenderer.invoke('prefs:setWorkspace', path),
+
+  clearSavedWorkspace: () => ipcRenderer.invoke('prefs:clearWorkspace'),
 } satisfies WispAPI);
