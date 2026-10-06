@@ -28,11 +28,15 @@ def _tool(cmd: str, ws) -> str:
     return asyncio.run(bash_mod.async_tool_run_bash(cmd, str(ws), 20))
 
 
+# A stage with a fixed exit status: `ls /missing` exits 1 on macOS but 2 on Linux, and CI is Linux.
+_FAILING_STAGE = "{ echo boom >&2; exit 4; } 2>&1 | tail -1"
+
+
 def test_failed_first_stage_behind_a_successful_tail_is_reported(tmp_path):
-    out = _tool("ls /definitely/not/here 2>&1 | tail -1", tmp_path)
+    out = _tool(_FAILING_STAGE, tmp_path)
     first = out.splitlines()[0]
-    assert first.startswith("[pipeline:") and "stage 1" in first and "exited 1" in first
-    assert "No such file" in out  # the command's own output is still there
+    assert first.startswith("[pipeline:") and "stage 1" in first and "exited 4" in first
+    assert "boom" in out  # the command's own output is still there
 
 
 def test_exit_code_keeps_its_shell_meaning(tmp_path):
@@ -119,7 +123,7 @@ def test_the_real_pty_tier_reports_it_too(tmp_path, monkeypatch):
 
     monkeypatch.delenv("WISP_SANDBOX", raising=False)
     monkeypatch.setattr(bash_mod, "get_router", lambda w: SandboxRouter(w, tiers=[PtySandbox(w)]))
-    run = _run("ls /definitely/not/here 2>&1 | tail -1", tmp_path)
+    run = _run(_FAILING_STAGE, tmp_path)
     assert run.provider == "pty" and run.returncode == 0
-    assert run.pipeline_failures == ((1, 1),)
+    assert run.pipeline_failures == ((1, 4),)
     assert "__WISP_PIPESTATUS__" not in run.stdout + run.stderr
