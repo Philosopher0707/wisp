@@ -151,5 +151,6 @@ def test_session_root_keeps_bash_confined(tmp_path, monkeypatch):
             command="echo via-root", workspace=str(tmp_path), timeout=30))
     finally:
         root.shutdown()
-    assert fake.calls == ["echo via-root"]
+    # The sandbox carries the command; run_bash appends a pipeline-status epilogue after it (see test_bash_pipeline_status).
+    assert len(fake.calls) == 1 and fake.calls[0].startswith("echo via-root\n")
     assert "canned-out" in out

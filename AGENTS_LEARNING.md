@@ -475,3 +475,15 @@ Still open: ~30% of the prompt is appended after budgeting; `config.skill_dirs` 
 - **Choose the local test slice from CI's failures, not from guesses:** my architecture-test filter by file name missed `test_doc_drift` and `test_module_orphans`, and the first CI run of the PR caught both. `AGENTS.md` states a test-file count with a tolerance of 40; `main` was at 439 against 400, so any four new test files tipped it.
 - **`rtk` filters output and can mislead:** it showed `06bc076` as `origin/main` when the real value was `f660329`. Use `rtk proxy git ...` for a SHA or a count that decides something.
 - **Verify a subcommand through the checkout under test:** a subprocess `python -m wisp judge ...` ran the older installed wisp, which has no `judge` and sent "judge run ..." to the model as a prompt (a mock reply, exit 0, a green-looking wrong result). The end-to-end test sets `PYTHONPATH` to its own checkout.
+
+## run_bash exit code hid a failed pipeline stage (2026-10-06)
+
+Search words: pipefail, PIPESTATUS, pipeline, exit code, `| tail`, run_bash, masked failure, sink.
+
+- Symptom (agent session): `swift build 2>&1 | tail -30` showed 3 compiler errors and `# exit: 0`. A shell reports the LAST stage's status, so `tail` hid swift's failure; the agent and its log said success.
+- Fix is in `wisp/tools/bash.py::run_bash_confined`, the one place a command executes (the disk sink goes through it too): the command is followed by an epilogue that records `PIPESTATUS` and re-exits with the real status. The exit code keeps its shell meaning (no behaviour change for scripts). When the command exits 0 but an earlier stage failed, the result starts with `[pipeline: stage N exited C; ...]`, and the sink log gets a `# [pipeline: ...]` header line. SIGPIPE (141) is excluded (`yes | head -1`). If the command already fails (`set -o pipefail`), no note: the exit code says it.
+- Why not just prepend `set -o pipefail`: it would turn `git log | head` and `grep x | wc -l` into reported failures for correct commands, a silent change to every existing script.
+- The marker travels on stderr, or stdout for the PTY tier (it merges streams); both are parsed and stripped. Verified on real bash, the real PtySandbox, and a merged-stream fake. A provider that never ran the epilogue is left alone.
+- Changed a pin: `tests/test_sink_keeps_sandbox.py` asserted the sandbox got exactly `echo via-root`; it now asserts the command is carried and starts with it. The intent (it goes through the sandbox, not the host) is unchanged.
+- Not covered: `POST /api/bash` (REST) calls `sandbox.run` directly and does not report masked stages.
+- Meta-lesson, repeated in this very session: our own tooling reported `exit code 0` from `cmd | tail` and from `(script; echo exit=$?) ; tail`. Read the real status from a file or `${pipestatus[1]}`, never from a pipeline's end.
