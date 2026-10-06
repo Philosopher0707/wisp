@@ -8,7 +8,8 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from wisp.server import session_sources
+from wisp.server.session_sources import import_session as import_foreign_session
+from wisp.server.session_sources import list_foreign, load_foreign
 
 from wisp.server.deps import verify_api_key
 
@@ -45,7 +46,7 @@ async def list_sessions(request: Request):
         s.pop("file", None)
         s["source"] = "app"
     seen = {s["id"] for s in own}
-    foreign = [s for s in session_sources.list_foreign(_own_db(sm), MAX_LISTED) if s["id"] not in seen]
+    foreign = [s for s in list_foreign(_own_db(sm), MAX_LISTED) if s["id"] not in seen]
     merged = sorted(own + foreign, key=lambda s: s.get("updated_at") or "", reverse=True)[:MAX_LISTED]
     return {"sessions": merged}
 
@@ -57,7 +58,7 @@ async def get_session(session_id: str, request: Request):
     if session is not None:
         session["source"] = "app"
     else:
-        session = session_sources.load_foreign(_own_db(sm), session_id)
+        session = load_foreign(_own_db(sm), session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
     return {"session": session}
@@ -67,7 +68,7 @@ async def get_session(session_id: str, request: Request):
 async def import_session(session_id: str, request: Request):
     """Copy a session from another Wisp store into the app's own so it can be continued. The source is not touched."""
     sm = _get_store(request)
-    source = session_sources.import_session(sm, session_id)
+    source = import_foreign_session(sm, session_id)
     if source is None:
         raise HTTPException(status_code=404, detail="Session not found")
     return {"imported": source != "app", "source": source}
@@ -76,7 +77,7 @@ async def import_session(session_id: str, request: Request):
 def _refuse_foreign(sm, session_id: str, action: str) -> None:
     """Sessions that only exist in another store are read-only here: this app never edits or deletes someone else's history."""
     if sm.load_session(session_id) is None:
-        foreign = session_sources.load_foreign(_own_db(sm), session_id)
+        foreign = load_foreign(_own_db(sm), session_id)
         if foreign is not None:
             raise HTTPException(
                 status_code=409,
