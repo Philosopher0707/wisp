@@ -475,3 +475,14 @@ Still open: ~30% of the prompt is appended after budgeting; `config.skill_dirs` 
 - **Choose the local test slice from CI's failures, not from guesses:** my architecture-test filter by file name missed `test_doc_drift` and `test_module_orphans`, and the first CI run of the PR caught both. `AGENTS.md` states a test-file count with a tolerance of 40; `main` was at 439 against 400, so any four new test files tipped it.
 - **`rtk` filters output and can mislead:** it showed `06bc076` as `origin/main` when the real value was `f660329`. Use `rtk proxy git ...` for a SHA or a count that decides something.
 - **Verify a subcommand through the checkout under test:** a subprocess `python -m wisp judge ...` ran the older installed wisp, which has no `judge` and sent "judge run ..." to the model as a prompt (a mock reply, exit 0, a green-looking wrong result). The end-to-end test sets `PYTHONPATH` to its own checkout.
+
+## setup wizard never validated keyed providers: `_probe` called a method they do not have (2026-10-07)
+
+Search words: wisp setup, _probe, handshake, generate, generate_stream_events, NVIDIAProvider, save anyway, 402, classify.
+
+- Symptom (a real REPL transcript): `[4/4] Validating… ✗ AttributeError: 'NVIDIAProvider' object has no attribute 'generate'`, then "Configuration saved WITHOUT validation". Not NVIDIA-specific: only the mock and Ollama providers define `generate`; OpenAI, OpenRouter and NVIDIA expose `generate_stream_events` only, so the wizard's handshake failed for **every** keyed provider and always ended at "save anyway".
+- Why the tests missed it: every wizard test injects `probe_fn`, so `_probe` itself was never executed against a real provider class.
+- Fix (`wisp/cli/setup.py::_handshake`): use `generate` when the provider has it; otherwise read `generate_stream_events` until the first content/thinking/tool/done event (events normalised through `canonical_event`, the single implementation), raise on an error event or an empty stream, and always close the generator so a probe never pays for a whole completion.
+- Reproduced the exact failure with the real `NVIDIAProvider` against a local HTTP stub (200 SSE and 402 JSON), before and after: before, both cases gave the AttributeError; after, 200 validates and 402 is reported.
+- Second fault found by that stub: the provider layer words a 402 as "the provider refused this request on billing", and `_classify_probe_error` read "refused" as a network failure ("unreachable"). Billing (402 / more credits) is now checked first.
+- Not changed: how the REPL itself sizes `max_tokens` against a key's remaining credit (the 402 in that transcript said 4096 requested, 83 affordable); that is account state, not a wisp bug.
