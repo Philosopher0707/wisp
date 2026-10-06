@@ -69,6 +69,8 @@ export interface SpawnEnvInput {
   apiKey: string;
   workspace: string;
   corsOrigins: string[];
+  /** Folders the user may switch the workspace into (the backend refuses anything else). */
+  allowedWorkspaceRoots?: string[];
   jsonLogs?: boolean;
 }
 
@@ -81,6 +83,11 @@ export function spawnEnvironment(input: SpawnEnvInput): Record<string, string | 
     WISP_CORS_ORIGINS: input.corsOrigins.join(','),
     PYTHONUNBUFFERED: '1',
   };
+  // The backend's default is "only inside the current workspace", which makes choosing a project impossible. The app lets the
+  // user pick a folder in a native dialog, so inside their home folder is allowed; an explicit setting from the environment wins.
+  if (input.allowedWorkspaceRoots?.length && !input.base.WISP_ALLOWED_WORKSPACE_ROOTS) {
+    env.WISP_ALLOWED_WORKSPACE_ROOTS = input.allowedWorkspaceRoots.join(',');
+  }
   if (input.jsonLogs) env.WISP_JSON_LOGS = '1';
   if (input.launch.root) {
     env.PYTHONPATH = input.launch.root + path.delimiter + (input.base.PYTHONPATH ?? '');

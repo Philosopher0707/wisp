@@ -180,6 +180,7 @@ interface ApiClient {
   fetchFiles: (path?: string) => Promise<FileItems | null>;
   fetchGitStatus: () => Promise<GitStatus | null>;
   fetchGitDiff: () => Promise<GitDiff>;
+  setWorkspace: (path: string) => Promise<string>;
   fetchProviders: () => Promise<ProviderCatalog>;
   selectProvider: (provider: string, model: string) => Promise<void>;
   forkSession: (messages: Message[], title?: string) => Promise<string | null>;
@@ -325,8 +326,9 @@ export function useApi(serverUrl: string, apiKey: string): ApiClient {
       const data = await apiFetch(
         `/api/sessions/${encodeURIComponent(id)}${authParams}`,
         { method: 'DELETE' },
-      ) as { ok?: boolean };
-      return data.ok === true;
+      ) as { ok?: boolean; deleted?: boolean };
+      // The server answers {"deleted": true}; this used to test only `ok`, so every delete looked like a failure.
+      return data.deleted === true || data.ok === true;
     } catch {
       return false;
     }
@@ -377,6 +379,12 @@ export function useApi(serverUrl: string, apiKey: string): ApiClient {
     } catch {
       return null;
     }
+  }, [apiFetch, authParams]);
+
+  /** Switch the backend's workspace. Throws with the server's reason (e.g. outside the allowed folders) so the UI can show it. */
+  const setWorkspace = useCallback(async (path: string): Promise<string> => {
+    const data = await apiFetch(`/api/workspace${authParams}`, { method: 'POST', body: { path } }) as { path: string };
+    return data.path;
   }, [apiFetch, authParams]);
 
   const fetchGitDiff = useCallback(async (): Promise<GitDiff> => {
@@ -675,7 +683,7 @@ export function useApi(serverUrl: string, apiKey: string): ApiClient {
   return useMemo(
     () => ({
       fetchSessions, fetchSession, deleteSession, renameSession, importSession, fetchModels, fetchFiles,
-      fetchGitStatus, fetchGitDiff, fetchProviders, selectProvider, forkSession, healthCheck,
+      fetchGitStatus, fetchGitDiff, setWorkspace, fetchProviders, selectProvider, forkSession, healthCheck,
       fetchCheckpoints, restoreCheckpoint, dropCheckpoint, getCheckpointDiff,
       fetchPlugins, installPlugin, uninstallPlugin, togglePlugin, searchMarketplace,
       fetchMCPServers, addMCPServer, removeMCPServer, testMCPServer,
@@ -684,7 +692,7 @@ export function useApi(serverUrl: string, apiKey: string): ApiClient {
     }),
     [
       fetchSessions, fetchSession, deleteSession, renameSession, importSession, fetchModels, fetchFiles,
-      fetchGitStatus, fetchGitDiff, fetchProviders, selectProvider, forkSession, healthCheck,
+      fetchGitStatus, fetchGitDiff, setWorkspace, fetchProviders, selectProvider, forkSession, healthCheck,
       fetchCheckpoints, restoreCheckpoint, dropCheckpoint, getCheckpointDiff,
       fetchPlugins, installPlugin, uninstallPlugin, togglePlugin, searchMarketplace,
       fetchMCPServers, addMCPServer, removeMCPServer, testMCPServer,

@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
+import { useAppState } from '../../state/context.js';
 import { RefreshCw } from '../../icons/index.js';
 
 const THEME = {
@@ -20,6 +21,9 @@ export const TerminalTab: React.FC = () => {
   const [status, setStatus] = useState<{ cwd?: string; shell?: string; exited?: string; error?: string }>({});
   const [generation, setGeneration] = useState(0);
   const api = window.wisp?.terminal;
+  const { state } = useAppState();
+  const workspaceRef = useRef(state.workspacePath);
+  workspaceRef.current = state.workspacePath;
 
   useEffect(() => {
     const el = host.current;
@@ -46,7 +50,7 @@ export const TerminalTab: React.FC = () => {
     const input = term.onData((d) => api.write(d));
     const resized = term.onResize(({ cols, rows }) => api.resize(cols, rows));
 
-    void api.start(term.cols, term.rows).then((res) => {
+    void api.start(term.cols, term.rows, workspaceRef.current || undefined).then((res) => {
       if (disposed) return;
       if (!res.ok) {
         setStatus({ error: res.error ?? 'Could not start a shell.' });
@@ -94,6 +98,12 @@ export const TerminalTab: React.FC = () => {
         <span className="dock-toolbar-meta" title={status.cwd}>{status.cwd ? `${status.shell?.split('/').pop()} · ${status.cwd.split('/').pop()}` : 'host shell'}</span>
         <button className="dock-tool-btn" onClick={restart} title="Restart shell" aria-label="Restart shell"><RefreshCw size={14} /></button>
       </div>
+      {!status.exited && !status.error && status.cwd && state.workspacePath && status.cwd !== state.workspacePath && (
+        <p className="dock-note">
+          This shell is in <code>{status.cwd.split('/').pop()}</code>, but the project is now <code>{state.workspacePath.split('/').pop()}</code>.
+          <button className="term-link" onClick={restart}>Restart in the project folder</button>
+        </p>
+      )}
       {(status.exited || status.error) && (
         <p className="dock-note dock-note--error">{status.error ?? status.exited} <button className="term-link" onClick={restart}>Start a new shell</button></p>
       )}

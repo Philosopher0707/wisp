@@ -74,6 +74,17 @@ export function shellLaunch(python: string, shell: string, cols: number, rows: n
   return { file: python || '/usr/bin/python3', args: ['-I', '-c', PTY_HELPER, String(size.cols), String(size.rows), shell] };
 }
 
+/**
+ * Where a new shell starts. The renderer says which project folder is open; it is honoured only if it is an absolute path to
+ * an existing directory inside the user's home folder, otherwise the shell starts in `fallback`. (The path is data for the
+ * shell's working directory, never part of a command.)
+ */
+export function resolveShellCwd(requested: unknown, home: string, fallback: string, isDir: (p: string) => boolean): string {
+  if (typeof requested !== 'string' || !requested.startsWith('/') || requested.includes('\0') || requested.split('/').includes('..')) return fallback;
+  const inHome = requested === home || requested.startsWith(home.endsWith('/') ? home : `${home}/`);
+  return inHome && isDir(requested) ? requested : fallback;
+}
+
 /** The shell may only be one the machine lists in /etc/shells; anything else falls back to /bin/zsh. */
 export function pickShell(envShell: string | undefined, allowed: string[]): string {
   const wanted = (envShell ?? '').trim();

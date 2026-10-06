@@ -165,6 +165,7 @@ export async function startBackend(opts: BackendOptions = {}): Promise<BackendIn
     apiKey,
     workspace,
     corsOrigins: opts.corsOrigins || ['http://localhost', 'http://127.0.0.1'],
+    allowedWorkspaceRoots: [os.homedir()],
     jsonLogs: opts.jsonLogs,
   });
 

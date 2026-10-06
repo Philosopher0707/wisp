@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { spawn } from 'node:child_process';
-import { clampSize, shellLaunch, PTY_HELPER, pickShell, parseEtcShells, shellEnvironment, Scrollback, MAX_SCROLLBACK_CHARS } from './terminal-policy.js';
+import { resolveShellCwd, clampSize, shellLaunch, PTY_HELPER, pickShell, parseEtcShells, shellEnvironment, Scrollback, MAX_SCROLLBACK_CHARS } from './terminal-policy.js';
 
 describe('terminal policy', () => {
   it('clamps the size and survives junk', () => {
@@ -15,6 +15,19 @@ describe('terminal policy', () => {
     expect(l.args).toEqual(['-I', '-c', PTY_HELPER, '100', '30', '/bin/zsh; rm -rf ~']);
     expect(PTY_HELPER).not.toContain('rm -rf');
   });
+
+  it('starts the shell in the requested project folder only if it is a real directory inside home', () => {
+    const dirs = new Set(['/Users/me/proj', '/Users/me', '/etc'])
+    const isDir = (p: string) => dirs.has(p)
+    expect(resolveShellCwd('/Users/me/proj', '/Users/me', '/fb', isDir)).toBe('/Users/me/proj')
+    expect(resolveShellCwd('/etc', '/Users/me', '/fb', isDir)).toBe('/fb') // outside home
+    expect(resolveShellCwd('/Users/me/../etc', '/Users/me', '/fb', isDir)).toBe('/fb') // traversal
+    expect(resolveShellCwd('/Users/meh/x', '/Users/me', '/fb', () => true)).toBe('/fb') // sibling prefix, not inside home
+    expect(resolveShellCwd('/Users/me/missing', '/Users/me', '/fb', isDir)).toBe('/fb')
+    expect(resolveShellCwd('relative/dir', '/Users/me', '/fb', () => true)).toBe('/fb')
+    expect(resolveShellCwd(undefined, '/Users/me', '/fb', isDir)).toBe('/fb')
+    expect(resolveShellCwd('/Users/me', '/Users/me', '/fb', isDir)).toBe('/Users/me')
+  })
 
   it('only accepts a listed shell', () => {
     const shells = parseEtcShells('# comment\n/bin/zsh\n/bin/bash\n\n');

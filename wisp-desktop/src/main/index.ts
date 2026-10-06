@@ -26,6 +26,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { createMainWindow } from './window.js';
+import { loadPrefs, savePrefs } from './prefs.js';
 import { buildMenu } from './menu.js';
 import { startBackend, killBackend, getBackendStatus } from './backend.js';
 
@@ -118,6 +119,15 @@ function registerIpcHandlers(): void {
     } catch {
       return null;
     }
+  });
+
+  // ── Remembered project folder (main-process file, see prefs.ts) ──
+  const prefsFile = () => path.join(app.getPath('userData'), 'prefs.json');
+  ipcMain.handle('prefs:getWorkspace', () => loadPrefs(prefsFile()).workspace ?? null);
+  ipcMain.handle('prefs:setWorkspace', (_e, p: unknown) => {
+    if (typeof p !== 'string') return false;
+    savePrefs(prefsFile(), { ...loadPrefs(prefsFile()), workspace: p });
+    return loadPrefs(prefsFile()).workspace === p;
   });
 
   // ── Backend status ───────────────────────────────────────────────

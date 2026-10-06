@@ -109,6 +109,14 @@ describe('spawnEnvironment', () => {
     expect((base as Record<string, string>).WISP_API_KEY).toBeUndefined();
   });
 
+  it('lets the workspace be switched within the home folder, unless the environment already says otherwise', () => {
+    const launch: Launch = { python: 'python3', root: '', kind: 'system' };
+    expect(spawnEnvironment({ ...input(launch), allowedWorkspaceRoots: ['/Users/me'] }).WISP_ALLOWED_WORKSPACE_ROOTS).toBe('/Users/me');
+    const custom = spawnEnvironment({ ...input(launch), base: { ...base, WISP_ALLOWED_WORKSPACE_ROOTS: '/srv/only' }, allowedWorkspaceRoots: ['/Users/me'] });
+    expect(custom.WISP_ALLOWED_WORKSPACE_ROOTS).toBe('/srv/only');
+    expect(spawnEnvironment(input(launch)).WISP_ALLOWED_WORKSPACE_ROOTS).toBeUndefined();
+  });
+
   it('turns on JSON logs only when asked', () => {
     expect(spawnEnvironment({ ...input({ python: 'p', root: '', kind: 'system' }), jsonLogs: true }).WISP_JSON_LOGS).toBe('1');
     expect(spawnEnvironment(input({ python: 'p', root: '', kind: 'system' })).WISP_JSON_LOGS).toBeUndefined();

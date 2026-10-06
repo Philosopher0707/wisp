@@ -185,12 +185,24 @@ export const App: React.FC<Props> = ({ serverUrl, apiKey }) => {
       })
       .catch(() => {});
 
+    // Come back to the project the user chose last time (the backend restarts in its default folder). If the folder is gone or
+    // no longer allowed, forget it rather than retrying on every launch.
     fetch(`${baseUrl}/api/workspace`, { headers })
       .then((r) => r.json())
-      .then((data: { path?: string }) => {
-        if (data.path) {
-          dispatch({ type: 'SET_WORKSPACE', path: data.path });
+      .then(async (data: { path?: string }) => {
+        let current = data.path;
+        const saved = (await window.wisp?.getSavedWorkspace?.().catch(() => null)) ?? null;
+        if (saved && saved !== current) {
+          const resp = await fetch(`${baseUrl}/api/workspace`, {
+            method: 'POST',
+            headers: { ...(headers ?? {}), 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: saved }),
+          }).catch(() => null);
+          if (resp?.ok) {
+            current = ((await resp.json()) as { path?: string }).path ?? current;
+          }
         }
+        if (current) dispatch({ type: 'SET_WORKSPACE', path: current });
       })
       .catch(() => {});
   }, [serverUrl, apiKey]);

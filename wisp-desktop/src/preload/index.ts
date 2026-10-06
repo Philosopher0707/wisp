@@ -27,7 +27,7 @@ export interface WispBrowserAPI {
 }
 
 export interface WispTerminalAPI {
-  start: (cols: number, rows: number) => Promise<{ ok: boolean; resumed?: boolean; cwd?: string; shell?: string; buffer?: string; error?: string }>;
+  start: (cols: number, rows: number, cwd?: string) => Promise<{ ok: boolean; resumed?: boolean; cwd?: string; shell?: string; buffer?: string; error?: string }>;
   write: (data: string) => void;
   resize: (cols: number, rows: number) => void;
   restart: () => void;
@@ -49,13 +49,15 @@ export interface WispAPI {
   checkForUpdates: () => Promise<{ status: string; message?: string }>;
   onUpdateStatus: (callback: (status: { status: string; version?: string; percent?: number; message?: string }) => void) => () => void;
   getBackendStatus: () => Promise<BackendStatus>;
+  getSavedWorkspace: () => Promise<string | null>;
+  setSavedWorkspace: (path: string) => Promise<boolean>;
 }
 
 contextBridge.exposeInMainWorld('wisp', {
   platform: process.platform,
 
   terminal: {
-    start: (cols: number, rows: number) => ipcRenderer.invoke('terminal:start', cols, rows),
+    start: (cols: number, rows: number, cwd?: string) => ipcRenderer.invoke('terminal:start', cols, rows, cwd),
     write: (data: string) => ipcRenderer.send('terminal:input', data),
     resize: (cols: number, rows: number) => ipcRenderer.send('terminal:resize', cols, rows),
     restart: () => ipcRenderer.send('terminal:restart'),
@@ -113,4 +115,8 @@ contextBridge.exposeInMainWorld('wisp', {
   },
 
   getBackendStatus: () => ipcRenderer.invoke('backend:status'),
+
+  getSavedWorkspace: () => ipcRenderer.invoke('prefs:getWorkspace'),
+
+  setSavedWorkspace: (path: string) => ipcRenderer.invoke('prefs:setWorkspace', path),
 } satisfies WispAPI);

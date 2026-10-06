@@ -119,12 +119,14 @@ export const Sidebar: React.FC = () => {
   const collapsed = state.sidebarCollapsed;
 
   const filteredSessions = useMemo(() => {
-    if (!filterText) return state.sessions;
+    // Sessions with no messages are noise (a window opened and closed); keep one only while it is the open session.
+    const visible = state.sessions.filter((s) => s.msg_count > 0 || s.id === state.sessionId);
+    if (!filterText) return visible;
     const q = filterText.toLowerCase();
-    return state.sessions.filter(
+    return visible.filter(
       (s) => (s.title || s.id).toLowerCase().includes(q),
     );
-  }, [state.sessions, filterText]);
+  }, [state.sessions, state.sessionId, filterText]);
 
   return (
     <aside className={`sidebar${collapsed ? ' sidebar--collapsed' : ''}`} aria-label="Sessions">

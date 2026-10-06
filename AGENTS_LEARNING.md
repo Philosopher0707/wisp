@@ -508,3 +508,16 @@ Search words: sessions, wisp.db, workspace store, read-only, import, session_sou
 - `PATCH /api/sessions/{id}` was a stub returning `{session_id}`, so the UI's rename always reported failure; it now renames.
 - Untitled rows are labelled from the first text message via `json_extract` guarded by `json_type` (multimodal content is a list). 400 rows in 0.07 s on the real data; 40 stay untitled.
 - Not covered: per-project stores (`<project>/.wisp/wisp.db`) are not scanned; a registry of known workspaces would be needed.
+
+## switching the project folder did nothing: stale WORKSPACE_ROOT copies, allowlist, silent UI (2026-10-07)
+
+Search words: workspace switch, WORKSPACE_ROOT, allowed roots, from-import copy, rebind, project folder, prefs.json.
+
+- Three independent causes, each enough to make the selector look dead: (1) the backend only allows switching inside the *current* workspace unless `WISP_ALLOWED_WORKSPACE_ROOTS` is set, so choosing a real project returned 400; (2) ~20 route modules did `from ...workspace import WORKSPACE_ROOT`, which copies the Path at import, so even an accepted switch never reached Diff/Files/git/shell routes; (3) the UI ignored a non-ok response (`if (resp.ok)` with no else).
+- Fix: `workspace._rebind_workspace_root` rebinds, by identity, every `wisp.server*` module still holding the old value (a module deliberately given another path is left alone) and clears the three caches built for the old folder (`codebase._semantic_index`, `mcp._mcp_manager`, `suggestions._app_suggestion_watcher`). The desktop app passes `WISP_ALLOWED_WORKSPACE_ROOTS=$HOME` (an explicit environment value wins). The UI shows the server's reason.
+- A from-import of a mutable module global is a latent bug anywhere it is reassigned later; mutation probe: removing the rebind call fails 3 of the 7 tests in `tests/test_workspace_switch.py`.
+- The remembered project lives in a main-process file (`userData/prefs.json`, atomic write, 0600), not localStorage: Chromium flushes localStorage lazily, so a killed or crashed app lost it (seen in the e2e restart check).
+- The shell's cwd follows the project (validated in main: absolute, exists, inside home, no `..`); a running shell in another folder shows a "restart in the project folder" prompt instead of being killed.
+- `deleteSession` tested `data.ok` but the server returns `{"deleted": true}`: every delete in the UI looked failed. Found by reading the call site against the route while fixing something else; now covered by `useApi.sessions.test.ts` against the real response shapes.
+- The auth-header ratchet test (`authHeaderAuthority.test.ts`) fails *when a known duplicate disappears*: delete the entry (that is the design).
+- Glued assistant text ("available.Swift 6.2") in one opened session is already glued in the stored message content; that session came from another producer (CodeAgentMac), so it is data as stored, not a wisp-core finding.

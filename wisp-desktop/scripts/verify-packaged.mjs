@@ -88,6 +88,14 @@ try {
   const models = await getJson('/api/models/select', { method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' }, body: '{}' });
   check('model select route exists (422 on an empty body)', models.status === 422, `status=${models.status}`);
 
+  const post = (p, body) => getJson(p, { method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const outside = await post('/api/workspace', { path: '/etc' });
+  check('workspace switch outside the home folder is refused (400)', outside.status === 400, `status=${outside.status}`);
+  const inside = await post('/api/workspace', { path: home });
+  check('workspace switch inside the home folder is accepted', inside.status === 200 && inside.body?.path != null, `status=${inside.status}`);
+  const sw = await getJson('/api/git/diff');
+  check('and the diff route follows the switch (200 on the new folder)', sw.status === 200, `status=${sw.status}`);
+
   const pid = listeningPid(port);
   const cmd = commandOf(pid);
   check('the backend is the Python bundled inside the app', cmd.includes('Wisp.app/Contents/Resources/backend/python/bin/python3') || cmd.includes(`${app}/Contents/Resources/backend/python`), cmd.slice(0, 90));

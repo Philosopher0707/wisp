@@ -1,8 +1,8 @@
 import { ipcMain, type BrowserWindow } from 'electron';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { clampSize, MAX_INPUT_CHARS, parseEtcShells, pickShell, Scrollback, shellEnvironment, shellLaunch } from './terminal-policy.js';
+import { clampSize, MAX_INPUT_CHARS, parseEtcShells, pickShell, resolveShellCwd, Scrollback, shellEnvironment, shellLaunch } from './terminal-policy.js';
 import { getBackendPython, getBackendStatus } from './backend.js';
 
 /**
@@ -33,9 +33,18 @@ export function registerTerminal(win: BrowserWindow): void {
     child = null;
   };
 
-  const start = (cols: number, rows: number) => {
+  const isDirectory = (p: string) => {
+    try {
+      return statSync(p).isDirectory();
+    } catch {
+      return false;
+    }
+  };
+
+  const start = (cols: number, rows: number, requestedCwd: unknown) => {
     const workspace = getBackendStatus()?.workspace;
-    cwd = workspace && existsSync(workspace) ? workspace : homedir();
+    const fallback = workspace && existsSync(workspace) ? workspace : homedir();
+    cwd = resolveShellCwd(requestedCwd, homedir(), fallback, isDirectory);
     const shells = existsSync('/etc/shells') ? parseEtcShells(readFileSync('/etc/shells', 'utf8')) : [];
     const shell = pickShell(process.env.SHELL, shells);
     shellName = shell;
@@ -61,13 +70,13 @@ export function registerTerminal(win: BrowserWindow): void {
     return { shell, cwd };
   };
 
-  ipcMain.handle('terminal:start', (event, cols: number, rows: number) => {
+  ipcMain.handle('terminal:start', (event, cols: number, rows: number, requestedCwd?: string) => {
     if (!trusted(event)) return { ok: false };
     if (child) return { ok: true, resumed: true, cwd, shell: shellName, buffer: scrollback.snapshot() };
     scrollback.clear();
     const size = clampSize(cols, rows);
     try {
-      return { ok: true, resumed: false, ...start(size.cols, size.rows), buffer: '' };
+      return { ok: true, resumed: false, ...start(size.cols, size.rows, requestedCwd), buffer: '' };
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
