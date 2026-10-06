@@ -25,6 +25,7 @@ from typing import Any
 
 from wisp.composition import CompositionRoot
 from wisp.config import WispConfig
+from wisp.core.turn_control import request_cancel
 from wisp.transport.cli import CLITransport
 # Internal use only: module reference, not a re-export. Transport privates
 # must be addressed at their canonical home (wisp.transport.cli), never
@@ -302,7 +303,7 @@ def make_repl_sigint_handler(transport, get_current_task, restore_default):
                 pass
         task = get_current_task()
         if task is not None and not task.done():
-            task.cancel()
+            request_cancel(task)  # wakes the loop; a bare task.cancel() from a signal handler does not (core/turn_control.py)
             sym = status_symbols()
             sys.stdout.write(f"\n{sym['cancel']}  Interrupted — cancelling turn… (Ctrl+C again to force quit)\n")
             sys.stdout.flush()

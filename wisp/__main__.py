@@ -1569,5 +1569,29 @@ def main():
         )
 
 
+def entry() -> None:
+    """The process entry point (the console script and ``python -m wisp``): ``main()`` plus a bounded exit.
+
+    A thread that never finishes would otherwise leave a finished session hanging at interpreter shutdown. After ``main`` returns
+    (the session and history are already saved) the watchdog ends the process with its real exit code after a short grace period
+    (``WISP_EXIT_GRACE_S``, default 5, 0 disables). ``main()`` itself does not arm it, so in-process callers (the test suite) are
+    never killed by it.
+    """
+    from wisp.core.shutdown import arm_exit_watchdog, exit_code_from
+
+    try:
+        main()
+    except SystemExit as exc:
+        arm_exit_watchdog(code=exit_code_from(exc.code))
+        raise
+    except KeyboardInterrupt:
+        arm_exit_watchdog(code=130)
+        raise
+    except BaseException:
+        arm_exit_watchdog(code=1)
+        raise
+    arm_exit_watchdog(code=0)
+
+
 if __name__ == "__main__":
-    main()
+    entry()

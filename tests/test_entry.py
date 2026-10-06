@@ -178,6 +178,12 @@ class _FakeTask:
     def cancel(self):
         self.cancelled = True
 
+    def get_loop(self):
+        return self
+
+    def call_soon_threadsafe(self, fn, *args):
+        fn(*args)
+
 
 class _FakeSpinner:
     def __init__(self):

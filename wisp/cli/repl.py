@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from wisp.cli.dispatcher import CommandResult, Dispatcher, ReplContext
+from wisp.core.turn_control import request_cancel
 
 logger = logging.getLogger(__name__)
 
@@ -640,7 +641,9 @@ class ReplRunner:
             pass
         task = self._turn_task
         if task is not None and not task.done():
-            task.cancel()
+            # Through the core helper, not `task.cancel()`: a bare cancel from a signal handler does not wake the event loop,
+            # which is asleep in select() while a stalled provider has not answered (see core/turn_control.py).
+            request_cancel(task)
             self.out.write("\nInterrupted — cancelling turn… (Ctrl+C again to force quit)\n")
             self.out.flush()
             signal.signal(signal.SIGINT, signal.default_int_handler)
