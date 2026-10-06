@@ -76,6 +76,18 @@ try {
   check('a protected endpoint refuses no key and a wrong key, accepts the right one', [noKey, badKey].every((s) => s === 401 || s === 403) && goodKey === 200,
     `none=${noKey} wrong=${badKey} right=${goodKey}`);
 
+  // Features, not just startup: a stale bundled backend starts fine and silently lacks what the UI calls.
+  const getJson = (p, init) => fetch(`${info.url}${p}`, { headers: auth, ...init }).then(async (r) => ({ status: r.status, body: await r.json().catch(() => null) })).catch(() => ({ status: 0, body: null }));
+  const sessions = await getJson('/api/sessions');
+  const rows = sessions.body?.sessions ?? [];
+  check('/api/sessions tags every row with its source store', sessions.status === 200 && rows.every((r) => typeof r.source === 'string'), `${rows.length} rows`);
+  const diff = await getJson('/api/git/diff');
+  check('/api/git/diff exists and answers', diff.status === 200 && Array.isArray(diff.body?.files), `status=${diff.status}`);
+  const imp = await getJson('/api/sessions/__no_such_session__/import', { method: 'POST' });
+  check('session import route exists (404 from the handler, not from routing)', imp.status === 404 && /Session not found/.test(imp.body?.detail ?? ''), `status=${imp.status}`);
+  const models = await getJson('/api/models/select', { method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' }, body: '{}' });
+  check('model select route exists (422 on an empty body)', models.status === 422, `status=${models.status}`);
+
   const pid = listeningPid(port);
   const cmd = commandOf(pid);
   check('the backend is the Python bundled inside the app', cmd.includes('Wisp.app/Contents/Resources/backend/python/bin/python3') || cmd.includes(`${app}/Contents/Resources/backend/python`), cmd.slice(0, 90));
