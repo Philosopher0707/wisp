@@ -72,12 +72,30 @@ def parse_target(arg: str) -> dict[str, str | None]:
     return {"provider": None, "model": arg}
 
 
+def with_provider(cfg: Any, provider: str) -> Any:
+    """`cfg` retargeted at `provider`, without inheriting the previous provider's endpoint or key.
+
+    WISP_API_BASE / WISP_API_KEY describe the provider the config was written for. Replacing only
+    `provider` (what the --provider flag paths used to do) built e.g. the nvidia provider against
+    openrouter.ai with the OpenRouter key. When the provider actually changes, the endpoint resets to
+    that provider's default and the key to its own slot (per-provider env var, else shared). Naming
+    the provider the config already has changes nothing, so a custom base for it survives. This is the
+    same rule apply_switch applies for /provider.
+    """
+    name = (provider or "").strip().lower()
+    new = cfg.replace(provider=name)
+    if name == str(getattr(cfg, "provider", "") or "").strip().lower():
+        return new
+    return new.replace(api_base=KNOWN_PROVIDERS.get(name, {}).get("default_base", ""),
+                       api_key=resolve_key(name))
+
+
 def _config_for(provider_name: str, model: str | None,
                 base: str | None = None,
                 api_key: str | None = None) -> Any:
     from wisp.config import WispConfig
 
-    cfg = WispConfig().replace(provider=provider_name)
+    cfg = with_provider(WispConfig(), provider_name)
     if model:
         cfg = cfg.replace(model=model)
     if base:

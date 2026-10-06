@@ -118,7 +118,8 @@ async def select_model(payload: SelectPayload, request: Request) -> dict[str, An
     # Verify against the LIVE listing before committing — selecting a
     # model the backend cannot serve must fail here, visibly, not at
     # turn time as a cryptic 404.
-    probe_cfg = cfg.replace(provider=provider, model=model)
+    from wisp.provider_select import with_provider
+    probe_cfg = with_provider(cfg, provider).replace(model=model)
     available = await asyncio.to_thread(catalog_models, provider, probe_cfg)
     if available and model not in available:
         raise HTTPException(

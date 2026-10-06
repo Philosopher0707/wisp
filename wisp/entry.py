@@ -151,7 +151,8 @@ def run_mode(mode: str, prompt: str | None = None, **kwargs) -> None:
         config = config.replace(model=model)
     provider = kwargs.get("provider")
     if provider:
-        config = config.replace(provider=provider)
+        from wisp.provider_select import with_provider
+        config = with_provider(config, provider)
     workspace = kwargs.get("workspace")
     if workspace:
         config = config.replace(workspace=workspace)
