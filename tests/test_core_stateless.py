@@ -183,7 +183,9 @@ class TestSecurityIntegration:
 
         core = WispAgentCore(
             provider=_MockProvider([
-                {"type": "tool_call", "name": "run_bash", "arguments": {"command": "rm -rf /"}},
+                # Any shell call: READ_ONLY refuses run_bash outright. (This was `rm -rf /`, which the invariant gate now refuses
+                # first, with its own message; that refusal is pinned in tests/gates/test_gate_seam.py.)
+                {"type": "tool_call", "name": "run_bash", "arguments": {"command": "touch flagged.txt"}},
                 {"type": "done"},
             ]),
             security=SecurityPolicy(permission_mode=PermissionMode.READ_ONLY),
