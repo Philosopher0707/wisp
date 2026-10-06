@@ -178,6 +178,13 @@ So evaluation has three layers, and only the first is new engineering:
 | P4 | Optional profile (§8); journaling of `GoalState` per turn | the owner's decision |
 | P5 | Optional: model-**declared** expectations; speculative search (`feat/speculative-lsp`) as a client of the ledger | separate design |
 
+### P0 status (2026-10-07)
+
+Built on `design/reasoning-core`: `wisp/core/reasoning/{ledger,claims}.py`, 243 tests in `tests/reasoning/` (ledger, 49-case positive corpus, 100+ case look-alike corpus, the verdict matrix, a purity audit by AST).
+A mutation probe of 19 mutations over both modules ended with 0 survivors; its first run had 5 survivors/missing mutations, each a real test gap (a disclaimer in a separate sentence; `if`, `but`, `should` each tested only alongside another excluded word), now closed.
+The corpus first run also found 3 genuine false positives (a claim about someone else's or last week's result: "The README says all tests pass") and 2 misses ("no errors" tripped the failure words); fixed by attribution words and by removing "no errors/issues" before the negation test.
+Not verified: the false-positive rate on real transcripts. The corpora are synthetic; that measurement is the P2 baseline and needs the owner's consent to read session content.
+
 ## 11. Risks
 
 - **False positives in claim audit** would annotate correct claims. Mitigation: precision-first patterns, a corpus of real transcripts, observe mode first, and a measured rate before any `enforce`.
