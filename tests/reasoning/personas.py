@@ -188,8 +188,8 @@ PERSONAS: tuple[Persona, ...] = (
 
 # ── running one ──
 @contextlib.contextmanager
-def _env(mode: str):
-    keys = {"WISP_REASONING_CORE": mode, "WISP_INVARIANT_GATES": None, "WISP_DEPENDENCY_LOCK": None, "WISP_GATE_WRITE_ROOTS": None}
+def _env(mode: str, rules: str = ""):
+    keys = {"WISP_REASONING_CORE": mode, "WISP_REASONING_CORE_RULES": rules or None, "WISP_INVARIANT_GATES": None, "WISP_DEPENDENCY_LOCK": None, "WISP_GATE_WRITE_ROOTS": None}
     saved = {k: os.environ.get(k) for k in keys}
     try:
         for k, v in keys.items():
@@ -206,7 +206,7 @@ def _env(mode: str):
                 os.environ[k] = v
 
 
-def run(persona: Persona, mode: str, root: Path, provider: ScriptedProvider | None = None, max_iterations: int = 8) -> Outcome:
+def run(persona: Persona, mode: str, root: Path, provider: ScriptedProvider | None = None, max_iterations: int = 8, rules: str = "") -> Outcome:
     ws = root / f"{persona.name}-{mode}"
     ws.mkdir(parents=True, exist_ok=True)
     provider = provider or ScriptedProvider(persona.rounds(ws))
@@ -219,7 +219,7 @@ def run(persona: Persona, mode: str, root: Path, provider: ScriptedProvider | No
             made.append(self)
 
     perm = PermissionMode.ASK_ALL
-    with _env(mode):
+    with _env(mode, rules):
         config = WispConfig().replace(workspace=str(ws), permission_mode=perm, goal_state=True, max_iterations=max_iterations)
         store = UnifiedStore(ws / "s.db")
         repo = SessionRepository(store)

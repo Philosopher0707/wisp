@@ -123,7 +123,7 @@ Four seams in `WispAgentCore._turn_inner`, each one call, each wrapped so RC6 ho
 3. **At the `done` gate**: the composed decision (R1, R5).
 4. **Turn end**: the decision journal record.
 
-One mode setting, `reasoning_core` = `off | observe | enforce`, default **`observe`**. It does **not** flip the six OFF flags (ADR-0002: one flag per concern; the matrix
+Two settings: `reasoning_core` = `off | observe | enforce`, default **`observe`**, and `reasoning_core_rules` (`R1=enforce,R4=observe`), a per-rule override so each heuristic is flipped on its own once its baseline looks right (a typo for a rule is `observe`; `off` as the default wins). It does **not** flip the six OFF flags (ADR-0002: one flag per concern; the matrix
 in `CURRENT_FLAGS.md` stays authoritative). §8 proposes an optional profile that sets them together, as a separate decision.
 
 ## 7. How it uses what exists
@@ -204,7 +204,22 @@ Not measured: real models or transcripts; live paired judge runs need a key and 
 R4 applied in `enforce` (commit 9592bf6): one retry at the provider's own affordable ceiling minus a margin, or an honest stop that names the limit; 13-mutation probe, 0 survivors.
 R1 applied in `enforce`: a success claim the ledger cannot back is withheld once at the last completion gate (after the floor and the other gates, so none of them changes), then flagged in the answer's own text and the turn ends unverified; 12-mutation probe, 0 survivors after one added test (the RC4 guard).
 Both are visible in the baseline table (`reasoning-core-baseline.md`): exactly the rows meant for R1 and R4 move from "reaches the user: yes" to "no" under enforce, nothing else moves, observe still equals off.
+Per-rule modes (`reasoning_core_rules`) and protection of `.gitignore` / CI workflows under the dependency lock were added after the owner's hybrid-posture note: workspace integrity is enforced, heuristics start in observe and are flipped one at a time.
 Remaining: R2/R3 (repeat/refusal nudges), a Linux (Docker) run of the new suites, the default (`observe` vs `enforce`, your decision), live paired judge runs (key and cap needed). Unverified: how often real models make these claims; whether flagging an answer annoys users in practice.
+
+## Enforcement roadmap (a standing reminder: enforce at some point)
+
+`observe` is the safe default while evidence is gathered. It is not a destination: while a rule only observes, the failure it targets still reaches the user (see the baseline). Flip each rule to `enforce` (`WISP_REASONING_CORE_RULES=R4=enforce,...`) when its row below is met; record the flip, the date and the evidence here.
+
+| Rule | Built | Applied in `enforce` | Exit criteria to flip it on by default | Status |
+|---|---|---|---|---|
+| R4 affordability | yes | yes (retry once / honest stop) | live paired runs against a provider that returns a real "can only afford N" 402; no retry loop observed | **owed** |
+| R1 unbacked success claims | yes | yes (withhold once, then flag) | false-positive rate on real transcripts measured (needs consent to read sessions) and small; the first ~10 live tasks in `observe` show no legitimate answer would have been withheld | **owed** |
+| R2 repeated failure | decision only | no | enforcement path written (nudge, then `RecoveryLadder` rung); persona row moves | **not built** |
+| R3 repeated refusal | decision only | no | enforcement path written (nudge naming the rule and a narrower route); persona row moves | **not built** |
+| search limits, token budgets per turn, probe detection | no | no | design first: these are not in the core today | **not designed** |
+
+Until a row is flipped, say so when reporting: "built and witnessed, running in observe".
 
 ## 11. Risks
 

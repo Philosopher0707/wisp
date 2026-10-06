@@ -38,6 +38,39 @@ def parse_mode(value: object) -> Mode:
     return Mode.OBSERVE
 
 
+RULES = ("R1", "R2", "R3", "R4")
+
+
+@dataclass(frozen=True)
+class Modes:
+    """One mode per rule, so each heuristic is flipped to `enforce` on its own once its baseline looks right. `default` applies to every rule
+    without an override; `off` as the default switches the whole core off whatever the overrides say."""
+
+    default: Mode = Mode.OBSERVE
+    overrides: tuple[tuple[str, Mode], ...] = ()
+
+    def for_rule(self, rule: str) -> Mode:
+        if self.default is Mode.OFF:
+            return Mode.OFF
+        return dict(self.overrides).get(rule, self.default)
+
+
+def parse_modes(default: object, rules: object = "") -> Modes:
+    """`rules` is `R1=enforce,R4=observe`. An unknown rule is ignored; an unknown mode for a known rule is OBSERVE (RC13): neither a typo
+    nor a stray token can make a rule more intrusive than the operator wrote."""
+    out: dict[str, Mode] = {}
+    for token in str(rules or "").replace(":", "=").split(","):
+        name, _, value = token.partition("=")
+        name = name.strip().upper()
+        if name in RULES:
+            out[name] = parse_mode(value)
+    return Modes(parse_mode(default), tuple(sorted(out.items())))
+
+
+def render_modes(m: Modes) -> str:
+    return ",".join(f"{r}={mode.value}" for r, mode in m.overrides)
+
+
 class Action(StrEnum):
     CONTINUE = "continue"
     NUDGE = "nudge"

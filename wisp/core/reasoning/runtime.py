@@ -18,7 +18,7 @@ from typing import Any
 from wisp.core.events import OutcomeClass, classify_result
 from wisp.core.gates.verify import classify
 from wisp.core.reasoning.claims import audit
-from wisp.core.reasoning.decision import Action, Budgets, Decision, Mode, State, decide_denial, decide_failure, decide_final, failure_signature, plan_request
+from wisp.core.reasoning.decision import Action, Budgets, Decision, Mode, Modes, State, decide_denial, decide_failure, decide_final, failure_signature, plan_request
 from wisp.core.reasoning.ledger import Ledger, ObservedEvent
 from wisp.core.reasoning.shellwrites import shell_write_paths
 from wisp.core.verification import _verify_result_is_success
@@ -42,8 +42,8 @@ def _gate_rule(reason: str) -> str:
 
 
 class TurnReasoning:
-    def __init__(self, mode: Mode, budgets: Budgets = Budgets()) -> None:
-        self.mode = mode
+    def __init__(self, mode: Mode | Modes, budgets: Budgets = Budgets()) -> None:
+        self.modes = mode if isinstance(mode, Modes) else Modes(mode)
         self.budgets = budgets
         self.ledger = Ledger()
         self.state = State()
@@ -53,11 +53,16 @@ class TurnReasoning:
         self._final_audits: tuple[Any, ...] | None = None
 
     @property
+    def mode(self) -> Mode:
+        """The default mode; a rule may differ (`modes.for_rule`)."""
+        return self.modes.default
+
+    @property
     def journal(self) -> tuple[dict[str, Any], ...]:
         return tuple(self._rows)
 
     def _record(self, seam: str, d: Decision | None, **extra: Any) -> None:
-        row: dict[str, Any] = {"seq": len(self._rows) + 1, "seam": seam, "mode": self.mode.value, "ledger": self.ledger.snapshot_hash()}
+        row: dict[str, Any] = {"seq": len(self._rows) + 1, "seam": seam, "mode": (self.modes.for_rule(d.rule) if d is not None else self.modes.default).value, "ledger": self.ledger.snapshot_hash()}
         if d is not None:
             row.update(rule=d.rule, action=d.action.value, reason=d.reason, evidence_ids=list(d.evidence_ids), note=d.note,
                        goal_state=d.goal_state.value if d.goal_state else None, failure_class=d.failure_class.value if d.failure_class else None,
@@ -96,9 +101,13 @@ class TurnReasoning:
                     mutates, paths = True, written
             fact = self.ledger.observe(ObservedEvent("tool_result", name, source, result_text=text, command=command, paths=paths, failed=failed, denied=denied, mutates=mutates))
             if denied:
+                if self.modes.for_rule("R3") is Mode.OFF:
+                    return None
                 reason = result.get("reason", "") if isinstance(result, dict) else ""
                 d, self.state = decide_denial(_gate_rule(str(reason)), fact.id, self.state, self.budgets)
             elif failed:
+                if self.modes.for_rule("R2") is Mode.OFF:
+                    return None
                 d, self.state = decide_failure(failure_signature(name, text or str(result)), fact.id, self.state, self.budgets)
             else:
                 return None
@@ -118,15 +127,15 @@ class TurnReasoning:
         try:
             if seam == "final":
                 audits, self._final_audits = self._final_audits, None
-                if audits is None or self.mode is not Mode.ENFORCE:
+                if audits is None or self.modes.for_rule("R1") is not Mode.ENFORCE:
                     return None
-                d, self.state = decide_final(audits, self.mode, self.state, self.budgets)
+                d, self.state = decide_final(audits, Mode.ENFORCE, self.state, self.budgets)
                 if d.action is Action.CONTINUE:
                     return None
                 self._record(seam, d, applied=True)
                 return d
             d = self._pending.pop(seam, None)
-            if d is None or self.mode is not Mode.ENFORCE:
+            if d is None or self.modes.for_rule(d.rule) is not Mode.ENFORCE:
                 return None
             self._record(seam, d, applied=True)
             return d
@@ -137,15 +146,18 @@ class TurnReasoning:
     # ── seam 3: the final answer ──
     def observe_final(self, text: str) -> Decision | None:
         try:
+            r1 = self.modes.for_rule("R1")
+            if r1 is Mode.OFF:
+                return None
             audits = audit(text, self.ledger)
-            if self.mode is Mode.ENFORCE:
+            if r1 is Mode.ENFORCE:
                 # Decided later, at the last gate before `done` (take_enforced): the verification floor and the other gates act first, and a round
                 # they handled must not spend R1's budget.
                 self._final_audits = audits
                 if audits:
                     self._record("final", None, claims=[{"kind": a.claim.kind.value, "verdict": a.verdict.value, "evidence_ids": list(a.fact_ids)} for a in audits])
                 return None
-            d, self.state = decide_final(audits, self.mode, self.state, self.budgets)
+            d, self.state = decide_final(audits, r1, self.state, self.budgets)
             if audits:
                 self._record("final", d, claims=[{"kind": a.claim.kind.value, "verdict": a.verdict.value, "evidence_ids": list(a.fact_ids)} for a in audits])
             elif d.action is not Action.CONTINUE:
@@ -158,6 +170,8 @@ class TurnReasoning:
     # ── seam 2: a provider error ──
     def observe_provider_error(self, message: str, requested: int) -> Decision | None:
         try:
+            if self.modes.for_rule("R4") is Mode.OFF:
+                return None
             self._calls += 1
             fact = self.ledger.observe(ObservedEvent("provider_error", "provider", f"provider#{self._calls}", result_text=message or ""))
             d, self.state = plan_request(message or "", int(requested or 0), fact.id, self.state, self.budgets)

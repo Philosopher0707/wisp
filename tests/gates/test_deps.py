@@ -77,6 +77,38 @@ class TestManifests:
         assert not check_tool_args("write_file", {"path": "package.json"}, make_ctx(deps_locked=False))
 
 
+class TestProtectedProjectFiles:
+    """`.gitignore` and CI workflows ride the same switch as the manifests (hybrid posture: workspace integrity is enforced, not heuristic)."""
+
+    PROTECTED = [".gitignore", "sub/.gitignore", ".github/workflows/ci.yml", "repo/.github/workflows/release.yaml", ".circleci/config.yml", ".gitlab-ci.yml", "Jenkinsfile",
+                 "azure-pipelines.yml", ".travis.yml", "bitbucket-pipelines.yml", ".github/dependabot.yml", "dependabot.yml"]
+
+    @pytest.mark.parametrize("path", PROTECTED)
+    def test_recognised(self, path):
+        assert is_manifest_path(path), path
+
+    @pytest.mark.parametrize("path", [".gitignore.bak", "my.gitignore", ".github/ISSUE_TEMPLATE/bug.md", ".github/CODEOWNERS", "workflows/ci.yml", "github/workflows/ci.yml", "docs/ci.yml", "gitignore"])
+    def test_lookalikes_are_not(self, path):
+        assert not is_manifest_path(path), path
+
+    @pytest.mark.parametrize("path", PROTECTED)
+    def test_a_tool_write_is_refused_while_locked(self, ctx, path):
+        v = check_tool_args("write_file", {"path": path}, ctx)
+        assert "MANIFEST_LOCKED" in rules(v) and "protected project file" in v[0].reason
+
+    @pytest.mark.parametrize("command", ["echo node_modules >> .gitignore", "sed -i s/a/b/ .github/workflows/ci.yml", "tee .gitlab-ci.yml < new", "rm .circleci/config.yml", "cp new.yml .github/workflows/ci.yml"])
+    def test_a_shell_write_is_refused_while_locked(self, ctx, command):
+        assert "MANIFEST_LOCKED" in rules(check_command(command, ctx)), command
+
+    def test_reading_them_is_fine(self, ctx):
+        for c in ("cat .gitignore", "grep run .github/workflows/ci.yml", "git check-ignore -v build"):
+            assert not [v for v in check_command(c, ctx) if v.layer == "dependency"], c
+
+    @pytest.mark.parametrize("path", PROTECTED)
+    def test_the_operator_can_open_it(self, make_ctx, path):
+        assert not check_tool_args("write_file", {"path": path}, make_ctx(deps_locked=False))
+
+
 class TestNpxUsesWhatIsInstalled:
     def test_a_locally_installed_binary_is_allowed(self, ws, ctx):
         bindir = os.path.join(ws, "node_modules", ".bin")

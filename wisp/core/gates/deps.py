@@ -24,9 +24,22 @@ MANIFEST_NAMES = frozenset({
 })
 
 
+# Files that change what the project builds, ignores or ships without being a library list. Same switch as the manifests: the operator
+# opens it, the model cannot (D1). `.gitignore` decides what is committed; a CI workflow decides what runs with the repo's credentials.
+CONFIG_NAMES = frozenset({".gitignore", ".gitlab-ci.yml", ".travis.yml", "Jenkinsfile", "azure-pipelines.yml", "bitbucket-pipelines.yml", "dependabot.yml"})
+
+
+def _is_ci_path(trimmed: str) -> bool:
+    parts = trimmed.split("/")
+    return ".circleci" in parts or any(parts[i:i + 2] == [".github", "workflows"] for i in range(len(parts) - 1))
+
+
 def is_manifest_path(path: str) -> bool:
+    """A package manifest or lockfile, or a protected project config file (`.gitignore`, CI workflows)."""
     trimmed = path.rstrip("/")
     base = posixpath.basename(trimmed)
+    if base in CONFIG_NAMES or _is_ci_path(trimmed):
+        return True
     if base in MANIFEST_NAMES or (base.startswith("requirements") and base.endswith(".txt")):
         return True
     return base.endswith((".txt", ".in")) and posixpath.basename(posixpath.dirname(trimmed)) in ("requirements", "reqs")  # requirements/base.txt

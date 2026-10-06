@@ -557,7 +557,7 @@ class WispAgentCore:
         if self._reasoning_mode().value != "off":
             from wisp.core.reasoning.runtime import TurnReasoning
 
-            reasoning = TurnReasoning(self._reasoning_mode())
+            reasoning = TurnReasoning(self._reasoning_modes())
         self._last_reasoning = reasoning
 
         def _note_provider_error(message: str) -> None:
@@ -2650,6 +2650,11 @@ class WispAgentCore:
         from wisp.core.reasoning.decision import parse_mode
 
         return parse_mode(getattr(self.config, "reasoning_core", "observe"))
+
+    def _reasoning_modes(self) -> Any:
+        from wisp.core.reasoning.decision import parse_modes
+
+        return parse_modes(getattr(self.config, "reasoning_core", "observe"), getattr(self.config, "reasoning_core_rules", ""))
 
     def _invariant_gate_mode(self) -> Any:
         from wisp.core.gates import parse_mode
