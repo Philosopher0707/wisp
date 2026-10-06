@@ -112,7 +112,8 @@ def _probe(provider_name: str, model: str, api_key: str, api_base: str,
             from wisp.providers.factory import ProviderFactory
 
             cfg = WispConfig()
-            cfg = cfg.replace(provider=provider_name, model=model)
+            from wisp.provider_select import with_provider
+            cfg = with_provider(cfg, provider_name).replace(model=model)
             if api_key:
                 try:
                     object.__setattr__(cfg, "api_key", api_key)
