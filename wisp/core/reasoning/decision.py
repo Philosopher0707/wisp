@@ -143,6 +143,11 @@ def decide_final(audits: tuple[Audit, ...], mode: Mode, state: State, budgets: B
     return CONTINUE_R1, state
 
 
+def withhold_nudge(note: str) -> str:
+    """What the model is told when `done` is withheld: the harness's own line plus the two ways out. Contains none of the model's text (RC2)."""
+    return f"{note} Run the relevant verification now and report what it printed, or restate the result without that claim."
+
+
 # ── R2: the same failure again ──
 _NUM = re.compile(r"\b0x[0-9a-fA-F]+\b|\b[0-9a-fA-F]{7,}\b|\d+")
 _PATHISH = re.compile(r"(?:/[\w.\-]+){2,}")

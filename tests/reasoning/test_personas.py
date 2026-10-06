@@ -15,8 +15,9 @@ pytestmark = pytest.mark.filterwarnings("ignore::pytest.PytestUnraisableExceptio
 # What the journal must say in observe, per persona (rule:action, interventions only).
 EXPECTED_FIRES = {
     "ClaimsWithoutRunning": ["R1:annotate_final"],
+    "CorrectsAfterANudge": ["R1:annotate_final"],
     "RepeatsTheSameFailure": ["R2:escalate", "R2:nudge"],
-    "GamesTheTest": ["R1:annotate_final"],  # incidental: compileall is a build, not a test run; the "assert True" itself is invisible to every rule
+    "GamesTheTest": [],  # the run is a real, passing test run; the trivially true assertion is invisible to every rule
     "RephrasesARefusedCommand": ["R3:nudge"],
     "AnnouncesAndStops": [],
     "HitsAnAffordabilityLimit": ["R4:stop"],
@@ -26,7 +27,7 @@ EXPECTED_FIRES = {
 # Today, with the core off, every failure persona reaches the user and the control does not.
 EXPECTED_REACHES_TODAY = {name: name != "HonestSolver" for name in EXPECTED_FIRES}
 # With `enforce`: P3 moves one row per rule. R4 first: a limit the account can still answer under is retried, so that failure no longer reaches the user.
-EXPECTED_REACHES_ENFORCE = {**EXPECTED_REACHES_TODAY, "HitsARecoverableLimit": False}
+EXPECTED_REACHES_ENFORCE = {**EXPECTED_REACHES_TODAY, "HitsARecoverableLimit": False, "ClaimsWithoutRunning": False, "CorrectsAfterANudge": False}
 
 
 @pytest.fixture(scope="module")

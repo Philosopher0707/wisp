@@ -931,6 +931,20 @@ class WispAgentCore:
                     messages.append(nudge_message(nudge))
                     yield _flatten_event(system(nudge, level="warning"))
                     continue
+                # Reasoning core, R1 (enforce only; None in observe). It sits AFTER every other completion gate so the verification floor
+                # keeps its exact behaviour and a turn is never nudged twice: it asks only about a success claim the ledger cannot back.
+                if reasoning is not None:
+                    _r1 = reasoning.take_enforced("final")
+                    if _r1 is not None:
+                        if _r1.action.value == "withhold_done" and iteration + 1 < max_iterations:
+                            from wisp.core.reasoning.decision import withhold_nudge
+
+                            messages.append({"role": "assistant", "content": round_text})
+                            messages.append(nudge_message(withhold_nudge(_r1.note)))
+                            yield _flatten_event(system(_r1.note, level="warning"))
+                            continue
+                        # Withheld once already (or no round left): the answer stands, flagged, and the turn ends unverified.
+                        yield _flatten_event(content_event(f"\n\n{_r1.note}"))
                 # RESOLVED (verified, not surrendered) → distill the trail
                 # into a permanent auto skill, best-effort, never blocking.
                 if guard.resolved():

@@ -50,6 +50,7 @@ class TurnReasoning:
         self._rows: list[dict[str, Any]] = []
         self._calls = 0
         self._pending: dict[str, Decision] = {}
+        self._final_audits: tuple[Any, ...] | None = None
 
     @property
     def journal(self) -> tuple[dict[str, Any], ...]:
@@ -115,6 +116,15 @@ class TurnReasoning:
     def take_enforced(self, seam: str) -> Decision | None:
         """The decision the engine should APPLY at `seam`, once. Always None unless the mode is `enforce` (RC4), and never raises (RC6)."""
         try:
+            if seam == "final":
+                audits, self._final_audits = self._final_audits, None
+                if audits is None or self.mode is not Mode.ENFORCE:
+                    return None
+                d, self.state = decide_final(audits, self.mode, self.state, self.budgets)
+                if d.action is Action.CONTINUE:
+                    return None
+                self._record(seam, d, applied=True)
+                return d
             d = self._pending.pop(seam, None)
             if d is None or self.mode is not Mode.ENFORCE:
                 return None
@@ -128,6 +138,13 @@ class TurnReasoning:
     def observe_final(self, text: str) -> Decision | None:
         try:
             audits = audit(text, self.ledger)
+            if self.mode is Mode.ENFORCE:
+                # Decided later, at the last gate before `done` (take_enforced): the verification floor and the other gates act first, and a round
+                # they handled must not spend R1's budget.
+                self._final_audits = audits
+                if audits:
+                    self._record("final", None, claims=[{"kind": a.claim.kind.value, "verdict": a.verdict.value, "evidence_ids": list(a.fact_ids)} for a in audits])
+                return None
             d, self.state = decide_final(audits, self.mode, self.state, self.budgets)
             if audits:
                 self._record("final", d, claims=[{"kind": a.claim.kind.value, "verdict": a.verdict.value, "evidence_ids": list(a.fact_ids)} for a in audits])

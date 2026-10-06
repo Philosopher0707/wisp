@@ -199,6 +199,13 @@ Result: with the core off, all six failures reach the user today; observe change
 P2 found and fixed two P1 defects: a real 402 arrives as a provider `error` event (the seam only covered exceptions; now both reach one helper), and a failing shell command is an "ok" tool result with an exit marker in the text (R2 never saw repeated failures). 36-mutation probe: 1 survivor, equivalent (R2 `==` vs `>=`).
 Not measured: real models or transcripts; live paired judge runs need a key and a cap you name.
 
+### P3 status (2026-10-07)
+
+R4 applied in `enforce` (commit 9592bf6): one retry at the provider's own affordable ceiling minus a margin, or an honest stop that names the limit; 13-mutation probe, 0 survivors.
+R1 applied in `enforce`: a success claim the ledger cannot back is withheld once at the last completion gate (after the floor and the other gates, so none of them changes), then flagged in the answer's own text and the turn ends unverified; 12-mutation probe, 0 survivors after one added test (the RC4 guard).
+Both are visible in the baseline table (`reasoning-core-baseline.md`): exactly the rows meant for R1 and R4 move from "reaches the user: yes" to "no" under enforce, nothing else moves, observe still equals off.
+Remaining: R2/R3 (repeat/refusal nudges), a Linux (Docker) run of the new suites, the default (`observe` vs `enforce`, your decision), live paired judge runs (key and cap needed). Unverified: how often real models make these claims; whether flagging an answer annoys users in practice.
+
 ## 11. Risks
 
 - **False positives in claim audit** would annotate correct claims. Mitigation: precision-first patterns, a corpus of real transcripts, observe mode first, and a measured rate before any `enforce`.
