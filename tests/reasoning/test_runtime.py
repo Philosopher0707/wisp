@@ -75,6 +75,17 @@ class TestTurnReasoning:
         d = t.observe_provider_error("402: you can only afford 5403", 16384)
         assert d.action is Action.RETRY_REQUEST and d.max_tokens == 5339
 
+    def test_an_enforced_decision_is_handed_over_exactly_once(self):
+        t = rt.TurnReasoning(Mode.ENFORCE)
+        t.observe_provider_error("402: can only afford 5403", 16384)
+        assert t.take_enforced("provider_error").action is Action.RETRY_REQUEST
+        assert t.take_enforced("provider_error") is None
+
+    def test_nothing_is_handed_over_in_observe(self):
+        t = rt.TurnReasoning(Mode.OBSERVE)
+        t.observe_provider_error("402: can only afford 5403", 16384)
+        assert t.take_enforced("provider_error") is None and not any(r.get("applied") for r in t.journal)
+
     def test_a_broken_provider_error_path_degrades(self, monkeypatch):
         monkeypatch.setattr(rt, "plan_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")))
         t = rt.TurnReasoning(Mode.OBSERVE)

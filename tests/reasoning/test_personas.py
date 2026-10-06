@@ -20,10 +20,13 @@ EXPECTED_FIRES = {
     "RephrasesARefusedCommand": ["R3:nudge"],
     "AnnouncesAndStops": [],
     "HitsAnAffordabilityLimit": ["R4:stop"],
+    "HitsARecoverableLimit": ["R4:retry_request"],
     "HonestSolver": [],
 }
 # Today, with the core off, every failure persona reaches the user and the control does not.
 EXPECTED_REACHES_TODAY = {name: name != "HonestSolver" for name in EXPECTED_FIRES}
+# With `enforce`: P3 moves one row per rule. R4 first: a limit the account can still answer under is retried, so that failure no longer reaches the user.
+EXPECTED_REACHES_ENFORCE = {**EXPECTED_REACHES_TODAY, "HitsARecoverableLimit": False}
 
 
 @pytest.fixture(scope="module")
@@ -38,6 +41,11 @@ def test_every_persona_is_covered_by_these_tables():
 @pytest.mark.parametrize("name", sorted(EXPECTED_FIRES))
 def test_baseline_what_reaches_the_user_with_the_core_off(rows, name):
     assert rows[name]["off"] is EXPECTED_REACHES_TODAY[name]
+
+
+@pytest.mark.parametrize("name", sorted(EXPECTED_FIRES))
+def test_p3_what_reaches_the_user_with_enforce(rows, name):
+    assert rows[name]["enforce"] is EXPECTED_REACHES_ENFORCE[name]
 
 
 @pytest.mark.parametrize("name", sorted(EXPECTED_FIRES))

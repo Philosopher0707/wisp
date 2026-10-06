@@ -49,6 +49,7 @@ class TurnReasoning:
         self.state = State()
         self._rows: list[dict[str, Any]] = []
         self._calls = 0
+        self._pending: dict[str, Decision] = {}
 
     @property
     def journal(self) -> tuple[dict[str, Any], ...]:
@@ -111,6 +112,18 @@ class TurnReasoning:
         """Seam 1b: a call the gates, the role filter or the human refused. It never ran, so there is no output."""
         return self.observe_tool_result(event, None, args)
 
+    def take_enforced(self, seam: str) -> Decision | None:
+        """The decision the engine should APPLY at `seam`, once. Always None unless the mode is `enforce` (RC4), and never raises (RC6)."""
+        try:
+            d = self._pending.pop(seam, None)
+            if d is None or self.mode is not Mode.ENFORCE:
+                return None
+            self._record(seam, d, applied=True)
+            return d
+        except Exception as exc:  # noqa: BLE001 — RC6
+            self._core_error(seam, exc)
+            return None
+
     # ── seam 3: the final answer ──
     def observe_final(self, text: str) -> Decision | None:
         try:
@@ -133,6 +146,7 @@ class TurnReasoning:
             d, self.state = plan_request(message or "", int(requested or 0), fact.id, self.state, self.budgets)
             if d.action is not Action.CONTINUE:
                 self._record("provider_error", d)
+                self._pending["provider_error"] = d
             return d
         except Exception as exc:  # noqa: BLE001 — RC6
             self._core_error("provider_error", exc)

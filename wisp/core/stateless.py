@@ -552,6 +552,7 @@ class WispAgentCore:
         self._last_guard = guard
         # Reasoning core (docs/harness/reasoning-core-design.md): one per turn, called from three seams below. In
         # `observe` it only records (RC4); it can never fail the turn (RC6).
+        self._set_affordable_ceiling(None)  # a ceiling learned last turn may be stale: the account may have been topped up
         reasoning = None
         if self._reasoning_mode().value != "off":
             from wisp.core.reasoning.runtime import TurnReasoning
@@ -770,6 +771,15 @@ class WispAgentCore:
 
             # ── If no tool calls, the model produced final content ──
             if not has_tool_calls:
+                if provider_failed and reasoning is not None:
+                    # R4 (enforce only; `take_enforced` is None in observe): one smaller retry when the provider named what the account can
+                    # afford, otherwise an honest stop below that names the limit.
+                    _r4 = reasoning.take_enforced("provider_error")
+                    if _r4 is not None and _r4.action.value == "retry_request" and iteration + 1 < max_iterations:
+                        self._set_affordable_ceiling(_r4.max_tokens)
+                        yield _flatten_event(system(_r4.note, level="warning"))
+                        continue
+                    provider_fail_note = f"{_r4.note} {provider_fail_note}" if _r4 is not None else provider_fail_note
                 if provider_failed:
                     # G1B: the round-trip ended non-complete (error event
                     # or stall already yielded live). done=True would be a
@@ -2614,6 +2624,13 @@ class WispAgentCore:
                 logger.exception(
                     "Extension intercept failed — treating as deny: %s", e)
                 tc_event["_blocked"] = f"extension intercept failed: {e}"
+
+    def _set_affordable_ceiling(self, tokens: int | None) -> None:
+        if getattr(self, "provider", None) is not None:
+            try:
+                self.provider.affordable_ceiling = tokens
+            except Exception:  # noqa: BLE001 — a provider that refuses the attribute simply keeps its static cap
+                logger.debug("provider refused affordable_ceiling", exc_info=True)
 
     def _reasoning_mode(self) -> Any:
         from wisp.core.reasoning.decision import parse_mode

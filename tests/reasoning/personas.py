@@ -86,6 +86,7 @@ class Outcome:
     journal: tuple[dict, ...] = ()
     files: dict[str, str] = field(default_factory=dict)
     ws: str = ""
+    provider: object = None
 
     def user_view(self) -> list[tuple]:
         """What the user could observe, with timestamps and timings removed: equal in off and observe (RC4)."""
@@ -132,6 +133,10 @@ def _hits_an_affordability_limit(ws: Path) -> list[Round]:
     return [error_round("API error 402: This request requires more credits, or fewer max_tokens. You requested up to 4096 tokens, but can only afford 83.", 402)]
 
 
+def _hits_a_recoverable_limit(ws: Path) -> list[Round]:
+    return [error_round("API error 402: ... You requested up to 4096 tokens, but can only afford 5403.", 402), content_round("Here is the answer.")]
+
+
 def _honest_solver(ws: Path) -> list[Round]:
     return [tool_round("write_file", {"path": str(ws / "app.py"), "content": "def f():\n    return 1\n"}, "c0"),
             tool_round("run_bash", {"command": "python3 -m compileall -q ."}, "c1"),
@@ -154,6 +159,8 @@ PERSONAS: tuple[Persona, ...] = (
     Persona("AnnouncesAndStops", "announces the next step, then ends the turn", "none (existing announced_step)", _announces_and_stops,
             lambda o, ws: o.ending == "done" and bool(_ANNOUNCE.search(o.final_text))),
     Persona("HitsAnAffordabilityLimit", "provider says it can only afford N; the turn dies", "R4", _hits_an_affordability_limit,
+            lambda o, ws: o.ending == "error" and o.provider_calls == 1),
+    Persona("HitsARecoverableLimit", "provider can afford fewer tokens than asked, but enough to answer", "R4", _hits_a_recoverable_limit,
             lambda o, ws: o.ending == "error" and o.provider_calls == 1),
     Persona("HonestSolver", "(control) does the work, verifies, claims only what it observed", "none: must be untouched", _honest_solver,
             lambda o, ws: False),
@@ -180,10 +187,10 @@ def _env(mode: str):
                 os.environ[k] = v
 
 
-def run(persona: Persona, mode: str, root: Path) -> Outcome:
+def run(persona: Persona, mode: str, root: Path, provider: ScriptedProvider | None = None, max_iterations: int = 8) -> Outcome:
     ws = root / f"{persona.name}-{mode}"
-    ws.mkdir(parents=True)
-    provider = ScriptedProvider(persona.rounds(ws))
+    ws.mkdir(parents=True, exist_ok=True)
+    provider = provider or ScriptedProvider(persona.rounds(ws))
     made: list[rt.TurnReasoning] = []
     orig = rt.TurnReasoning
 
@@ -194,7 +201,7 @@ def run(persona: Persona, mode: str, root: Path) -> Outcome:
 
     perm = PermissionMode.ASK_ALL
     with _env(mode):
-        config = WispConfig().replace(workspace=str(ws), permission_mode=perm, goal_state=True, max_iterations=8)
+        config = WispConfig().replace(workspace=str(ws), permission_mode=perm, goal_state=True, max_iterations=max_iterations)
         store = UnifiedStore(ws / "s.db")
         repo = SessionRepository(store)
         executor = ToolExecutor(config)
@@ -237,7 +244,9 @@ def run(persona: Persona, mode: str, root: Path) -> Outcome:
     types = [e.get("type") for e in events]
     ending = "done" if types and types[-1] == "done" else "error"
     files = {p.name: p.read_text() for p in ws.glob("*.py")}
-    return Outcome(events, provider.calls, texts[-1] if texts else "", ending, commands, refused, made[0].journal if made else (), files, str(ws))
+    out = Outcome(events, provider.calls, texts[-1] if texts else "", ending, commands, refused, made[0].journal if made else (), files, str(ws))
+    out.provider = provider
+    return out
 
 
 # ── the baseline table ──
@@ -245,10 +254,10 @@ def baseline(root: Path | None = None) -> list[dict]:
     root = root or Path(tempfile.mkdtemp())
     rows = []
     for p in PERSONAS:
-        off, obs = run(p, "off", root), run(p, "observe", root)
+        off, obs, enf = run(p, "off", root), run(p, "observe", root), run(p, "enforce", root)
         rows.append({
             "persona": p.name, "failure": p.failure, "rule": p.covered_by,
-            "off": p.reaches_user(off, root), "observe": p.reaches_user(obs, root),
+            "off": p.reaches_user(off, root), "observe": p.reaches_user(obs, root), "enforce": p.reaches_user(enf, root),
             "identical": off.user_view() == obs.user_view(),
             "would_fire": obs.rules_fired(), "off_calls": off.provider_calls,
         })
@@ -256,10 +265,10 @@ def baseline(root: Path | None = None) -> list[dict]:
 
 
 def render(rows: list[dict]) -> str:
-    head = "| Persona | Failure it plays | Meant for | Reaches the user (core off) | Reaches the user (observe) | Observe == off | Core would fire |\n|---|---|---|---|---|---|---|\n"
+    head = "| Persona | Failure it plays | Meant for | Reaches the user (core off) | Reaches the user (observe) | Reaches the user (enforce) | Observe == off | Core would fire |\n|---|---|---|---|---|---|---|---|\n"
     yes = lambda b: "yes" if b else "no"  # noqa: E731
     return head + "\n".join(
-        f"| {r['persona']} | {r['failure']} | {r['rule']} | {yes(r['off'])} | {yes(r['observe'])} | {yes(r['identical'])} | {', '.join(r['would_fire']) or '-'} |" for r in rows) + "\n"
+        f"| {r['persona']} | {r['failure']} | {r['rule']} | {yes(r['off'])} | {yes(r['observe'])} | {yes(r['enforce'])} | {yes(r['identical'])} | {', '.join(r['would_fire']) or '-'} |" for r in rows) + "\n"
 
 
 if __name__ == "__main__":
