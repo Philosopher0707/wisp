@@ -48,6 +48,39 @@ export interface GitStatus {
   dirty?: boolean;
 }
 
+export interface GitDiffFile {
+  path: string;
+  status: 'modified' | 'added' | 'deleted' | 'renamed' | 'untracked';
+  diff: string;
+  clipped: boolean;
+  binary: boolean;
+}
+
+export interface GitDiff {
+  git: boolean;
+  files: GitDiffFile[];
+  truncated: boolean;
+}
+
+export interface BashResult {
+  exit_code: number;
+  stdout: string;
+  stderr: string;
+  sandbox?: string;
+}
+
+export interface ProviderInfo {
+  name: string;
+  label: string;
+  requires_key: boolean;
+  models: string[];
+}
+
+export interface ProviderCatalog {
+  active: { provider: string; model: string };
+  providers: ProviderInfo[];
+}
+
 export interface PluginInfo {
   name: string;
   version: string;
@@ -152,6 +185,10 @@ interface ApiClient {
   fetchModels: () => Promise<string[]>;
   fetchFiles: (path?: string) => Promise<FileItems | null>;
   fetchGitStatus: () => Promise<GitStatus | null>;
+  fetchGitDiff: () => Promise<GitDiff>;
+  runCommand: (command: string, cwd?: string) => Promise<BashResult>;
+  fetchProviders: () => Promise<ProviderCatalog>;
+  selectProvider: (provider: string, model: string) => Promise<void>;
   forkSession: (messages: Message[], title?: string) => Promise<string | null>;
   healthCheck: () => Promise<boolean>;
   // Plugins
@@ -338,6 +375,22 @@ export function useApi(serverUrl: string, apiKey: string): ApiClient {
     } catch {
       return null;
     }
+  }, [apiFetch, authParams]);
+
+  const fetchGitDiff = useCallback(async (): Promise<GitDiff> => {
+    return await apiFetch(`/api/git/diff${authParams}`) as GitDiff;
+  }, [apiFetch, authParams]);
+
+  const runCommand = useCallback(async (command: string, cwd?: string): Promise<BashResult> => {
+    return await apiFetch(`/api/bash${authParams}`, { method: 'POST', body: { command, ...(cwd ? { cwd } : {}) } }) as BashResult;
+  }, [apiFetch, authParams]);
+
+  const fetchProviders = useCallback(async (): Promise<ProviderCatalog> => {
+    return await apiFetch(`/api/models${authParams}`) as ProviderCatalog;
+  }, [apiFetch, authParams]);
+
+  const selectProvider = useCallback(async (provider: string, model: string): Promise<void> => {
+    await apiFetch(`/api/models/select${authParams}`, { method: 'POST', body: { provider, model } });
   }, [apiFetch, authParams]);
 
   const forkSession = useCallback(async (messages: Message[], title?: string): Promise<string | null> => {
@@ -624,7 +677,7 @@ export function useApi(serverUrl: string, apiKey: string): ApiClient {
   return useMemo(
     () => ({
       fetchSessions, fetchSession, deleteSession, renameSession, fetchModels, fetchFiles,
-      fetchGitStatus, forkSession, healthCheck,
+      fetchGitStatus, fetchGitDiff, runCommand, fetchProviders, selectProvider, forkSession, healthCheck,
       fetchCheckpoints, restoreCheckpoint, dropCheckpoint, getCheckpointDiff,
       fetchPlugins, installPlugin, uninstallPlugin, togglePlugin, searchMarketplace,
       fetchMCPServers, addMCPServer, removeMCPServer, testMCPServer,
@@ -633,7 +686,7 @@ export function useApi(serverUrl: string, apiKey: string): ApiClient {
     }),
     [
       fetchSessions, fetchSession, deleteSession, renameSession, fetchModels, fetchFiles,
-      fetchGitStatus, forkSession, healthCheck,
+      fetchGitStatus, fetchGitDiff, runCommand, fetchProviders, selectProvider, forkSession, healthCheck,
       fetchCheckpoints, restoreCheckpoint, dropCheckpoint, getCheckpointDiff,
       fetchPlugins, installPlugin, uninstallPlugin, togglePlugin, searchMarketplace,
       fetchMCPServers, addMCPServer, removeMCPServer, testMCPServer,

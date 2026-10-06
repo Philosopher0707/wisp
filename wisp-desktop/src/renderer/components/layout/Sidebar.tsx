@@ -1,10 +1,11 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { useAppState } from '../../state/context.js';
 import { useApi } from '../../hooks/useApi.js';
-import { Trash2, Pin, ChevronLeft, ChevronRight, Search, X, Square, CheckSquare, ClipboardList } from '../../icons/index.js';
+import { Trash2, Pin, PanelLeft, Search, X, Square, CheckSquare, ClipboardList } from '../../icons/index.js';
 import { SidebarNav } from '../sidebar/SidebarNav.js';
 import { PinnedSection } from '../sidebar/PinnedSection.js';
 import { ProjectsSection } from '../sidebar/ProjectsSection.js';
+import { ProviderSwitcher } from '../sidebar/ProviderSwitcher.js';
 import { SidebarFooter } from '../sidebar/SidebarFooter.js';
 import './Sidebar.css';
 
@@ -118,7 +119,17 @@ export const Sidebar: React.FC = () => {
   }, [state.sessions, filterText]);
 
   return (
-    <aside className={`sidebar${collapsed ? ' sidebar--collapsed' : ''}`}>
+    <aside className={`sidebar${collapsed ? ' sidebar--collapsed' : ''}`} aria-label="Sessions">
+      <div className="sidebar-head">
+        <button
+          className="sidebar-collapse-btn"
+          onClick={() => dispatch({ type: 'TOGGLE_SIDEBAR' })}
+          title="Hide sidebar"
+          aria-label="Hide sidebar"
+        >
+          <PanelLeft size={16} />
+        </button>
+      </div>
       <div className="sidebar-top">
         <SidebarNav />
         {!collapsed && (
@@ -234,6 +245,7 @@ export const Sidebar: React.FC = () => {
         {!collapsed && <ProjectsSection />}
       </div>
       <div className="sidebar-bottom-group">
+        <ProviderSwitcher />
         {!collapsed && (
           <button
             className={`sidebar-checkpoints-btn ${state.checkpointPanelOpen ? 'sidebar-checkpoints-btn--active' : ''}`}
@@ -247,13 +259,6 @@ export const Sidebar: React.FC = () => {
             )}
           </button>
         )}
-        <button
-          className="sidebar-collapse-btn"
-          onClick={() => dispatch({ type: 'TOGGLE_SIDEBAR' })}
-          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-        >
-          {collapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
-        </button>
         <SidebarFooter />
         {/* Subagent badge */}
         {!collapsed && state.subagentTasks.filter((t) => t.status === 'running').length > 0 && (

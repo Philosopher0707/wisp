@@ -77,6 +77,7 @@ export interface AppState {
   sidebarCollapsed: boolean;
   availableModels: string[];
   rightPanelOpen: boolean;
+  dockTab: DockTab;
   workspacePath: string;
   uiOverlay: string | null;
   convSearchActive: boolean;
@@ -101,6 +102,8 @@ export interface AppState {
   inlineEdit: InlineEditState | null;
   pendingImages: PendingImage[];
 }
+
+export type DockTab = 'diff' | 'terminal' | 'browser' | 'files';
 
 export interface InlineEditState {
   path: string;
@@ -207,6 +210,7 @@ export type Action =
   | { type: 'CLOSE_OVERLAY' }
   | { type: 'TOGGLE_SIDEBAR' }
   | { type: 'TOGGLE_RIGHT_PANEL' }
+  | { type: 'SET_DOCK_TAB'; tab: DockTab }
   | { type: 'SET_LOADING_SESSION'; loading: boolean }
   | { type: 'SET_WORKSPACE'; path: string }
   | { type: 'SET_MODELS'; models: string[] }
@@ -299,6 +303,7 @@ export function createInitialState(overrides?: {
     sidebarCollapsed: false,
     availableModels: [],
     rightPanelOpen: false,
+    dockTab: 'diff',
     workspacePath: '',
     uiOverlay: null,
     convSearchActive: false,
@@ -537,6 +542,12 @@ export function appReducer(state: AppState, action: Action): AppState {
     case 'TOGGLE_RIGHT_PANEL':
       return { ...state, rightPanelOpen: !state.rightPanelOpen };
 
+    // Picking the tab that is already showing closes the dock: one control both opens and closes.
+    case 'SET_DOCK_TAB':
+      return state.rightPanelOpen && state.dockTab === action.tab
+        ? { ...state, rightPanelOpen: false }
+        : { ...state, rightPanelOpen: true, dockTab: action.tab };
+
     case 'SET_WORKSPACE':
       return { ...state, workspacePath: action.path };
 
@@ -547,7 +558,7 @@ export function appReducer(state: AppState, action: Action): AppState {
       return { ...state, systemPrompt: action.prompt };
 
     case 'SELECT_FILE':
-      return { ...state, rightPanelOpen: true, selectedFilePath: action.path };
+      return { ...state, rightPanelOpen: true, dockTab: 'files', selectedFilePath: action.path };
 
     case 'SHOW_GIT_BANNER':
       return { ...state, gitCommitBanner: { branch: action.branch, changedFiles: action.changedFiles } };

@@ -486,3 +486,15 @@ Search words: electron-builder, python-build-standalone, uv, codesign, ad-hoc, a
 - electron-builder with an unsigned bundle leaves a broken seal (`codesign --verify`: "code has no resources but signature indicates they must be present"). Ad-hoc sign in an `afterPack` hook (`scripts/adhoc-sign.cjs`) with `mac.identity: null`. Ad-hoc is not a Developer ID: other Macs need right-click > Open until the app is signed and notarized.
 - Verify the artifact you ship, not the build directory: `scripts/verify-packaged.mjs` launches the app (Playwright `_electron`, throwaway HOME) and checks window, managed backend, health, 401 without and with a wrong key, backend is the bundled python, loopback only, no renderer errors, and no orphan after quit. It passed on `release/mac-arm64/Wisp.app` and on the app unzipped from `Wisp-0.1.0-mac.zip`.
 - `npx electron-builder` can fail with "Missing script"; call `./node_modules/.bin/electron-builder`.
+
+## desktop layout: sidebar / header / workbench dock, overlap checks (2026-10-06)
+
+Search words: overlap, header, traffic lights, hiddenInset, container query, WebContentsView, dock, diff tab, box-sizing.
+
+- macOS window buttons (`hiddenInset`) sit top-left of the window, i.e. over whatever is leftmost. Give that strip to the sidebar (`--traffic-light-offset` padding, drag region) and let a hidden sidebar add the same padding to the main header. A narrow icon rail cannot clear them, so "collapsed" means hidden.
+- Header overlap was structural, not cosmetic: absolutely centred chips collided with the left and right groups. A flex row where only the title shrinks, plus container-query breakpoints that drop low-value chips, cannot overlap. Measured, not eyeballed: the bounding boxes of every leaf item in the header, pairwise, at 1400/1100/900 px and with the sidebar hidden (`scratchpad/shots.mjs` pattern): 0 overlaps.
+- `width:100%` plus padding on a button without `box-sizing: border-box` overflowed the shell by ~8-25 px and clipped the chevron and diff counts. Set border-box on new components and `overflow:hidden` on the shell.
+- A native `WebContentsView` (the Browser tab) is not in page screenshots and paints above all web content: hide it when a modal/approval is open, and check it from the main process (`app.evaluate`: url, title, bounds). It is sandboxed, own partition, no preload, http(s) only (`browser-url.ts`).
+- Auth headers are built in one pinned place (`useApi`); new endpoints (`/api/git/diff`, `/api/bash`, `/api/models`, `/api/models/select`) were added there, not as raw `fetch` in components.
+- `/api/git/diff` takes no path from the client (the file list comes from `git status -z -uall`), caps files and bytes per file; 7 tests against a real repo.
+- The Terminal tab calls `/api/bash`, which the default AUTO_EDIT policy refuses ("no approver is present over REST"). That is the policy working; the tab says so and does not bypass it. Widening it is the user's decision.
