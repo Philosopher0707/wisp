@@ -877,6 +877,7 @@ class WispConfig:
     tool_profile: str
     invariant_gates: str
     dependency_lock: str
+    reasoning_core: str
     gate_write_roots: tuple[str, ...]
     unattended_auto_approve_tools: tuple[str, ...]
     capability_filtering: bool
@@ -1030,6 +1031,10 @@ class WispConfig:
         from wisp.core.gates.gate import parse_lock, parse_mode
 
         object.__setattr__(self, "invariant_gates", parse_mode(get_setting("invariant_gates", "enforce")).value)
+        # The reasoning core: a typo is `observe` (record only), never `enforce` and never silently `off`.
+        from wisp.core.reasoning.decision import parse_mode as _parse_reasoning_mode
+
+        object.__setattr__(self, "reasoning_core", _parse_reasoning_mode(get_setting("reasoning_core", "observe")).value)
         object.__setattr__(self, "dependency_lock", "locked" if parse_lock(get_setting("dependency_lock", "locked")) else "unlocked")
         object.__setattr__(self, "gate_write_roots", tuple(
             r.strip() for r in str(get_setting("gate_write_roots", "") or "").split(os.pathsep) if r.strip()))

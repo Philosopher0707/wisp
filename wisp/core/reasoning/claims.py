@@ -114,6 +114,7 @@ _RUNNER_KINDS = {
     ClaimKind.BUILD_OK: frozenset({"build", "typecheck"}),
     ClaimKind.LINT_OK: frozenset({"lint"}),
 }
+_FIX_EVIDENCE = frozenset({"test", "build", "typecheck"})
 _VERIFICATION_CLAIMS = frozenset({ClaimKind.TESTS_PASS, ClaimKind.BUILD_OK, ClaimKind.LINT_OK, ClaimKind.FIXED})
 
 
@@ -192,7 +193,7 @@ def audit_claim(claim: Claim, ledger: Ledger) -> Audit:
         edits = tuple(f for f in ledger.mutations() if f.ok)
         if not edits:
             return Audit(claim, Verdict.UNSUPPORTED, (), "no edit was observed, so nothing was fixed by this session")
-        verdict, ids, reason = _verification_verdict(ledger, None)
+        verdict, ids, reason = _verification_verdict(ledger, _FIX_EVIDENCE)  # a lint pass alone says nothing about a behaviour fix
         return Audit(claim, verdict, (edits[-1].id,) + ids, reason)
     if kind is ClaimKind.FILE_CHANGED:
         base = posixpath.basename(claim.subject)

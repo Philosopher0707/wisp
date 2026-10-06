@@ -110,6 +110,12 @@ class TestFixed:
         assert verdicts("I fixed the bug.", ledger) == [V.UNSUPPORTED]
 
 
+    def test_a_lint_pass_alone_does_not_support_a_fix(self, ledger):
+        edit(ledger, "src/a.py")
+        run(ledger, "ruff check .", "All checks passed!")
+        assert verdicts("I fixed the bug.", ledger) == [V.UNSUPPORTED]
+
+
 class TestFileChanged:
     def test_unsupported_with_no_edit(self, ledger):
         assert verdicts("I updated `src/app.py`.", ledger) == [V.UNSUPPORTED]

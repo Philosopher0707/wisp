@@ -54,6 +54,7 @@ class ObservedEvent:
     paths: tuple[str, ...] = ()
     failed: bool = False  # the tool reported an error status
     denied: bool = False  # refused by a gate or policy before it ran
+    mutates: bool = False  # a shell command that writes files (sed -i, tee, a redirect): counted as a mutation, not as a verification run
 
     def __post_init__(self) -> None:
         if self.type not in ("tool_result", "provider_error"):
@@ -124,7 +125,7 @@ class Ledger:
             fact = Fact(kind=FactKind.PROVIDER_ERROR, mutation_index=self._mutations, subject=ev.name or "provider", ok=False, **kw)
         elif ev.denied:
             fact = Fact(kind=FactKind.GATE_DECISION, mutation_index=self._mutations, subject=ev.name, ok=False, paths=ev.paths, **kw)
-        elif ev.name in _MUTATING_TOOLS:
+        elif ev.name in _MUTATING_TOOLS or ev.mutates:
             self._mutations += 1  # an attempt invalidates earlier verification, successful or not (as the floor does)
             fact = Fact(kind=FactKind.FILE_MUTATION, mutation_index=self._mutations, subject=ev.name, ok=not ev.failed, paths=ev.paths, **kw)
         elif ev.name == "run_tests":

@@ -550,6 +550,14 @@ class WispAgentCore:
         # Nothing here changes the guard's behaviour; the completion invariant
         # is still the guard's alone.
         self._last_guard = guard
+        # Reasoning core (docs/harness/reasoning-core-design.md): one per turn, called from three seams below. In
+        # `observe` it only records (RC4); it can never fail the turn (RC6).
+        reasoning = None
+        if self._reasoning_mode().value != "off":
+            from wisp.core.reasoning.runtime import TurnReasoning
+
+            reasoning = TurnReasoning(self._reasoning_mode())
+        self._last_reasoning = reasoning
         # Stagnation interventions spent this turn (ADR-0036). A LOCAL, not a
         # field: it is per-turn control state and never authority — not
         # journaled, not a goal-state input, and a field would make it shared
@@ -720,6 +728,9 @@ class WispAgentCore:
                     continue  # Retry this iteration
 
                 logger.exception("Provider stream failed")
+                if reasoning is not None:
+                    reasoning.observe_provider_error(
+                        str(exc), int(getattr(self.config, "max_tokens", 0) or 0))
                 if not is_transient:
                     _err_ev = error_event(
                         f"Provider stream failed: {exc}", recoverable=False,
@@ -782,6 +793,8 @@ class WispAgentCore:
                 # complete. Reject the finish, inject the harness reminder,
                 # and give it another provider round; bounded so it can
                 # always finish (floor exhaustion surrenders honestly).
+                if reasoning is not None:
+                    reasoning.observe_final("".join(partial_content))
                 rejection = guard.rejection()
                 if rejection is not None:
                     if rejection == SHORT_REPEAT_NUDGE:
@@ -982,6 +995,10 @@ class WispAgentCore:
                             # read as a verified success.
                             t_out = _tool_result_output(
                                 result_event.get("result", ""))
+                            if reasoning is not None:
+                                reasoning.observe_tool_result(
+                                    result_event, t_out,
+                                    _call_args_by_id.get(result_event.get("tool_call_id", ""), {}))
                             if t_out is None:
                                 if t_name in _VERIFY_TOOLS:
                                     # A refused, blocked or failed verification
@@ -2592,6 +2609,11 @@ class WispAgentCore:
                     "Extension intercept failed — treating as deny: %s", e)
                 tc_event["_blocked"] = f"extension intercept failed: {e}"
 
+    def _reasoning_mode(self) -> Any:
+        from wisp.core.reasoning.decision import parse_mode
+
+        return parse_mode(getattr(self.config, "reasoning_core", "observe"))
+
     def _invariant_gate_mode(self) -> Any:
         from wisp.core.gates import parse_mode
 
@@ -2729,6 +2751,10 @@ class WispAgentCore:
                 str(name), dict(tc.get("arguments", {}) or {}))
         except Exception:
             pass
+        # Reasoning core, seam 1b: every refusal goes through this helper, so it is the one place the ledger learns of a call that never ran.
+        reasoning = getattr(self, "_last_reasoning", None)
+        if reasoning is not None:
+            reasoning.observe_refusal(flat, tc.get("arguments", {}))
         return flat
 
     def _make_action(self, event: dict[str, Any]) -> Any:

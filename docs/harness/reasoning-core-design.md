@@ -185,6 +185,13 @@ A mutation probe of 19 mutations over both modules ended with 0 survivors; its f
 The corpus first run also found 3 genuine false positives (a claim about someone else's or last week's result: "The README says all tests pass") and 2 misses ("no errors" tripped the failure words); fixed by attribution words and by removing "no errors/issues" before the negation test.
 Not verified: the false-positive rate on real transcripts. The corpora are synthetic; that measurement is the P2 baseline and needs the owner's consent to read session content.
 
+### P1 status (2026-10-07)
+
+Built: `decision.py` (R1-R4 as pure functions over `GoalState`/`FailureClass`/`RecoveryRung`; frozen `State`; budgets), `runtime.py` (`TurnReasoning`, journal), `shellwrites.py` (shell writes via the gates' parser), setting `reasoning_core` (default `observe`, a typo is `observe`), and four seams in `stateless.py`: after each tool result, on every refusal (`_refusal_result_event`, the one helper all refusals pass through), at the final answer, and on a provider exception.
+Witnessed: 330 tests in `tests/reasoning/`; a real turn reaches every seam; observe output equals off output for the user; a broken ledger/audit/planner degrades to a `core_error` journal row (RC6); an AST test pins one call site per seam (RC12). 28-mutation probe over decision, runtime, ledger, shellwrites and the engine seams: 0 survivors except one equivalent mutant (`==` vs `>=` on the R2 nudge, since count 3 hits the escalate branch first).
+Found on the way: refusals bypass the tool-result loop (they are appended to `tool_results_events_early`), so a seam placed only after `_execute_tool` never saw them; the refusal helper is now seam 1b. Re-anchored `scripts/derive_current_flags.py` (stateless.py read site 1367 -> 1384) and regenerated `CURRENT_FLAGS.md` and `register.md`.
+Still unverified: that a real 402 reaches the provider-exception seam (it may arrive as an error event instead; P2 stub test); the journal is in memory and logged at debug, not yet persisted; `enforce` is decided but not applied (P3).
+
 ## 11. Risks
 
 - **False positives in claim audit** would annotate correct claims. Mitigation: precision-first patterns, a corpus of real transcripts, observe mode first, and a measured rate before any `enforce`.
