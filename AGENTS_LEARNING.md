@@ -475,3 +475,13 @@ Still open: ~30% of the prompt is appended after budgeting; `config.skill_dirs` 
 - **Choose the local test slice from CI's failures, not from guesses:** my architecture-test filter by file name missed `test_doc_drift` and `test_module_orphans`, and the first CI run of the PR caught both. `AGENTS.md` states a test-file count with a tolerance of 40; `main` was at 439 against 400, so any four new test files tipped it.
 - **`rtk` filters output and can mislead:** it showed `06bc076` as `origin/main` when the real value was `f660329`. Use `rtk proxy git ...` for a SHA or a count that decides something.
 - **Verify a subcommand through the checkout under test:** a subprocess `python -m wisp judge ...` ran the older installed wisp, which has no `judge` and sent "judge run ..." to the model as a prompt (a mock reply, exit 0, a green-looking wrong result). The end-to-end test sets `PYTHONPATH` to its own checkout.
+
+## rate limits: two retry layers multiplied into nine requests (2026-10-06)
+
+- **Symptom (user's REPL, OpenRouter 429):** one message produced three groups of "Transient status 429 on attempt 1/3, 2/3" in `.agent/runtime.log`, then "after 3 attempts". The timestamps showed the structure: `guarded_provider_stream` (3 rounds) around `hardened_post` (3 requests per round) is up to 9 requests in ~20 s, against an endpoint that was already throttling.
+- **Two retry layers over the same status is a multiplier, not a safety margin.** Pick one owner. The stream owns statuses (it knows the turn, cancellation and the server's advice); `hardened_post` keeps transport errors, which nothing above can tell from a stall. The new `retry_status` parameter defaults to the old behaviour, so only the provider changes.
+- **A 429 is a window, not a blip.** Retries 1-2 s apart cannot outlast a minute-long limit; they add load and delay nothing useful. Space them in seconds, and read `Retry-After` (never read before; neither layer looked at response headers).
+- **Do not sleep through unbounded advice, and do not ignore it.** Over the 30 s cap the stream stops at once and says how long the server asked for.
+- **A message that counts attempts must count requests.** "after 3 attempts" was nine requests.
+- **Mutation probes found a pattern that matched two loops** (`hardened_post` and `hardened_get` share a retry shape): a replace-first on a verified range is safer than loosening the assertion.
+- **Not the user's config or the model's fault to fix here:** the route (`inclusionai/ling-3.1-flash` on OpenRouter) was rate-limiting; switching with `/provider nvidia <model>` works since PR 92.
