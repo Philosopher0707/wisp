@@ -466,3 +466,11 @@ Still open: ~30% of the prompt is appended after budgeting; `config.skill_dirs` 
 - **How it was tested:** real SIGINT in a subprocess against a loop asleep in `select()`, with a control showing the old call leaves it asleep; a pty end-to-end test (a local stub that stalls for a minute, Ctrl-C, expect "Turn interrupted" within seconds, `/exit` leaves promptly); a real process with a non-daemon sleeper thread released with its exit code, and the same process hanging without the watchdog.
 - **A mutation that survived taught the test rule:** with `entry()` not arming on `SystemExit` no test failed, because a fake `main` that exits normally never hangs. A test for a safety net must leave the failure condition present (a stuck non-daemon thread) on every path it guards.
 - **Capture the culprit if it recurs:** `PYTHONFAULTHANDLER=1 wisp repl`, then from another terminal `kill -ABRT $(pgrep -f "wisp repl")` dumps every thread's stack.
+
+## wisp setup: Ctrl-C at a prompt printed a traceback (2026-10-06)
+
+- **Symptom (user's terminal):** `wisp setup`, provider 3, model 4 (custom), Ctrl-C at "Custom model name:" printed a full `KeyboardInterrupt` traceback through `entry()`, `_do_setup` and `run_setup`.
+- **Cause:** `run_setup`'s docstring promised `None` when aborted, but only the typed "abort" choice returned it. Ctrl-C and Ctrl-D (`EOFError`) at any prompt, the hidden key prompt and the validation handshake were not caught, and `entry()` re-raises `KeyboardInterrupt` after arming the exit watchdog.
+- **Fix:** `run_setup` wraps the wizard and turns both into "Setup cancelled. Nothing was saved." with `None`. Nothing has been written at that point, because the choice is persisted only after the last step (checked by a test that fails if `persist` or `store_key` is called).
+- **How it was tested:** unit tests with an injected input that raises at the exact prompt (the first one reproduced the traceback before the fix), and a real pty run of the reported keystrokes: no traceback, the message, exit code 1, and no file written to a temporary HOME.
+- **Not changed:** other subcommands still show a traceback on Ctrl-C through `entry()`; only the wizard was reported and fixed. A general `entry()` change would alter every command's exit behaviour and needs its own decision.

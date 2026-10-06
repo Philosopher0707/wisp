@@ -183,7 +183,24 @@ def run_setup(input_fn: Callable[[str], str] | None = None,
               probe_fn: Callable[..., tuple[bool, str]] | None = None,
               ) -> dict[str, Any] | None:
     """Run the interactive wizard. Returns the saved config summary, or
-    None when aborted. Injected I/O keeps this unit-testable."""
+    None when aborted. Injected I/O keeps this unit-testable.
+
+    Ctrl-C and Ctrl-D at any prompt (including the hidden key prompt and the validation handshake) are an abort,
+    not a crash: nothing has been written by then, because the choice is persisted only after the last step.
+    """
+    try:
+        return _run_wizard(input_fn, password_fn, out, probe_timeout, probe_fn)
+    except (KeyboardInterrupt, EOFError):
+        (out or print)("\nSetup cancelled. Nothing was saved. Re-run `wisp setup` any time.")
+        return None
+
+
+def _run_wizard(input_fn: Callable[[str], str] | None,
+                password_fn: Callable[[str], str] | None,
+                out: Callable[[str], None] | None,
+                probe_timeout: float,
+                probe_fn: Callable[..., tuple[bool, str]] | None,
+                ) -> dict[str, Any] | None:
     import builtins
 
     _in = input_fn or builtins.input
