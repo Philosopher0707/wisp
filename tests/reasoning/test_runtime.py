@@ -60,6 +60,16 @@ class TestTurnReasoning:
         acts = [t.observe_tool_result(bad(i), f"ImportError at line {i}", {"command": "python x.py"}).action for i in range(3)]
         assert acts == [Action.CONTINUE, Action.NUDGE, Action.ESCALATE]
 
+    def test_a_shell_command_that_exits_nonzero_is_a_failure_even_though_the_tool_succeeded(self):
+        t = rt.TurnReasoning(Mode.OBSERVE)
+        out = "[exit code: 1]\nImportError: nope"
+        acts = [t.observe_tool_result(ok("run_bash", cid=f"c{i}"), out, {"command": "python3 x.py"}).action for i in range(3)]
+        assert acts == [Action.CONTINUE, Action.NUDGE, Action.ESCALATE]
+
+    def test_a_successful_shell_command_is_not_a_failure(self):
+        t = rt.TurnReasoning(Mode.OBSERVE)
+        assert t.observe_tool_result(ok("run_bash"), "fine", {"command": "ls"}) is None
+
     def test_a_provider_affordability_error_plans_one_retry(self):
         t = rt.TurnReasoning(Mode.OBSERVE)
         d = t.observe_provider_error("402: you can only afford 5403", 16384)

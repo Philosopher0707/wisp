@@ -558,6 +558,13 @@ class WispAgentCore:
 
             reasoning = TurnReasoning(self._reasoning_mode())
         self._last_reasoning = reasoning
+
+        def _note_provider_error(message: str) -> None:
+            # Seam 2, the ONE call site. A provider failure reaches here two ways: as an `error` event in the stream (a real 402 does) and
+            # as an exception out of the stream.
+            if reasoning is not None:
+                reasoning.observe_provider_error(
+                    message, int(getattr(self.config, "max_tokens", 0) or 0))
         # Stagnation interventions spent this turn (ADR-0036). A LOCAL, not a
         # field: it is per-turn control state and never authority — not
         # journaled, not a goal-state input, and a field would make it shared
@@ -615,6 +622,7 @@ class WispAgentCore:
                         provider_failed = True
                         detail = normalized.get("message") or normalized.get("detail") or ""
                         provider_fail_note = str(detail)[:160] or "non-complete"
+                        _note_provider_error(str(detail))
 
                     # Accumulate partial content for error recovery
                     if normalized.get("type") == "content":
@@ -728,9 +736,7 @@ class WispAgentCore:
                     continue  # Retry this iteration
 
                 logger.exception("Provider stream failed")
-                if reasoning is not None:
-                    reasoning.observe_provider_error(
-                        str(exc), int(getattr(self.config, "max_tokens", 0) or 0))
+                _note_provider_error(str(exc))
                 if not is_transient:
                     _err_ev = error_event(
                         f"Provider stream failed: {exc}", recoverable=False,

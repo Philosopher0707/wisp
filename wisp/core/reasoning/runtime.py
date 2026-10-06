@@ -21,6 +21,9 @@ from wisp.core.reasoning.claims import audit
 from wisp.core.reasoning.decision import Action, Budgets, Decision, Mode, State, decide_denial, decide_failure, decide_final, failure_signature, plan_request
 from wisp.core.reasoning.ledger import Ledger, ObservedEvent
 from wisp.core.reasoning.shellwrites import shell_write_paths
+from wisp.core.verification import _verify_result_is_success
+
+_SHELL_TOOLS = frozenset({"run_bash", "exec_sandbox"})
 
 logger = logging.getLogger("wisp.reasoning")
 
@@ -75,6 +78,8 @@ class TurnReasoning:
             cls = classify_result(result)
             denied = cls in (OutcomeClass.POLICY_DENIAL, OutcomeClass.DENIAL)
             failed = cls is not OutcomeClass.SUCCESS
+            if not failed and name in _SHELL_TOOLS and isinstance(output, str) and not _verify_result_is_success(output):
+                failed = True  # a shell tool succeeds as a TOOL while its command exits non-zero: the exit marker is in the text
             self._calls += 1
             source = str(event.get("tool_call_id") or f"{name}#{self._calls}")
             a = args if isinstance(args, dict) else {}

@@ -192,6 +192,13 @@ Witnessed: 330 tests in `tests/reasoning/`; a real turn reaches every seam; obse
 Found on the way: refusals bypass the tool-result loop (they are appended to `tool_results_events_early`), so a seam placed only after `_execute_tool` never saw them; the refusal helper is now seam 1b. Re-anchored `scripts/derive_current_flags.py` (stateless.py read site 1367 -> 1384) and regenerated `CURRENT_FLAGS.md` and `register.md`.
 Still unverified: that a real 402 reaches the provider-exception seam (it may arrive as an error event instead; P2 stub test); the journal is in memory and logged at debug, not yet persisted; `enforce` is decided but not applied (P3).
 
+### P2 status (2026-10-07)
+
+Built: `tests/reasoning/personas.py` (seven scripted personas driving the real engine: six failures plus the `HonestSolver` control), `test_personas.py`, and the baseline `docs/harness/reasoning-core-baseline.md` (table generated and pinned by a test).
+Result: with the core off, all six failures reach the user today; observe changes nothing the user sees (whole event stream compared); the control is untouched; the journal records R1, R2, R3, R4 on the matching personas.
+P2 found and fixed two P1 defects: a real 402 arrives as a provider `error` event (the seam only covered exceptions; now both reach one helper), and a failing shell command is an "ok" tool result with an exit marker in the text (R2 never saw repeated failures). 36-mutation probe: 1 survivor, equivalent (R2 `==` vs `>=`).
+Not measured: real models or transcripts; live paired judge runs need a key and a cap you name.
+
 ## 11. Risks
 
 - **False positives in claim audit** would annotate correct claims. Mitigation: precision-first patterns, a corpus of real transcripts, observe mode first, and a measured rate before any `enforce`.
