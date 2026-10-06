@@ -433,7 +433,7 @@ pytest tests/test_websocket.py tests/test_transport_headless.py -v
 # Core + runtime tests
 pytest tests/test_core_stateless.py tests/test_runtime_concurrent.py tests/test_provider_integration.py -v
 
-# Full suite (~400 test files, ~5,400 test functions — foreign-session WIP files excluded below)
+# Full suite (~440 test files, ~5,400 test functions — foreign-session WIP files excluded below)
 python -m pytest tests/test_*.py -v
 
 # CLI surface E2E (hermetic HOME + mock provider, PTY repl/tui, 7+ groups)
