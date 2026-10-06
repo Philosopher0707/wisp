@@ -557,7 +557,8 @@ class WispAgentCore:
         if self._reasoning_mode().value != "off":
             from wisp.core.reasoning.runtime import TurnReasoning
 
-            reasoning = TurnReasoning(self._reasoning_modes())
+            reasoning = TurnReasoning(
+                self._reasoning_modes(), journal_path=str(getattr(self.config, "reasoning_journal", "") or ""))
         self._last_reasoning = reasoning
 
         def _note_provider_error(message: str) -> None:

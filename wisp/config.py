@@ -879,6 +879,7 @@ class WispConfig:
     dependency_lock: str
     reasoning_core: str
     reasoning_core_rules: str
+    reasoning_journal: str
     gate_write_roots: tuple[str, ...]
     unattended_auto_approve_tools: tuple[str, ...]
     capability_filtering: bool
@@ -1037,6 +1038,7 @@ class WispConfig:
 
         object.__setattr__(self, "reasoning_core", _parse_reasoning_mode(get_setting("reasoning_core", "observe")).value)
         # Per-rule overrides, `R1=enforce,R4=enforce`: each heuristic is flipped on its own once its baseline looks right.
+        object.__setattr__(self, "reasoning_journal", str(get_setting("reasoning_journal", "") or ""))
         from wisp.core.reasoning.decision import parse_modes as _parse_reasoning_modes, render_modes as _render_reasoning_modes
 
         object.__setattr__(self, "reasoning_core_rules", _render_reasoning_modes(_parse_reasoning_modes(

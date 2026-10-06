@@ -12,6 +12,7 @@ INVARIANTS
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -42,7 +43,8 @@ def _gate_rule(reason: str) -> str:
 
 
 class TurnReasoning:
-    def __init__(self, mode: Mode | Modes, budgets: Budgets = Budgets()) -> None:
+    def __init__(self, mode: Mode | Modes, budgets: Budgets = Budgets(), journal_path: str = "") -> None:
+        self._journal_path = str(journal_path or "")
         self.modes = mode if isinstance(mode, Modes) else Modes(mode)
         self.budgets = budgets
         self.ledger = Ledger()
@@ -70,10 +72,23 @@ class TurnReasoning:
         row.update(extra)
         self._rows.append(row)
         logger.debug("reasoning %s", row)
+        self._persist(row)
+
+    def _persist(self, row: dict[str, Any]) -> None:
+        """Append one JSON line to the operator's journal file, if one is configured. Best effort: a full disk must not fail a turn (RC6)."""
+        if not self._journal_path:
+            return
+        try:
+            with open(self._journal_path, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(row, default=str, sort_keys=True) + "\n")
+        except Exception:  # noqa: BLE001
+            logger.debug("reasoning journal write failed", exc_info=True)
 
     def _core_error(self, seam: str, exc: BaseException) -> None:
         try:
-            self._rows.append({"seq": len(self._rows) + 1, "seam": seam, "mode": self.mode.value, "action": "core_error", "reason": f"{type(exc).__name__}: {exc}"[:200]})
+            row = {"seq": len(self._rows) + 1, "seam": seam, "mode": self.mode.value, "action": "core_error", "reason": f"{type(exc).__name__}: {exc}"[:200]}
+            self._rows.append(row)
+            self._persist(row)
         except Exception:  # noqa: BLE001 — recording the error must not itself raise
             pass
 
