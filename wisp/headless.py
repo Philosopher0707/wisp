@@ -57,7 +57,8 @@ async def run_headless(prompt: str, model: str | None = None,
     if model:
         config = config.replace(model=model)
     if provider:
-        config = config.replace(provider=provider)
+        from wisp.provider_select import with_provider
+        config = with_provider(config, provider)
     if workspace:
         config = config.replace(workspace=workspace)
     config = config.replace(permission_mode=permission_mode, auto_approve=True, show_thinking=True)
