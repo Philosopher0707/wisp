@@ -475,3 +475,14 @@ Still open: ~30% of the prompt is appended after budgeting; `config.skill_dirs` 
 - **Choose the local test slice from CI's failures, not from guesses:** my architecture-test filter by file name missed `test_doc_drift` and `test_module_orphans`, and the first CI run of the PR caught both. `AGENTS.md` states a test-file count with a tolerance of 40; `main` was at 439 against 400, so any four new test files tipped it.
 - **`rtk` filters output and can mislead:** it showed `06bc076` as `origin/main` when the real value was `f660329`. Use `rtk proxy git ...` for a SHA or a count that decides something.
 - **Verify a subcommand through the checkout under test:** a subprocess `python -m wisp judge ...` ran the older installed wisp, which has no `judge` and sent "judge run ..." to the model as a prompt (a mock reply, exit 0, a green-looking wrong result). The end-to-end test sets `PYTHONPATH` to its own checkout.
+
+## macOS app: self-contained Wisp.app (bundled Python), packaging and verification (2026-10-06)
+
+Search words: electron-builder, python-build-standalone, uv, codesign, ad-hoc, afterPack, Gatekeeper, bundled backend, Wisp.app.
+
+- Ship the interpreter, not the machine's Python: `wisp-desktop/scripts/bundle-backend.sh` copies a uv-managed python-build-standalone 3.12 and `uv pip install`s wisp into it (non-editable, so both `wisp` and `agent` land in site-packages). The app resolves WISP_PYTHON, then `Resources/backend/python/bin/python3`, then dev venv, then system python (`src/main/backend-launch.ts`, 21 unit tests).
+- Seal the bundled interpreter: `PYTHONDONTWRITEBYTECODE=1` (never write into a signed app), `PYTHONNOUSERSITE=1` (a user package must not shadow the bundled one), drop `PYTHONHOME`.
+- `import wisp.server` creates `WISP_WORKSPACE` (default `/workspace`) at import time; on a Mac that fails with a read-only file system. Any smoke import must set a scratch `WISP_WORKSPACE`. Evidence: the first bundle smoke run.
+- electron-builder with an unsigned bundle leaves a broken seal (`codesign --verify`: "code has no resources but signature indicates they must be present"). Ad-hoc sign in an `afterPack` hook (`scripts/adhoc-sign.cjs`) with `mac.identity: null`. Ad-hoc is not a Developer ID: other Macs need right-click > Open until the app is signed and notarized.
+- Verify the artifact you ship, not the build directory: `scripts/verify-packaged.mjs` launches the app (Playwright `_electron`, throwaway HOME) and checks window, managed backend, health, 401 without and with a wrong key, backend is the bundled python, loopback only, no renderer errors, and no orphan after quit. It passed on `release/mac-arm64/Wisp.app` and on the app unzipped from `Wisp-0.1.0-mac.zip`.
+- `npx electron-builder` can fail with "Missing script"; call `./node_modules/.bin/electron-builder`.

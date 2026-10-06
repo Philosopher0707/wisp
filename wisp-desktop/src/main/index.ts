@@ -141,7 +141,7 @@ app.whenReady().then(async () => {
     // Show a critical error dialog and quit
     dialog.showErrorBox(
       'Backend Startup Failed',
-      `The Wisp backend could not start.\n\n${msg}\n\nPlease check that Python and the wisp package are installed.`,
+      `The Wisp backend could not start.\n\n${msg}`,
     );
     app.quit();
     return;

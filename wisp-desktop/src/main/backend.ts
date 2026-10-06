@@ -11,6 +11,15 @@ import * as net from 'node:net';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { app } from 'electron';
+import {
+  OutputTail,
+  describeStartupFailure,
+  resolveLaunch,
+  serverProgram,
+  spawnEnvironment,
+  type Exit,
+  type LaunchContext,
+} from './backend-launch.js';
 
 export interface BackendInfo {
   /** e.g. http://localhost:8473 */
@@ -79,9 +88,12 @@ async function waitForHealthy(
   url: string,
   apiKey: string,
   timeoutSeconds: number,
+  /** Returns true once the backend process is gone, so a crash is reported at once instead of after the whole timeout. */
+  hasDied: () => boolean = () => false,
 ): Promise<void> {
   const deadline = Date.now() + timeoutSeconds * 1000;
   while (Date.now() < deadline) {
+    if (hasDied()) throw new Error('Backend process exited before it became healthy');
     try {
       const resp = await fetch(`${url}/api/health`, {
         headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
@@ -102,62 +114,29 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-/** Resolve the correct Python interpreter for the backend */
-function resolvePython(): string {
-  // 1. In development, prefer the virtualenv inside the backend repo
-  const devVenv = path.resolve(
-    process.cwd(),
-    '..', '.venv', 'bin', 'python',
-  );
-  if (process.platform === 'darwin' || process.platform === 'linux') {
-    try {
-      const { accessSync, constants } = require('node:fs');
-      accessSync(devVenv, constants.X_OK);
-      return devVenv;
-    } catch {
-      /* not executable */
-    }
-  }
-
-  // 2. Packaged app: look in bundled resources
-  const resourcesVenv = path.join(
-    process.resourcesPath,
-    'backend', '.venv', 'bin', 'python',
-  );
-  try {
-    const { accessSync, constants } = require('node:fs');
-    accessSync(resourcesVenv, constants.X_OK);
-    return resourcesVenv;
-  } catch {
-    /* not bundled */
-  }
-
-  // 3. Fallback to system Python (requires wisp installed globally)
-  return 'python3';
-}
-
-/** Resolve the backend source root (for PYTHONPATH when using dev venv) */
-function resolveBackendRoot(): string {
-  // In dev: parent directory of wisp-desktop (where the 'wisp' package lives)
-  // e.g. /Users/philosopher/Documents/wisp/wisp-desktop/.. => /Users/philosopher/Documents/wisp
-  const devRoot = path.resolve(process.cwd(), '..');
-  try {
-    const { statSync } = require('node:fs');
-    if (statSync(path.join(devRoot, 'wisp', '__init__.py')).isFile()) return devRoot;
-  } catch {
-    /* doesn't exist */
-  }
-
-  // Packaged: bundled inside app.asar or Resources
-  const bundledRoot = path.join(process.resourcesPath, 'backend');
-  try {
-    const { statSync } = require('node:fs');
-    if (statSync(bundledRoot).isDirectory()) return bundledRoot;
-  } catch {
-    /* doesn't exist */
-  }
-
-  return '';
+/** The real filesystem for the pure launch policy in backend-launch.ts. */
+function realLaunchContext(): LaunchContext {
+  const { accessSync, statSync, constants } = require('node:fs') as typeof import('node:fs');
+  return {
+    env: process.env,
+    cwd: process.cwd(),
+    resourcesPath: process.resourcesPath ?? '',
+    isExecutable: (p) => {
+      try {
+        accessSync(p, constants.X_OK);
+        return statSync(p).isFile();
+      } catch {
+        return false;
+      }
+    },
+    isFile: (p) => {
+      try {
+        return statSync(p).isFile();
+      } catch {
+        return false;
+      }
+    },
+  };
 }
 
 /**
@@ -177,23 +156,15 @@ export async function startBackend(opts: BackendOptions = {}): Promise<BackendIn
   const timeout = opts.healthTimeoutSeconds ?? 30;
   const url = `http://localhost:${port}`;
 
-  const python = resolvePython();
-  const backendRoot = resolveBackendRoot();
-  const wispPkg = path.join(backendRoot, 'wisp');
-
-  // Build environment
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    WISP_API_KEY: apiKey,
-    WISP_WORKSPACE: workspace,
-    WISP_CORS_ORIGINS: (opts.corsOrigins || [
-      'http://localhost',
-      'http://127.0.0.1',
-    ]).join(','),
-  };
-  if (opts.jsonLogs) {
-    env.WISP_JSON_LOGS = '1';
-  }
+  const launch = resolveLaunch(realLaunchContext());
+  const env = spawnEnvironment({
+    base: process.env,
+    launch,
+    apiKey,
+    workspace,
+    corsOrigins: opts.corsOrigins || ['http://localhost', 'http://127.0.0.1'],
+    jsonLogs: opts.jsonLogs,
+  });
 
   // Ensure workspace exists
   const { mkdirSync } = require('node:fs');
@@ -203,61 +174,57 @@ export async function startBackend(opts: BackendOptions = {}): Promise<BackendIn
     /* already exists */
   }
 
-  // Spawn: wisp.server.main via uvicorn or direct Python
-  // We use the venv Python with -c to import and call main() directly
-  // so we don't rely on the `wisp` CLI entrypoint being installed globally.
-  const args: string[] = [
-    '-c',
-    `
-import sys, os
-sys.path.insert(0, ${JSON.stringify(backendRoot)})
-if ${JSON.stringify(wispPkg)} and os.path.isdir(${JSON.stringify(wispPkg)}):
-    os.environ['PYTHONPATH'] = ${JSON.stringify(backendRoot)} + os.pathsep + os.environ.get('PYTHONPATH', '')
-from wisp.server import main
-main(host='127.0.0.1', port=${port}, no_auth=False)
-`,
-  ];
+  // Spawn the server with `-c` so we do not depend on a `wisp` CLI entrypoint being installed anywhere.
+  const args: string[] = ['-c', serverProgram(launch.root, port)];
 
-  safeLog('log', '[backend] Spawning:', python, '<inline>');
+  safeLog('log', '[backend] Spawning:', launch.python, `(${launch.kind})`);
   safeLog('log', '[backend] Port:', port);
   safeLog('log', '[backend] Workspace:', workspace);
 
-  backendProcess = spawn(python, args, {
-    env,
+  // What the backend says is kept (last lines only) so a failed start can show the real cause.
+  const tail = new OutputTail();
+  let exit: Exit | null = null;
+  let spawnError: string | null = null;
+
+  backendProcess = spawn(launch.python, args, {
+    env: env as NodeJS.ProcessEnv,
     detached: false,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
   backendProcess.stdout?.on('data', (chunk: Buffer) => {
-    const lines = chunk.toString().trimEnd().split('\n');
-    for (const line of lines) {
+    const text = chunk.toString();
+    tail.push(text);
+    for (const line of text.trimEnd().split('\n')) {
       if (line) safeLog('log', '[backend]', line);
     }
   });
   backendProcess.stderr?.on('data', (chunk: Buffer) => {
-    const lines = chunk.toString().trimEnd().split('\n');
-    for (const line of lines) {
+    const text = chunk.toString();
+    tail.push(text);
+    for (const line of text.trimEnd().split('\n')) {
       if (line) safeLog('error', '[backend]', line);
     }
   });
 
   backendProcess.on('error', (err) => {
+    spawnError = err.message;
     safeLog('error', '[backend] Process error:', err.message);
   });
 
   backendProcess.on('exit', (code, signal) => {
+    exit = { code, signal };
     safeLog('log', `[backend] Exited code=${code} signal=${signal}`);
     backendProcess = null;
     backendInfo = null;
   });
 
-  // Wait for health
+  // Wait for health; a backend that has already died is reported at once, with what it printed.
   try {
-    await waitForHealthy(url, apiKey, timeout);
+    await waitForHealthy(url, apiKey, timeout, () => exit !== null || spawnError !== null);
   } catch (err) {
-    // Clean up on failure
     killBackend();
-    throw err;
+    throw new Error(describeStartupFailure(launch, tail, exit, spawnError), { cause: err });
   }
 
   backendInfo = { url, apiKey, workspace, managed: true };
