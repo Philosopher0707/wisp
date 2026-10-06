@@ -1,129 +1,103 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { useAppState } from '../../state/context.js';
-import { useApi } from '../../hooks/useApi.js';
+import React, { useEffect, useRef, useState } from 'react';
+import { Terminal } from '@xterm/xterm';
+import { FitAddon } from '@xterm/addon-fit';
+import '@xterm/xterm/css/xterm.css';
+import { RefreshCw } from '../../icons/index.js';
 
-interface Entry {
-  id: number;
-  command: string;
-  stdout: string;
-  stderr: string;
-  exitCode: number | null;
-  error: string | null;
-  ms: number;
-}
+const THEME = {
+  background: '#0d0d0d',
+  foreground: '#e6e6e6',
+  cursor: '#c4b5fd',
+  selectionBackground: 'rgba(139, 92, 246, 0.35)',
+};
 
-let nextId = 1;
-
+/**
+ * A real shell on the host (see src/main/terminal.ts). The shell lives in the main process, so switching tabs or closing
+ * the dock does not kill it: reopening redraws its recent output and carries on.
+ */
 export const TerminalTab: React.FC = () => {
-  const { state } = useAppState();
-  const api = useApi(state.serverUrl, state.apiKey);
-  const [entries, setEntries] = useState<Entry[]>([]);
-  const [input, setInput] = useState('');
-  const [running, setRunning] = useState(false);
-  const [sandbox, setSandbox] = useState<string | null>(null);
-  const history = useRef<string[]>([]);
-  const cursor = useRef(-1);
-  const bottom = useRef<HTMLDivElement>(null);
-  const field = useRef<HTMLInputElement>(null);
+  const host = useRef<HTMLDivElement>(null);
+  const [status, setStatus] = useState<{ cwd?: string; shell?: string; exited?: string; error?: string }>({});
+  const [generation, setGeneration] = useState(0);
+  const api = window.wisp?.terminal;
 
   useEffect(() => {
-    bottom.current?.scrollIntoView({ block: 'end' });
-  }, [entries, running]);
-  useEffect(() => field.current?.focus(), []);
+    const el = host.current;
+    if (!api || !el) return undefined;
 
-  const run = useCallback(async () => {
-    const command = input.trim();
-    if (!command || running) return;
-    history.current.push(command);
-    cursor.current = -1;
-    setInput('');
-    setRunning(true);
-    const started = performance.now();
-    try {
-      const res = await api.runCommand(command);
-      if (res.sandbox) setSandbox(res.sandbox);
-      setEntries((prev) => [...prev, { id: nextId++, command, stdout: res.stdout, stderr: res.stderr, exitCode: res.exit_code, error: null, ms: performance.now() - started }]);
-    } catch (e) {
-      setEntries((prev) => [...prev, { id: nextId++, command, stdout: '', stderr: '', exitCode: null, error: e instanceof Error ? e.message : 'Command failed to run.', ms: performance.now() - started }]);
-    } finally {
-      setRunning(false);
-      field.current?.focus();
-    }
-  }, [api, input, running]);
+    const term = new Terminal({
+      fontFamily: 'SF Mono, Menlo, monospace',
+      fontSize: 12,
+      cursorBlink: true,
+      scrollback: 5000,
+      theme: THEME,
+      allowProposedApi: false,
+    });
+    const fit = new FitAddon();
+    term.loadAddon(fit);
+    term.open(el);
+    fit.fit();
 
-  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    e.stopPropagation();
-    if (e.key === 'Enter') {
-      void run();
-    } else if (e.key === 'ArrowUp' && history.current.length > 0) {
-      e.preventDefault();
-      cursor.current = cursor.current < 0 ? history.current.length - 1 : Math.max(0, cursor.current - 1);
-      setInput(history.current[cursor.current]);
-    } else if (e.key === 'ArrowDown' && cursor.current >= 0) {
-      e.preventDefault();
-      cursor.current += 1;
-      if (cursor.current >= history.current.length) {
-        cursor.current = -1;
-        setInput('');
-      } else {
-        setInput(history.current[cursor.current]);
+    let disposed = false;
+    const offData = api.onData((d) => term.write(d));
+    const offExit = api.onExit((info) => {
+      setStatus((s) => ({ ...s, exited: info.error ?? `Shell exited (${info.signal ?? `code ${info.code}`}).` }));
+    });
+    const input = term.onData((d) => api.write(d));
+    const resized = term.onResize(({ cols, rows }) => api.resize(cols, rows));
+
+    void api.start(term.cols, term.rows).then((res) => {
+      if (disposed) return;
+      if (!res.ok) {
+        setStatus({ error: res.error ?? 'Could not start a shell.' });
+        return;
       }
-    } else if (e.key === 'l' && e.ctrlKey) {
-      e.preventDefault();
-      setEntries([]);
-    }
+      if (res.buffer) term.write(res.buffer);
+      setStatus({ cwd: res.cwd, shell: res.shell });
+      term.focus();
+    });
+
+    const observer = new ResizeObserver(() => {
+      try {
+        fit.fit();
+      } catch {
+        // the pane is momentarily zero-sized while the dock resizes
+      }
+    });
+    observer.observe(el);
+
+    return () => {
+      disposed = true;
+      observer.disconnect();
+      input.dispose();
+      resized.dispose();
+      offData();
+      offExit();
+      term.dispose();
+    };
+  }, [api, generation]);
+
+  if (!api) {
+    return <div className="dock-pane"><p className="dock-note">The terminal needs the desktop app; it is not available in a plain web page.</p></div>;
+  }
+
+  const restart = () => {
+    api.restart();
+    setStatus({});
+    setGeneration((g) => g + 1);
   };
 
-  const where = state.workspacePath ? state.workspacePath.split('/').pop() : 'workspace';
-
   return (
-    <div className="dock-pane" onClick={() => field.current?.focus()}>
+    <div className="dock-pane">
       <div className="dock-toolbar">
         <span className="dock-toolbar-title">Terminal</span>
-        <span className="dock-toolbar-meta">{sandbox ? `${sandbox} sandbox` : 'workspace sandbox'}</span>
-        <button className="dock-tool-btn dock-tool-btn--text" onClick={(e) => { e.stopPropagation(); setEntries([]); }} disabled={entries.length === 0}>
-          Clear
-        </button>
+        <span className="dock-toolbar-meta" title={status.cwd}>{status.cwd ? `${status.shell?.split('/').pop()} · ${status.cwd.split('/').pop()}` : 'host shell'}</span>
+        <button className="dock-tool-btn" onClick={restart} title="Restart shell" aria-label="Restart shell"><RefreshCw size={14} /></button>
       </div>
-      <div className="dock-scroll term-scroll">
-        {entries.length === 0 && (
-          <p className="dock-note">Run a command in <code>{where}</code>. Each command runs on its own through Wisp's sandbox and permission policy, so interactive programs (vim, a REPL) and a persistent shell are not available.</p>
-        )}
-        {entries.map((en) => (
-          <div key={en.id} className="term-entry">
-            <div className="term-cmd"><span className="term-prompt">$</span> {en.command}</div>
-            {en.stdout && <pre className="term-out">{en.stdout}</pre>}
-            {en.stderr && <pre className="term-out term-out--err">{en.stderr}</pre>}
-            {en.error && <pre className="term-out term-out--err">{en.error}</pre>}
-            {en.error && /approv|polic|forbidden/i.test(en.error) && (
-              <p className="term-hint">Wisp's permission policy blocks direct shell commands in the current mode. Ask the agent to run it in the chat (you approve there), or change the permission mode yourself.</p>
-            )}
-            {!en.error && (
-              <div className={`term-status${en.exitCode === 0 ? '' : ' term-status--fail'}`}>
-                exit {en.exitCode} · {(en.ms / 1000).toFixed(1)}s
-              </div>
-            )}
-          </div>
-        ))}
-        {running && <div className="term-running">Running…</div>}
-        <div ref={bottom} />
-      </div>
-      <div className="term-input-row">
-        <span className="term-prompt">$</span>
-        <input
-          ref={field}
-          className="term-input"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={onKeyDown}
-          placeholder={running ? 'Waiting for the command to finish…' : 'Type a command and press Enter'}
-          disabled={running}
-          spellCheck={false}
-          autoCapitalize="off"
-          autoCorrect="off"
-          aria-label="Terminal command"
-        />
-      </div>
+      {(status.exited || status.error) && (
+        <p className="dock-note dock-note--error">{status.error ?? status.exited} <button className="term-link" onClick={restart}>Start a new shell</button></p>
+      )}
+      <div className="term-host" ref={host} />
     </div>
   );
 };

@@ -49,6 +49,7 @@ interface BackendOptions {
 
 let backendProcess: ChildProcess | null = null;
 let backendInfo: BackendInfo | null = null;
+let backendPython = '';
 
 /** Log helper that silently swallows EPIPE when process.stdout is a broken pipe */
 function safeLog(stream: 'log' | 'warn' | 'error', prefix: string, ...values: unknown[]) {
@@ -157,6 +158,7 @@ export async function startBackend(opts: BackendOptions = {}): Promise<BackendIn
   const url = `http://localhost:${port}`;
 
   const launch = resolveLaunch(realLaunchContext());
+  backendPython = launch.python;
   const env = spawnEnvironment({
     base: process.env,
     launch,
@@ -256,6 +258,11 @@ export function killBackend(): void {
   }, 5000);
 
   proc.on('exit', () => clearTimeout(forceTimer));
+}
+
+/** The interpreter the backend runs on (main process only; the in-app terminal reuses it for its pty helper). */
+export function getBackendPython(): string {
+  return backendPython;
 }
 
 /** Return current backend info (or null if not running) */

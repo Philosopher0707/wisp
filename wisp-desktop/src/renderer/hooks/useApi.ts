@@ -62,13 +62,6 @@ export interface GitDiff {
   truncated: boolean;
 }
 
-export interface BashResult {
-  exit_code: number;
-  stdout: string;
-  stderr: string;
-  sandbox?: string;
-}
-
 export interface ProviderInfo {
   name: string;
   label: string;
@@ -187,7 +180,6 @@ interface ApiClient {
   fetchFiles: (path?: string) => Promise<FileItems | null>;
   fetchGitStatus: () => Promise<GitStatus | null>;
   fetchGitDiff: () => Promise<GitDiff>;
-  runCommand: (command: string, cwd?: string) => Promise<BashResult>;
   fetchProviders: () => Promise<ProviderCatalog>;
   selectProvider: (provider: string, model: string) => Promise<void>;
   forkSession: (messages: Message[], title?: string) => Promise<string | null>;
@@ -389,10 +381,6 @@ export function useApi(serverUrl: string, apiKey: string): ApiClient {
 
   const fetchGitDiff = useCallback(async (): Promise<GitDiff> => {
     return await apiFetch(`/api/git/diff${authParams}`) as GitDiff;
-  }, [apiFetch, authParams]);
-
-  const runCommand = useCallback(async (command: string, cwd?: string): Promise<BashResult> => {
-    return await apiFetch(`/api/bash${authParams}`, { method: 'POST', body: { command, ...(cwd ? { cwd } : {}) } }) as BashResult;
   }, [apiFetch, authParams]);
 
   const fetchProviders = useCallback(async (): Promise<ProviderCatalog> => {
@@ -687,7 +675,7 @@ export function useApi(serverUrl: string, apiKey: string): ApiClient {
   return useMemo(
     () => ({
       fetchSessions, fetchSession, deleteSession, renameSession, importSession, fetchModels, fetchFiles,
-      fetchGitStatus, fetchGitDiff, runCommand, fetchProviders, selectProvider, forkSession, healthCheck,
+      fetchGitStatus, fetchGitDiff, fetchProviders, selectProvider, forkSession, healthCheck,
       fetchCheckpoints, restoreCheckpoint, dropCheckpoint, getCheckpointDiff,
       fetchPlugins, installPlugin, uninstallPlugin, togglePlugin, searchMarketplace,
       fetchMCPServers, addMCPServer, removeMCPServer, testMCPServer,
@@ -696,7 +684,7 @@ export function useApi(serverUrl: string, apiKey: string): ApiClient {
     }),
     [
       fetchSessions, fetchSession, deleteSession, renameSession, importSession, fetchModels, fetchFiles,
-      fetchGitStatus, fetchGitDiff, runCommand, fetchProviders, selectProvider, forkSession, healthCheck,
+      fetchGitStatus, fetchGitDiff, fetchProviders, selectProvider, forkSession, healthCheck,
       fetchCheckpoints, restoreCheckpoint, dropCheckpoint, getCheckpointDiff,
       fetchPlugins, installPlugin, uninstallPlugin, togglePlugin, searchMarketplace,
       fetchMCPServers, addMCPServer, removeMCPServer, testMCPServer,

@@ -26,8 +26,18 @@ export interface WispBrowserAPI {
   onState: (callback: (state: BrowserState) => void) => () => void;
 }
 
+export interface WispTerminalAPI {
+  start: (cols: number, rows: number) => Promise<{ ok: boolean; resumed?: boolean; cwd?: string; shell?: string; buffer?: string; error?: string }>;
+  write: (data: string) => void;
+  resize: (cols: number, rows: number) => void;
+  restart: () => void;
+  onData: (callback: (data: string) => void) => () => void;
+  onExit: (callback: (info: { code: number | null; signal?: string | null; error?: string }) => void) => () => void;
+}
+
 export interface WispAPI {
   browser: WispBrowserAPI;
+  terminal: WispTerminalAPI;
   platform: string;
   onMenuAction: (callback: (action: string) => void) => () => void;
   openFileDialog: () => Promise<string[] | null>;
@@ -43,6 +53,23 @@ export interface WispAPI {
 
 contextBridge.exposeInMainWorld('wisp', {
   platform: process.platform,
+
+  terminal: {
+    start: (cols: number, rows: number) => ipcRenderer.invoke('terminal:start', cols, rows),
+    write: (data: string) => ipcRenderer.send('terminal:input', data),
+    resize: (cols: number, rows: number) => ipcRenderer.send('terminal:resize', cols, rows),
+    restart: () => ipcRenderer.send('terminal:restart'),
+    onData: (callback) => {
+      const handler = (_e: Electron.IpcRendererEvent, data: string) => callback(data);
+      ipcRenderer.on('terminal:data', handler);
+      return () => ipcRenderer.removeListener('terminal:data', handler);
+    },
+    onExit: (callback) => {
+      const handler = (_e: Electron.IpcRendererEvent, info: { code: number | null; signal?: string | null; error?: string }) => callback(info);
+      ipcRenderer.on('terminal:exit', handler);
+      return () => ipcRenderer.removeListener('terminal:exit', handler);
+    },
+  } satisfies WispTerminalAPI,
 
   browser: {
     navigate: (input: string) => ipcRenderer.invoke('browser:navigate', input),
