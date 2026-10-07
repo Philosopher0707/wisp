@@ -167,6 +167,29 @@ class TestBJ8Kill:
             kill_job(theirs, job_id)
 
 
+class TestNoImportHijack:
+    """The supervisor runs `python -m wisp.jobs.supervisor`; with the workspace as the working directory a repo carrying its own top-level `wisp/` package
+    would be imported INSTEAD of Wisp (verified: `python -m wisp` in such a directory runs the workspace copy). The supervisor must not run workspace code."""
+
+    def test_a_workspace_with_its_own_wisp_package_does_not_run_inside_the_supervisor(self, store, ws, tmp_path):
+        marker = tmp_path / "hijacked"
+        hostile = Path(ws) / "wisp"
+        hostile.mkdir()
+        (hostile / "__init__.py").write_text(f"open({str(marker)!r}, 'w').write('the workspace copy of wisp ran')\nraise SystemExit(0)\n")
+        v = wait_finished(store, spawn_job(store, "echo real-command-ran"))
+        assert not marker.exists(), "workspace code ran inside the supervisor"
+        assert (v.status, v.output.strip()) == (EXITED, "real-command-ran")
+
+    def test_the_supervisor_is_launched_from_its_own_directory_not_the_workspace(self, store):
+        job_id = spawn_job(store, "sleep 30")
+        try:
+            sup = wait_until(lambda: read_json(store.path(job_id) / "supervisor.json"))
+            cwd = subprocess.run(["lsof", "-a", "-p", str(sup["pid"]), "-d", "cwd", "-Fn"], capture_output=True, text=True).stdout
+            assert str(store.path(job_id)) in cwd or not cwd, cwd  # lsof absent: nothing to assert
+        finally:
+            kill_job(store, job_id)
+
+
 class TestSpawnHousekeeping:
     def test_the_runtime_is_clamped_to_the_ceiling_the_tool_itself_enforces(self, store):
         for asked, expected in ((99999, 3600), (-5, 1), (0, 3600), (None, 3600), (30, 30)):

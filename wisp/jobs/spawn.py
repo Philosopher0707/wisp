@@ -50,7 +50,9 @@ def spawn_job(store: JobStore, command: str, *, mutation_index: int = 0, max_run
     env["WISP_JOB_ID"] = job_id  # in the launch environment, so it is inherited by everything the job starts (and visible to `ps` on Linux)
     err = open(d / "supervisor.err", "ab")
     try:
-        subprocess.Popen([sys.executable, "-m", "wisp.jobs.supervisor", str(d)], cwd=store.workspace, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=err,
+        # `-P` (3.11+) keeps the working directory off sys.path, and the supervisor starts in its own job directory: a workspace that carries a
+        # top-level `wisp/` package must never be imported in its place (verified: `python -m wisp` in such a directory runs the workspace copy).
+        subprocess.Popen([sys.executable, "-P", "-m", "wisp.jobs.supervisor", str(d)], cwd=str(d), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=err,
                          start_new_session=True, close_fds=True, env=env)
     finally:
         err.close()
