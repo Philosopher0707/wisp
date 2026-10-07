@@ -484,6 +484,21 @@ Still open: ~30% of the prompt is appended after budgeting; `config.skill_dirs` 
 - **`rtk` filters output and can mislead:** it showed `06bc076` as `origin/main` when the real value was `f660329`. Use `rtk proxy git ...` for a SHA or a count that decides something.
 - **Verify a subcommand through the checkout under test:** a subprocess `python -m wisp judge ...` ran the older installed wisp, which has no `judge` and sent "judge run ..." to the model as a prompt (a mock reply, exit 0, a green-looking wrong result). The end-to-end test sets `PYTHONPATH` to its own checkout.
 
+
+## background jobs: supervisor process, process-tree kill, tier semantics (2026-10-07)
+
+Search words: background job, run_in_background, supervisor, orphan, process group, pgid, SIGTERM, PTY, DockerSandbox, container leak, zombie, ps environment, macOS SIP, reaper.
+
+- Background **subagents already exist** (`spawn_background`, durable run rows, finished-agent notices in the next turn's operating context). The gap was background **shell** jobs and surviving restarts. Design: `docs/harness/background-jobs-design.md`; code `wisp/jobs/`; skill `.agents/skills/background-process-supervision`.
+- **`run_bash_confined` is a black box that cannot be killed from outside.** It awaits the tier router and returns at the end; the PTY tier runs in a worker thread that a cancel does not stop (its child has its own session); the Docker tier leaves the command running when the `docker exec` client dies. So the supervisor kills the process **tree** (found by parent pid) and removes its own container; the tiers' kill is not relied on.
+- **The tiers' own kill hides evidence**: the host tier kills the process group first, orphaning grandchildren to init before a tree walk. Capture the tree before cancelling and keep snapshots; also sweep by process group (an orphan keeps its pgid).
+- **macOS `ps` hides the environment of Apple-signed binaries**, so an env-marker sweep finds nothing for `bash`/`sleep` (it works on Linux). Changing `os.environ` after start is invisible to `ps`. A zombie still shows in `ps` (treat `Z` as dead).
+- **A background process that keeps stdout open keeps the job alive** (tiers wait for EOF), so "leftover killed at job end" only applies to processes that closed their pipes.
+- **A first mutation probe over the new package had 17 survivors out of 44**, almost all real: traversal ids with an existing component, a non-integer exit code, the force-kill path (needs a SIGSTOPped supervisor), kill-before-start, runtime clamping, the reap and prune calls in spawn, the zombie rule. Docker-only mutants need the opt-in suite.
+- Existing leak, not caused by jobs: 66 exited `wisp-sandbox-*` containers (one per `DockerSandbox` instance, never removed). The supervisor removes its own container on every exit path and the reaper removes it after a hard kill.
+- The danger check refuses inline interpreter code in test commands; the orphan scanner counts `from pkg import mod` as importing `pkg` only (use `import pkg.mod as mod`), and a module launched with `python -m` needs a `KNOWN_UNREFERENCED` entry.
+- Verified on this machine: host tier, PTY tier (Docker off the PATH), and Docker tier (opt-in, kill removes the container, reaper removes it after a SIGKILLed supervisor). Not verified: Linux for the jobs suite (the env-marker test is Linux-only), concurrency at fd/disk limits, the watchdog backstop (needs fault injection).
+
 ## macOS app: self-contained Wisp.app (bundled Python), packaging and verification (2026-10-06)
 
 Search words: electron-builder, python-build-standalone, uv, codesign, ad-hoc, afterPack, Gatekeeper, bundled backend, Wisp.app.
@@ -629,6 +644,27 @@ Search words: pipefail, PIPESTATUS, pipeline, exit code, `| tail`, run_bash, mas
 - **A message that counts attempts must count requests.** "after 3 attempts" was nine requests.
 - **Mutation probes found a pattern that matched two loops** (`hardened_post` and `hardened_get` share a retry shape): a replace-first on a verified range is safer than loosening the assertion.
 - **Not the user's config or the model's fault to fix here:** the route (`inclusionai/ling-3.1-flash` on OpenRouter) was rate-limiting; switching with `/provider nvidia <model>` works since PR 92.
+
+## Lesson: a generated page depends on the interpreter that generated it (2026-10-07)
+
+Search: derive_register python3 version, register.md raise sites 285 286, generated pages interpreter, JobLimitError register row
+
+`python3 scripts/derive_register.py` under the system `python3` (3.9.6) wrote **285 raise sites**; the same script under the venv interpreter (3.12.8, the version CI uses) writes **286**. `test_regenerating_reproduces_the_page` regenerates under the test interpreter, so a page written by the wrong Python fails it. The script's header says it "runs under any python3"; that is true for starting, not for the result. The cause (which construct 3.9 and 3.12 count differently) was not isolated.
+
+- Regenerate every derived page with the project's venv interpreter (`/Users/philosopher/.venvs/wisp/bin/python scripts/derive_*.py`), never a bare `python3`.
+- A new exception class needs a data row in `scripts/derive_register.py` first (`JobLimitError` in `wisp/jobs/spawn.py` failed `test_every_defined_class_has_a_row` until it had one); regenerating alone does not add it.
+- Related to the interpreter-level findings (`docs/harness/findings-2026-10-07.md`, section A): which interpreter ran a tool changes its result.
+
+## Lesson: read-then-check-liveness reported a finished job as lost (2026-10-07)
+
+Search: jobs lost exited race, TOCTOU state.json supervisor alive, test_a_failing_command_keeps_its_exit_status, reap_lost overwrite
+
+PR #102's Linux CI failed one test in 11,124 (`test_a_failing_command_keeps_its_exit_status`: `('lost', None)` instead of `('exited', 3)`). It passed locally. Cause, read in `JobStore._status`: the reader looked at `state.json` (not there yet), then asked whether the supervisor was alive; the supervisor wrote its result and exited in between, so the reader saw "dead, no result" and said `lost`. `reap_lost` had the same shape and was worse: it wrote `lost` into `state.json`, which could replace a real result for good.
+
+- When a writer's last act is "write the result, then exit", a reader that finds the writer dead must **read the result again**; the first read is stale by definition.
+- A settler that records a verdict must create-if-absent (`os.link` of a temp file), never overwrite.
+- Test the race by injecting the writer's action into the check (`procs.alive` writes the result, then returns False); both tests were RED first and reproduced the CI values exactly. Mutation probe: reverting either change fails a test.
+- A single failure in a long suite on one OS is a signal, not noise: read the assertion before calling it a flake.
 
 ## Lesson: a check that did not run reported success (2026-10-07)
 

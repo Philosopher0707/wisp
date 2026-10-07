@@ -117,6 +117,8 @@ def _referenced(imported: set[str], module: str) -> bool:
 
 # Modules with no importer, each with a recorded reason for existing.
 KNOWN_UNREFERENCED = {
+    # Background-job supervisor: launched as a detached process (`python -m wisp.jobs.supervisor`), never imported.
+    "wisp.jobs.supervisor",
     # Spec-compliance shim: an external spec names this import path, so being
     # unreferenced internally is the point (see its module docstring).
     "wisp.cli.commands.doctor",
