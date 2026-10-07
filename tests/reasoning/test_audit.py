@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from tests.reasoning.conftest import FAIL, ev
-from wisp.core.reasoning.claims import ClaimKind, Verdict, audit, extract
+from wisp.core.reasoning.claims import ClaimKind, Verdict, audit
 
 V = Verdict
 

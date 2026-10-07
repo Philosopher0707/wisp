@@ -2641,9 +2641,10 @@ class WispAgentCore:
                 tc_event["_blocked"] = f"extension intercept failed: {e}"
 
     def _set_affordable_ceiling(self, tokens: int | None) -> None:
-        if getattr(self, "provider", None) is not None:
+        provider = getattr(self, "provider", None)
+        if provider is not None:
             try:
-                self.provider.affordable_ceiling = tokens
+                setattr(provider, "affordable_ceiling", tokens)  # noqa: B010 — the attribute is an optional extension of the Provider protocol
             except Exception:  # noqa: BLE001 — a provider that refuses the attribute simply keeps its static cap
                 logger.debug("provider refused affordable_ceiling", exc_info=True)
 
