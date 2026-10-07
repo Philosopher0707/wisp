@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from wisp.core.gates import GateContext, GateMode
+from wisp.core.gates import GateContext
 
 
 @pytest.fixture
