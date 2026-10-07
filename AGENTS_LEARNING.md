@@ -467,6 +467,14 @@ Still open: ~30% of the prompt is appended after budgeting; `config.skill_dirs` 
 - **A mutation that survived taught the test rule:** with `entry()` not arming on `SystemExit` no test failed, because a fake `main` that exits normally never hangs. A test for a safety net must leave the failure condition present (a stuck non-daemon thread) on every path it guards.
 - **Capture the culprit if it recurs:** `PYTHONFAULTHANDLER=1 wisp repl`, then from another terminal `kill -ABRT $(pgrep -f "wisp repl")` dumps every thread's stack.
 
+## wisp setup: Ctrl-C at a prompt printed a traceback (2026-10-06)
+
+- **Symptom (user's terminal):** `wisp setup`, provider 3, model 4 (custom), Ctrl-C at "Custom model name:" printed a full `KeyboardInterrupt` traceback through `entry()`, `_do_setup` and `run_setup`.
+- **Cause:** `run_setup`'s docstring promised `None` when aborted, but only the typed "abort" choice returned it. Ctrl-C and Ctrl-D (`EOFError`) at any prompt, the hidden key prompt and the validation handshake were not caught, and `entry()` re-raises `KeyboardInterrupt` after arming the exit watchdog.
+- **Fix:** `run_setup` wraps the wizard and turns both into "Setup cancelled. Nothing was saved." with `None`. Nothing has been written at that point, because the choice is persisted only after the last step (checked by a test that fails if `persist` or `store_key` is called).
+- **How it was tested:** unit tests with an injected input that raises at the exact prompt (the first one reproduced the traceback before the fix), and a real pty run of the reported keystrokes: no traceback, the message, exit code 1, and no file written to a temporary HOME.
+- **Not changed:** other subcommands still show a traceback on Ctrl-C through `entry()`; only the wizard was reported and fixed. A general `entry()` change would alter every command's exit behaviour and needs its own decision.
+
 ## wisp judge: what the first CI run and the build taught (2026-10-06)
 
 - **`--provider X` inherited another provider's endpoint and key:** a flag path that replaces only `provider` keeps `WISP_API_BASE`/`WISP_API_KEY` written for the configured provider. Fixed in `with_provider()` (PR 92). Evidence: building the NVIDIA provider from the real config gave `openrouter.ai` + the shared key before, `integrate.api.nvidia.com` + `NVIDIA_API_KEY` after. A live call could not tell them apart once OpenRouter answered again, so test the construction, not the call.
@@ -486,3 +494,25 @@ Search words: wisp setup, _probe, handshake, generate, generate_stream_events, N
 - Reproduced the exact failure with the real `NVIDIAProvider` against a local HTTP stub (200 SSE and 402 JSON), before and after: before, both cases gave the AttributeError; after, 200 validates and 402 is reported.
 - Second fault found by that stub: the provider layer words a 402 as "the provider refused this request on billing", and `_classify_probe_error` read "refused" as a network failure ("unreachable"). Billing (402 / more credits) is now checked first.
 - Not changed: how the REPL itself sizes `max_tokens` against a key's remaining credit (the 402 in that transcript said 4096 requested, 83 affordable); that is account state, not a wisp bug.
+
+## run_bash exit code hid a failed pipeline stage (2026-10-06)
+
+Search words: pipefail, PIPESTATUS, pipeline, exit code, `| tail`, run_bash, masked failure, sink.
+
+- Symptom (agent session): `swift build 2>&1 | tail -30` showed 3 compiler errors and `# exit: 0`. A shell reports the LAST stage's status, so `tail` hid swift's failure; the agent and its log said success.
+- Fix is in `wisp/tools/bash.py::run_bash_confined`, the one place a command executes (the disk sink goes through it too): the command is followed by an epilogue that records `PIPESTATUS` and re-exits with the real status. The exit code keeps its shell meaning (no behaviour change for scripts). When the command exits 0 but an earlier stage failed, the result starts with `[pipeline: stage N exited C; ...]`, and the sink log gets a `# [pipeline: ...]` header line. SIGPIPE (141) is excluded (`yes | head -1`). If the command already fails (`set -o pipefail`), no note: the exit code says it.
+- Why not just prepend `set -o pipefail`: it would turn `git log | head` and `grep x | wc -l` into reported failures for correct commands, a silent change to every existing script.
+- The marker travels on stderr, or stdout for the PTY tier (it merges streams); both are parsed and stripped. Verified on real bash, the real PtySandbox, and a merged-stream fake. A provider that never ran the epilogue is left alone.
+- Changed a pin: `tests/test_sink_keeps_sandbox.py` asserted the sandbox got exactly `echo via-root`; it now asserts the command is carried and starts with it. The intent (it goes through the sandbox, not the host) is unchanged.
+- Not covered: `POST /api/bash` (REST) calls `sandbox.run` directly and does not report masked stages.
+- Meta-lesson, repeated in this very session: our own tooling reported `exit code 0` from `cmd | tail` and from `(script; echo exit=$?) ; tail`. Read the real status from a file or `${pipestatus[1]}`, never from a pipeline's end.
+
+## rate limits: two retry layers multiplied into nine requests (2026-10-06)
+
+- **Symptom (user's REPL, OpenRouter 429):** one message produced three groups of "Transient status 429 on attempt 1/3, 2/3" in `.agent/runtime.log`, then "after 3 attempts". The timestamps showed the structure: `guarded_provider_stream` (3 rounds) around `hardened_post` (3 requests per round) is up to 9 requests in ~20 s, against an endpoint that was already throttling.
+- **Two retry layers over the same status is a multiplier, not a safety margin.** Pick one owner. The stream owns statuses (it knows the turn, cancellation and the server's advice); `hardened_post` keeps transport errors, which nothing above can tell from a stall. The new `retry_status` parameter defaults to the old behaviour, so only the provider changes.
+- **A 429 is a window, not a blip.** Retries 1-2 s apart cannot outlast a minute-long limit; they add load and delay nothing useful. Space them in seconds, and read `Retry-After` (never read before; neither layer looked at response headers).
+- **Do not sleep through unbounded advice, and do not ignore it.** Over the 30 s cap the stream stops at once and says how long the server asked for.
+- **A message that counts attempts must count requests.** "after 3 attempts" was nine requests.
+- **Mutation probes found a pattern that matched two loops** (`hardened_post` and `hardened_get` share a retry shape): a replace-first on a verified range is safer than loosening the assertion.
+- **Not the user's config or the model's fault to fix here:** the route (`inclusionai/ling-3.1-flash` on OpenRouter) was rate-limiting; switching with `/provider nvidia <model>` works since PR 92.
