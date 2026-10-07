@@ -487,3 +487,13 @@ Search words: pipefail, PIPESTATUS, pipeline, exit code, `| tail`, run_bash, mas
 - Changed a pin: `tests/test_sink_keeps_sandbox.py` asserted the sandbox got exactly `echo via-root`; it now asserts the command is carried and starts with it. The intent (it goes through the sandbox, not the host) is unchanged.
 - Not covered: `POST /api/bash` (REST) calls `sandbox.run` directly and does not report masked stages.
 - Meta-lesson, repeated in this very session: our own tooling reported `exit code 0` from `cmd | tail` and from `(script; echo exit=$?) ; tail`. Read the real status from a file or `${pipestatus[1]}`, never from a pipeline's end.
+
+## rate limits: two retry layers multiplied into nine requests (2026-10-06)
+
+- **Symptom (user's REPL, OpenRouter 429):** one message produced three groups of "Transient status 429 on attempt 1/3, 2/3" in `.agent/runtime.log`, then "after 3 attempts". The timestamps showed the structure: `guarded_provider_stream` (3 rounds) around `hardened_post` (3 requests per round) is up to 9 requests in ~20 s, against an endpoint that was already throttling.
+- **Two retry layers over the same status is a multiplier, not a safety margin.** Pick one owner. The stream owns statuses (it knows the turn, cancellation and the server's advice); `hardened_post` keeps transport errors, which nothing above can tell from a stall. The new `retry_status` parameter defaults to the old behaviour, so only the provider changes.
+- **A 429 is a window, not a blip.** Retries 1-2 s apart cannot outlast a minute-long limit; they add load and delay nothing useful. Space them in seconds, and read `Retry-After` (never read before; neither layer looked at response headers).
+- **Do not sleep through unbounded advice, and do not ignore it.** Over the 30 s cap the stream stops at once and says how long the server asked for.
+- **A message that counts attempts must count requests.** "after 3 attempts" was nine requests.
+- **Mutation probes found a pattern that matched two loops** (`hardened_post` and `hardened_get` share a retry shape): a replace-first on a verified range is safer than loosening the assertion.
+- **Not the user's config or the model's fault to fix here:** the route (`inclusionai/ling-3.1-flash` on OpenRouter) was rate-limiting; switching with `/provider nvidia <model>` works since PR 92.
