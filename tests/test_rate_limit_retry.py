@@ -152,13 +152,24 @@ async def _run(open_stream, max_attempts: int = 3) -> list[dict[str, Any]]:
     return out
 
 
+class _AsyncioWithRecordingSleep:
+    """`provider_stream`'s view of `asyncio`, with only `sleep` replaced. Patching `asyncio.sleep` on the real module records EVERY coroutine's sleep in the
+    process (a leaked background task in another loop or thread sleeping 0.02 s landed in `waits` and failed the full CI run, not the file alone)."""
+
+    def __init__(self, recorded: list[float]) -> None:
+        self._recorded = recorded
+
+    async def sleep(self, seconds: float) -> None:
+        self._recorded.append(seconds)
+
+    def __getattr__(self, name: str):
+        return getattr(asyncio, name)
+
+
 @pytest.fixture
 def waits(monkeypatch):
     recorded: list[float] = []
-
-    async def fake_sleep(seconds: float) -> None:
-        recorded.append(seconds)
-    monkeypatch.setattr(PS.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(PS, "asyncio", _AsyncioWithRecordingSleep(recorded))
     monkeypatch.setattr(PS.random, "uniform", lambda a, b: b)  # worst-case jitter: bounds are checked exactly
     return recorded
 
@@ -264,4 +275,31 @@ async def test_the_whole_path_honours_retry_after_from_the_http_response(waits):
     provider = _provider()
     with patch("requests.post", return_value=_HttpResp(429, {"Retry-After": "4"})) as post:
         await _run(lambda: provider.generate_stream_events_async("sys", [{"role": "user", "content": "hi"}]))
+    assert post.call_count == 3 and waits == [5.0, 5.0]
+
+
+@pytest.mark.asyncio
+async def test_sleeps_from_other_loops_and_threads_are_not_recorded_as_retry_waits(waits):
+    """Regression: a task sleeping in ANOTHER loop/thread while the retry runs must not appear in `waits`."""
+    import threading
+    import time
+
+    stop = threading.Event()
+
+    def other_loop() -> None:
+        async def poll() -> None:
+            while not stop.is_set():
+                await asyncio.sleep(0.02)
+        asyncio.run(poll())
+
+    thread = threading.Thread(target=other_loop, daemon=True)
+    thread.start()
+    try:
+        provider = _provider()
+        with patch("requests.post", return_value=_HttpResp(429, {"Retry-After": "4"})) as post:
+            await _run(lambda: provider.generate_stream_events_async("sys", [{"role": "user", "content": "hi"}]))
+        time.sleep(0.2)
+    finally:
+        stop.set()
+        thread.join(2)
     assert post.call_count == 3 and waits == [5.0, 5.0]
