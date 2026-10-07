@@ -87,6 +87,58 @@ The first run of `verify5.py` failed with `ModuleNotFoundError: No module named 
 
 **Gate cleared (2026-10-07): #3 confirmed, #4 confirmed, #5 mostly refuted.** Still open: the leftover-children part of #4 (a backgrounded `run_bash` child, hooks, MCP servers; not run). Next is the design of #1 (one launcher) and #2 (provenance) with these findings: the launcher must give `run_tests` the same credential-free environment and interpreter resolution as `run_bash`, always passes `-P`, does not force a hash seed, and the process registry (#4) must include sandbox containers.
 
+## The four open concerns, verified (2026-10-07)
+
+Experiments: `v_floor.py` (real engine turns, scripted model), `v_docker.py` (real Docker tier), `v_children.py` (separate processes, unique `sleep 43NN` markers, only those killed), `v_naivefix.py` (throwaway venvs). All with a throwaway `HOME` except the Docker one (needs the real Docker context; it removed only the container it created: 66 before, 66 after).
+
+### 1. Does the verification floor accept `run_tests`? YES, and the prompt steers models to it
+
+| scripted turn (real engine) | provider rounds | floor nudges | reading |
+|---|---|---|---|
+| A. write, `run_tests` passes (only under Wisp's python), finish | 3 | **0** | the floor accepts a false pass |
+| B. write, finish | 4 | 2 | the floor is active |
+| C. write, `run_bash pytest` **fails**, `run_tests` passes, finish | 4 | **0** | a `run_tests` pass overrides an earlier failed `run_bash` verification |
+| D. write, `run_tests` **fails**, finish | 5 | 2 | a red `run_tests` is not recorded as failure, but the floor still blocks finishing |
+
+- Code: `VerificationFloorGuard.note_tool_result` has a `run_tests` branch that sets `verify_ok_after_edit = True` on a green summary (`core/verification.py`).
+- **The system prompt steers models to `run_tests`**: rule 7 ("bare `python3` may not exist where commands execute ... verify through `run_tests`/`lsp_diagnostics`") and the Verification loop ("run verification with ... `run_tests` or `lsp_diagnostics`"), `context_assembler.py`. So the path with the false pass, the host execution and the visible API key is the path the prompt recommends.
+- **Not measured: how often real models call it.** No transcripts were read; the live-run harness did not record tool calls. The prompt's wording is the only evidence of intent.
+
+### 2. The Docker tier is a third interpreter, and it cannot run pytest by default
+
+On the Docker tier `python` is the container's `/usr/local/bin/python` 3.12.14 on Linux, and `python -m pytest` fails with **`No module named pytest`** (the default image `python:3.12-slim` has none). So when Docker is reachable (the default here), `run_bash` cannot run a project's tests at all unless `WISP_SANDBOX_IMAGE` is overridden. The prompt's rule 7 then pushes the model to `run_tests`, which runs **on the host, outside the sandbox, with Wisp's interpreter and environment**. The sandbox's protections do not cover the test-running path the prompt recommends.
+
+### 3. Leftover children: YES in four cases, clean in two
+
+| scenario | result |
+|---|---|
+| `run_bash "sleep N &"` on the host tier, then the process exits | **LEFTOVER** |
+| same on the PTY tier | **LEFTOVER** |
+| async hook (`_arun_one_hook`) that times out | **LEFTOVER**: the code returns "Hook timed out" and never kills the process (`asyncio.wait_for` cancels the wait, not the child) |
+| sync hook, single command, times out | clean (killed) |
+| sync hook, compound command (`a & b`), times out | **LEFTOVER**: `subprocess.run(timeout=)` kills the shell, not its children |
+| MCP server held by the global manager, normal exit | clean (`atexit` shutdown works) |
+| MCP server held by a non-global `MCPManager`, normal exit | **LEFTOVER** (still alive after the harness's 120 s timeout; it also held the harness's output pipe open) |
+
+Not exercised: the LSP client (needs a server that speaks the protocol; the code has `shutdown()` and no `atexit`, read not run), and abnormal exits (SIGKILL of the parent). A backgrounded `run_bash` child outliving its call is arguably intended (`nohup`-style); it is still unowned and unreported. Strays from this experiment: 0 after cleanup.
+
+### 4. What a naive fix of #3 would break
+
+| check | result |
+|---|---|
+| (a) the plugin flags | `run_tests` adds `--json-report` when `pytest_jsonreport` imports in **Wisp's** process; run under another interpreter that lacks it, pytest exits **rc 4, `unrecognized arguments`**. Not hit today (Wisp's env has no `pytest_jsonreport`, so the plain path always runs), but any swap must detect plugins in the **target** interpreter |
+| (b) no pytest in the interpreter that runs it (a user who installed wisp without `[dev]`: pytest is **only** in the `dev` extra) | `run_tests` reports **`Test Results (0/0 passed) - Failed: 0, Errors: 0`**: a silent, empty result with no "No module named pytest" message. A usability bug in the current tool, independent of the fix |
+| (c) an async-test project whose venv lacks `pytest-asyncio` (Wisp's env has it) | passes under Wisp's interpreter, **fails under the project's** (`async def functions are not natively supported`): the fix converts this false pass into a failure, which is correct but must be explained to the model |
+| (d) `_put_venv_first` | recognises only `<workspace>/.venv`; `venv/`, poetry, uv-managed and conda environments elsewhere are not found, so a "project interpreter" resolver is more than a one-line change |
+
+### Still unverified after this pass
+
+How often real models call `run_tests`; the LSP leftover; abnormal-exit behaviour of hooks and MCP; `wisp doctor` coverage of strays; whether `_put_venv_first` is the only environment detection.
+
+### New ideas from these results
+
+12. Kill a timed-out hook's whole process group (sync and async). 13. Make `run_tests` report "pytest not found" instead of a silent 0/0. 14. Decide what the Docker tier does about pytest (an image with pytest, or run verification in the container with the project's own environment, or label `run_tests` as host-unsandboxed in its result). 15. Clean up non-global MCP managers at exit.
+
 ## Constraints
 
 Standing rules apply: no experiment may print `.env` contents, push, or delete containers or processes it did not start. Experiments run in throwaway directories with a throwaway `HOME`. Mutation-probe and CI-parity rules (`.agents/skills/mutation-probe`, `.agents/skills/ci-parity-before-push`) apply to whatever gets built afterwards.
