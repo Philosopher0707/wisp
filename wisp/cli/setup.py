@@ -97,6 +97,41 @@ def _ollama_models(base_url: str) -> list[str]:
         return []
 
 
+_PROBE_SYSTEM = "You are a connectivity probe."
+_PROBE_MESSAGES = [{"role": "user", "content": "Reply with exactly: ok"}]
+
+
+def _handshake(provider: Any) -> None:
+    """One tiny request; raises on any failure.
+
+    Only the mock and Ollama providers define `generate`. The keyed providers (OpenAI, OpenRouter, NVIDIA) expose
+    `generate_stream_events` only, so calling `generate` made the handshake die with an AttributeError for every one of
+    them and the wizard always fell through to "save anyway". The stream is read until the first sign of life and then
+    closed, so a probe never pays for a whole completion.
+    """
+    generate = getattr(provider, "generate", None)
+    if callable(generate):
+        generate(_PROBE_SYSTEM, _PROBE_MESSAGES)
+        return
+
+    from wisp.core.events import canonical_event
+
+    stream = provider.generate_stream_events(_PROBE_SYSTEM, _PROBE_MESSAGES)
+    try:
+        for raw in stream:
+            event = canonical_event(raw)
+            kind = event.get("type")
+            if kind == "error":
+                raise RuntimeError(str(event.get("message") or event.get("error") or "provider reported an error"))
+            if kind in ("content", "thinking", "tool_call", "tool_calls", "done"):
+                return
+        raise RuntimeError("no response from the provider (the stream ended empty)")
+    finally:
+        close = getattr(stream, "close", None)
+        if callable(close):
+            close()
+
+
 def _probe(provider_name: str, model: str, api_key: str, api_base: str,
            timeout_s: float = PROBE_TIMEOUT_S) -> tuple[bool, str]:
     """Tiny completion handshake in a worker thread (bounded by timeout).
@@ -129,10 +164,7 @@ def _probe(provider_name: str, model: str, api_key: str, api_base: str,
                 except Exception:
                     pass
             provider = ProviderFactory().from_config(cfg)
-            provider.generate(
-                "You are a connectivity probe.",
-                [{"role": "user", "content": "Reply with exactly: ok"}],
-            )
+            _handshake(provider)
             result["ok"] = True
             result["detail"] = "handshake ok"
         except Exception as exc:  # noqa: BLE001 — mapped below, never raised
@@ -152,6 +184,10 @@ def _probe(provider_name: str, model: str, api_key: str, api_base: str,
 def _classify_probe_error(exc: Exception) -> str:
     text = f"{type(exc).__name__}: {exc}"
     lowered = text.lower()
+    # Billing first: a 402 body says the provider "refused" the request, which the connectivity test below would misread as
+    # "unreachable" and send the user to check their network instead of their credit.
+    if "402" in lowered or "payment required" in lowered or "more credits" in lowered or "out of credit" in lowered:
+        return f"out of credit or key limit too low — {text[:160]}"
     if "401" in lowered or "unauthorized" in lowered or "invalid api key" in lowered:
         return f"unauthorized (bad key?) — {text[:160]}"
     if "403" in lowered or "forbidden" in lowered:
@@ -184,7 +220,24 @@ def run_setup(input_fn: Callable[[str], str] | None = None,
               probe_fn: Callable[..., tuple[bool, str]] | None = None,
               ) -> dict[str, Any] | None:
     """Run the interactive wizard. Returns the saved config summary, or
-    None when aborted. Injected I/O keeps this unit-testable."""
+    None when aborted. Injected I/O keeps this unit-testable.
+
+    Ctrl-C and Ctrl-D at any prompt (including the hidden key prompt and the validation handshake) are an abort,
+    not a crash: nothing has been written by then, because the choice is persisted only after the last step.
+    """
+    try:
+        return _run_wizard(input_fn, password_fn, out, probe_timeout, probe_fn)
+    except (KeyboardInterrupt, EOFError):
+        (out or print)("\nSetup cancelled. Nothing was saved. Re-run `wisp setup` any time.")
+        return None
+
+
+def _run_wizard(input_fn: Callable[[str], str] | None,
+                password_fn: Callable[[str], str] | None,
+                out: Callable[[str], None] | None,
+                probe_timeout: float,
+                probe_fn: Callable[..., tuple[bool, str]] | None,
+                ) -> dict[str, Any] | None:
     import builtins
 
     _in = input_fn or builtins.input

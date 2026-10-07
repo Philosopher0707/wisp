@@ -88,7 +88,7 @@ ROWS: list[tuple[str, str, str, str, str, str, str, str]] = [
 
     # ── The verification loop ───────────────────────────────────────────────
     ("verification_loop", "WISP_VERIFICATION_LOOP", "ON",
-     "`wisp/core/stateless.py:524`, `wisp/core/stateless.py:1360`",
+     "`wisp/core/stateless.py:525`, `wisp/core/stateless.py:1415`",
      "require an exit-0 verification after code edits before a turn may complete",
      "—", "ADR-0016", "—"),
 

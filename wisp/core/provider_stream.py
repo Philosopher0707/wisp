@@ -114,6 +114,11 @@ def passthrough_if_canonical(event: Any) -> dict[str, Any]:
     return canonical_event(event)
 
 
+#: The longest pause this client will sit through on a server's say-so. A server asking for more is told "try again in ~N seconds"
+#: at once: sleeping through it would look like a hang, and retrying sooner would only be refused again.
+MAX_RETRY_AFTER_S = 30.0
+
+
 async def guarded_provider_stream(
     open_stream: Callable[[], Any],
     normalize_event: Callable[[Any], dict[str, Any]],
@@ -139,7 +144,9 @@ async def guarded_provider_stream(
     """
     last_transient_status: int | None = None
     last_transient_error: BaseException | None = None
+    last_retry_after: float | None = None
     for attempt in range(1, max_attempts + 1):
+        retry_after_hint: float | None = None
         got_meaningful = False
         saw_terminal = False
         stream_stats: dict[str, Any] | None = None
@@ -229,6 +236,10 @@ async def guarded_provider_stream(
                             _is_trans = isinstance(st, int) and (st == 429 or st >= 500)
                         if _is_trans:
                             api_status = st if isinstance(st, int) else 500
+                            advised = normalized.get("retry_after")
+                            if isinstance(advised, (int, float)) and not isinstance(advised, bool) and advised >= 0:
+                                retry_after_hint = float(advised)
+                                last_retry_after = retry_after_hint
                             continue  # transient — hold it for the retry path
                         yield event
                         return  # permanent API error: surface immediately
@@ -361,18 +372,33 @@ async def guarded_provider_stream(
             # 429/5xx and socket write timeouts get progressively longer
             # waits — the server explicitly told us to slow down or the
             # socket needs time to recover.
-            if transient_error is not None:
-                base = 1.0 * attempt
-            elif api_status is not None:
-                base = 1.5 * attempt
-            elif not stalled:
-                base = 0.75
+            if api_status is not None and retry_after_hint is not None:
+                # The server said how long. Honour it (with a second of jitter so parallel clients do not return together),
+                # unless it is longer than we will wait: then say so and stop, rather than sleep silently or be refused again.
+                if retry_after_hint > MAX_RETRY_AFTER_S:
+                    yield _flatten_event(error_event(
+                        f"Provider rate limited (HTTP {api_status}): the server asked to wait {retry_after_hint:.0f}s, longer "
+                        f"than the {MAX_RETRY_AFTER_S:.0f}s this client will wait for. Try again in about {retry_after_hint:.0f}s.",
+                        recoverable=True,
+                    ))
+                    return
+                wait_s = max(retry_after_hint + random.uniform(0, 1.0), 1.0)
             else:
-                base = 0.0
-            # Random jitter over the same 0–1.5s range (replaces the old
-            # deprecated loop-clock derivation, which was deterministic-ish).
-            jitter = random.uniform(0, 1.5)
-            wait_s = base + jitter
+                if transient_error is not None:
+                    base = 1.0 * attempt
+                elif api_status == 429:
+                    # A rate limit is a window, not a blip. Retries a second or two apart cannot outlast it and only add load, so
+                    # they are spaced in seconds (the inner layer no longer retries statuses, so the total stays near ten seconds).
+                    base = 3.0 * attempt
+                elif api_status is not None:
+                    base = 1.5 * attempt
+                elif not stalled:
+                    base = 0.75
+                else:
+                    base = 0.0
+                # Random jitter over the same 0–1.5s range (replaces the old
+                # deprecated loop-clock derivation, which was deterministic-ish).
+                wait_s = base + random.uniform(0, 1.5)
             if wait_s > 0:
                 logger.info(
                     "Provider retry backoff %.1fs (status=%s)",
@@ -382,9 +408,11 @@ async def guarded_provider_stream(
             continue
 
         if last_transient_status is not None:
+            advice = (f" The server asked for a pause of about {last_retry_after:.0f}s."
+                      if last_retry_after is not None else "")
             yield _flatten_event(error_event(
                 f"Provider kept rejecting requests (HTTP {last_transient_status}) "
-                f"after {max_attempts} attempts — rate limited or degraded. "
+                f"after {max_attempts} attempts — rate limited or degraded.{advice} "
                 "Try again shortly.",
                 recoverable=True,
             ))

@@ -436,7 +436,10 @@ wisp/
 │   ├── runtime.py           # AgentRuntime
 │   ├── session.py           # Session models
 │   ├── compaction.py        # Compactor
-│   └── approval_gate.py     # ApprovalGate
+│   ├── approval_gate.py     # ApprovalGate
+│   ├── tool_result_guard.py # withhold injected results; scrub secrets before the model sees them
+│   ├── verification.py      # VerificationFloorGuard (uses gates.verify to decide what counts as verification)
+│   └── gates/               # deterministic invariant gates: shellparse, invocations, commands, paths, secrets, deps, verify, gate
 ├── transport/
 │   ├── __init__.py
 │   ├── base.py              # Transport ABC
