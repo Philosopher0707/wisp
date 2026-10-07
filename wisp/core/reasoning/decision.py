@@ -55,6 +55,11 @@ class Modes:
         return dict(self.overrides).get(rule, self.default)
 
 
+# What an operator who sets nothing gets: the two rules the owner chose to enforce (2026-10-07); R2 and R3 are decision-only and stay observed.
+# Any explicit `reasoning_core` or `reasoning_core_rules` setting replaces this list, so `WISP_REASONING_CORE=observe` or `off` is the kill switch.
+DEFAULT_ENFORCED_RULES = "R1=enforce,R4=enforce"
+
+
 def parse_modes(default: object, rules: object = "") -> Modes:
     """`rules` is `R1=enforce,R4=observe`. An unknown rule is ignored; an unknown mode for a known rule is OBSERVE (RC13): neither a typo
     nor a stray token can make a rule more intrusive than the operator wrote."""

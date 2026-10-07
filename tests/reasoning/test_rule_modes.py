@@ -53,9 +53,47 @@ class TestConfig:
         c = WispConfig()
         assert c.reasoning_core == "observe" and c.reasoning_core_rules == "R1=observe,R4=enforce"
 
-    def test_unset_means_no_overrides(self, monkeypatch):
+    @pytest.fixture
+    def unset(self, monkeypatch):
+        monkeypatch.delenv("WISP_REASONING_CORE", raising=False)
         monkeypatch.delenv("WISP_REASONING_CORE_RULES", raising=False)
-        assert WispConfig().reasoning_core_rules == ""
+        monkeypatch.setattr("wisp.config.load_config", lambda: {})
+
+    def test_unset_enforces_r1_and_r4_and_observes_the_rest(self, unset):
+        c = WispConfig()
+        m = parse_modes(c.reasoning_core, c.reasoning_core_rules)
+        assert (m.for_rule("R1"), m.for_rule("R4")) == (Mode.ENFORCE, Mode.ENFORCE)
+        assert (m.for_rule("R2"), m.for_rule("R3")) == (Mode.OBSERVE, Mode.OBSERVE) and c.reasoning_core == "observe"
+
+    def test_the_default_list_is_the_single_constant(self, unset):
+        from wisp.core.reasoning.decision import DEFAULT_ENFORCED_RULES
+
+        assert WispConfig().reasoning_core_rules == render_modes(parse_modes("observe", DEFAULT_ENFORCED_RULES))
+
+    @pytest.mark.parametrize("core,expected", [("observe", Mode.OBSERVE), ("off", Mode.OFF), ("enforce", Mode.ENFORCE)])
+    def test_an_explicit_global_mode_is_the_kill_switch(self, unset, monkeypatch, core, expected):
+        monkeypatch.setenv("WISP_REASONING_CORE", core)
+        c = WispConfig()
+        m = parse_modes(c.reasoning_core, c.reasoning_core_rules)
+        assert {m.for_rule(r) for r in ("R1", "R2", "R3", "R4")} == {expected}
+
+    def test_an_explicit_empty_rules_setting_means_no_overrides(self, unset, monkeypatch):
+        monkeypatch.setenv("WISP_REASONING_CORE_RULES", "")
+        c = WispConfig()
+        assert c.reasoning_core_rules == "" and parse_modes(c.reasoning_core, c.reasoning_core_rules).for_rule("R4") is Mode.OBSERVE
+
+    def test_explicit_rules_replace_the_default_list(self, unset, monkeypatch):
+        monkeypatch.setenv("WISP_REASONING_CORE_RULES", "R4=observe")
+        c = WispConfig()
+        m = parse_modes(c.reasoning_core, c.reasoning_core_rules)
+        assert (m.for_rule("R4"), m.for_rule("R1")) == (Mode.OBSERVE, Mode.OBSERVE)
+
+    def test_the_config_file_is_an_explicit_setting_too(self, monkeypatch):
+        monkeypatch.delenv("WISP_REASONING_CORE", raising=False)
+        monkeypatch.delenv("WISP_REASONING_CORE_RULES", raising=False)
+        monkeypatch.setattr("wisp.config.load_config", lambda: {"reasoning_core": "off"})
+        c = WispConfig()
+        assert parse_modes(c.reasoning_core, c.reasoning_core_rules).for_rule("R4") is Mode.OFF
 
 
 class TestRuntimePerRule:
