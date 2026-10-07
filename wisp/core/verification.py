@@ -69,6 +69,9 @@ SHORT_REPEAT_NUDGE = (
     "cannot verify, say the work is UNVERIFIED instead of claiming success."
 )
 
+#: Reserved key in the `args` digest that carries the full verify-tool command (see `note_tool_result`).
+COMMAND_ARG = "__command__"
+
 # Tool names that mutate code (legacy 42-tool surface + thin primitives).
 _MUTATING_TOOLS = frozenset({"write_file", "edit_file", "edit_file_multi", "fs_mutate"})
 # Tool names whose exit status counts as verification evidence.
@@ -137,10 +140,19 @@ class VerificationFloorGuard:
 
     def note_tool_result(self, name: str, result_text: str,
                          args: dict[str, str] | None = None) -> None:
-        """Fold one tool outcome into the gate. Call for every tool_result."""
+        """Fold one tool outcome into the gate. Call for every tool_result.
+
+        `args[COMMAND_ARG]` is the full, untruncated shell command behind a verify-tool result (the digest elides long values).
+        When present, the result counts as verification only if
+        the command ran a recognised test/lint/type-check/build tool whose exit status decides the command's result
+        (wisp.core.gates.verify): `true`, `pytest || true` and `pytest | tail` exit 0 on broken code and prove nothing. A
+        failing result is recorded as a failure either way. Callers without it (tests, legacy) keep the old behaviour. It rides
+        in `args` so the signature, pinned by spies in the test suite, stays `(name, result_text, args)`.
+        """
         self.turns_used += 1
+        command = (args or {}).get(COMMAND_ARG)
         if args is not None:
-            self.steps.append((name, dict(args)))
+            self.steps.append((name, {k: v for k, v in args.items() if k != COMMAND_ARG}))
         if name in _MUTATING_TOOLS:
             # fs_mutate reads must not count as mutations.
             if name == "fs_mutate" and (args or {}).get("op") == "read":
@@ -148,6 +160,15 @@ class VerificationFloorGuard:
             self.wrote_code = True
             self.verify_ok_after_edit = None  # prior evidence is stale now
         elif name in _VERIFY_TOOLS:
+            if command is not None:
+                from wisp.core.gates.verify import classify
+
+                if not classify(command).ok:
+                    # Asymmetric on purpose: a failure is always evidence of trouble, but a pass from a command that proves
+                    # nothing (`true`, `pytest || true`) must never manufacture verification.
+                    if not _verify_result_is_success(result_text):
+                        self.verify_ok_after_edit = False
+                    return
             self.verify_ok_after_edit = _verify_result_is_success(result_text)
         elif name == "run_tests":
             if _run_tests_is_evidence(result_text):

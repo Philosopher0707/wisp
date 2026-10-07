@@ -30,6 +30,7 @@ from wisp.core.events import (
     CODE_TURN_TIMEOUT,
     CODE_PROVIDER_STREAM,
     CODE_ITERATION_BUDGET,
+    DENIAL_POLICY_DENIED,
     DENIAL_SCHEMA_INVALID,
     AgentEvent,
     canonical_event,
@@ -961,6 +962,9 @@ class WispAgentCore:
                                 withhold_if_injected,
                             )
                             result_event = withhold_if_injected(result_event)
+                            if self._invariant_gate_mode().value != "off":
+                                from wisp.core.tool_result_guard import scrub_secrets
+                                result_event = scrub_secrets(result_event)
                             tool_results_events.append(result_event)
                         yield result_event
                         # Verification-floor tracking: fold every tool outcome
@@ -999,9 +1003,12 @@ class WispAgentCore:
                                 t_out = str(t_out)
                             t_args = _call_args_by_id.get(
                                 result_event.get("tool_call_id", ""), {})
-                            guard.note_tool_result(
-                                t_name, t_out,
-                                _digest_args(t_args) if isinstance(t_args, dict) else {})
+                            g_args = _digest_args(t_args) if isinstance(t_args, dict) else {}
+                            t_cmd = t_args.get("command") if isinstance(t_args, dict) else None
+                            if isinstance(t_cmd, str) and self._invariant_gate_mode().value != "off":
+                                from wisp.core.verification import COMMAND_ARG
+                                g_args[COMMAND_ARG] = t_cmd
+                            guard.note_tool_result(t_name, t_out, g_args)
 
             # Append assistant + tool messages to continue the conversation
             assistant_msg: dict[str, Any] = {"role": "assistant", "content": "".join(partial_content)}
@@ -2551,6 +2558,19 @@ class WispAgentCore:
                 tc_event["_denial"] = "SCHEMA_INVALID"
             return
 
+        # Invariant gates (paths, commands, dependency lock): deterministic and not overridable by approval, so they run BEFORE
+        # a human is asked. A refusal rides the existing POLICY_DENIED status, with its own `_src` so it is audited once.
+        invariant = self._invariant_gate_decision(
+            name, tc_event.get("arguments", {}), session)
+        if invariant is not None and invariant.violations:
+            if invariant.allowed:
+                logger.warning("invariant gate (observe only) would refuse %s: %s", name, invariant.render())
+            else:
+                tc_event["_blocked"] = invariant.render()
+                tc_event["_denial"] = DENIAL_POLICY_DENIED
+                tc_event["_src"] = "invariant_gate"
+                return
+
         gate = self._get_approval_gate()
         gdec = await gate.check_decision(
             tc_event, session, approval_handler=approval_handler)
@@ -2571,6 +2591,27 @@ class WispAgentCore:
                 logger.exception(
                     "Extension intercept failed — treating as deny: %s", e)
                 tc_event["_blocked"] = f"extension intercept failed: {e}"
+
+    def _invariant_gate_mode(self) -> Any:
+        from wisp.core.gates import parse_mode
+
+        return parse_mode(getattr(self.config, "invariant_gates", "enforce"))
+
+    def _invariant_gate_decision(self, name: str, args: Any, session: dict[str, Any]) -> Any:
+        """The deterministic gates' verdict on one tool call, or None when they are switched off."""
+        from wisp.core.gates import GateContext, GateMode, check_tool_call, parse_lock
+
+        mode = self._invariant_gate_mode()
+        if mode is GateMode.OFF:
+            return None
+        ctx = GateContext(
+            workspace=str(session.get("workspace") or "."),
+            home=os.path.expanduser("~"),
+            mode=mode,
+            deps_locked=parse_lock(getattr(self.config, "dependency_lock", "locked")),
+            extra_write_roots=tuple(getattr(self.config, "gate_write_roots", ()) or ()),
+        )
+        return check_tool_call(name, args, ctx, mutating=risk_for_tool(name) != ToolRisk.READ)
 
     def _get_approval_gate(self) -> ApprovalGate:
         """Lazily create the approval gate from current security policy."""

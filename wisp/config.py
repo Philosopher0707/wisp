@@ -116,6 +116,24 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
         "description": "Built-in tools offered to the model: core (8 core tools + grep, glob, rewind) | full (every built-in). Offer only: hidden tools stay callable and role subagents with explicit tool lists are unaffected. Rollback: full.",
         "env_var": "WISP_TOOL_PROFILE",
     },
+    "invariant_gates": {
+        "type": str,
+        "default": "enforce",
+        "description": "Deterministic harness gates (paths, commands, secrets, dependency lock) applied before every tool call and to every tool result: enforce | observe (log, never block) | off. A typo means enforce. See docs/harness/invariant-gates.md.",
+        "env_var": "WISP_INVARIANT_GATES",
+    },
+    "dependency_lock": {
+        "type": str,
+        "default": "locked",
+        "description": "locked (default): no command or file write may add or change a dependency or manifest. `unlocked` is the only value that opens it; anything else stays locked. Set by the operator, never by a tool argument.",
+        "env_var": "WISP_DEPENDENCY_LOCK",
+    },
+    "gate_write_roots": {
+        "type": str,
+        "default": "",
+        "description": "Extra directories (os.pathsep-separated) the path gate treats as writable besides the workspace.",
+        "env_var": "WISP_GATE_WRITE_ROOTS",
+    },
     "unattended_auto_approve_tools": {
         "type": str,
         "default": "",
@@ -857,6 +875,9 @@ class WispConfig:
     # ── Modes & permissions ───────────────────────────────────────
     permission_mode: PermissionMode | str
     tool_profile: str
+    invariant_gates: str
+    dependency_lock: str
+    gate_write_roots: tuple[str, ...]
     unattended_auto_approve_tools: tuple[str, ...]
     capability_filtering: bool
     plan_mode: bool
@@ -1005,6 +1026,13 @@ class WispConfig:
         from wisp.tools.profile import DEFAULT_PROFILE, parse_profile
 
         object.__setattr__(self, "tool_profile", parse_profile(get_setting("tool_profile", DEFAULT_PROFILE)))
+        # Harness gates: a typo or an unknown value is the strictest setting (enforce / locked), never a weaker one.
+        from wisp.core.gates.gate import parse_lock, parse_mode
+
+        object.__setattr__(self, "invariant_gates", parse_mode(get_setting("invariant_gates", "enforce")).value)
+        object.__setattr__(self, "dependency_lock", "locked" if parse_lock(get_setting("dependency_lock", "locked")) else "unlocked")
+        object.__setattr__(self, "gate_write_roots", tuple(
+            r.strip() for r in str(get_setting("gate_write_roots", "") or "").split(os.pathsep) if r.strip()))
         object.__setattr__(self, "unattended_auto_approve_tools", tuple(
             t.strip() for t in str(get_setting("unattended_auto_approve_tools", "") or "").split(",") if t.strip()))
         # Plan mode: agent plans only, no tool execution
