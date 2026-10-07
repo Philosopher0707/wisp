@@ -22,7 +22,7 @@
 > `—` therefore means *no catch inside these roots*, which is **not** the same claim as
 > *unhandled* — see §(c).
 >
-> Generated 2026-09-30 at `ff42fcf` · **50 classes** · **282 raise sites** · **52 catch sites** · **7 with no test naming them**.
+> Generated 2026-09-30 at `672e057` · **50 classes** · **282 raise sites** · **52 catch sites** · **7 with no test naming them**.
 
 ---
 
@@ -35,7 +35,7 @@
 | `ApprovalTimeout` | `Exception` | verdict | approval | `wisp/exceptions.py:33` | 1 | `wisp/transport/cli.py:910` | `wisp/core/approval_gate.py:127`, `wisp/tool_executor.py:895` | — |
 | `_TransientOpenError` | `Exception` | recoverable | provider | `wisp/core/provider_stream.py:40` | 1 | `wisp/core/provider_stream.py:174` | `wisp/core/provider_stream.py:278` | — |
 | `FirstTokenTimeout` | `asyncio.TimeoutError` | recoverable | subagent | `wisp/multi_agent/_runner.py:168` | 1 | `wisp/multi_agent/_runner.py:662` | `wisp/multi_agent/_runner.py:433`, `wisp/multi_agent/_runner.py:736`, `wisp/multi_agent/_runner.py:903` | — |
-| `CircuitOpenError` | `Exception` | recoverable | provider | `wisp/infra/circuit_breaker.py:175` | 2 | `wisp/infra/circuit_breaker.py:93` | `wisp/core/stateless.py:1276` | — |
+| `CircuitOpenError` | `Exception` | recoverable | provider | `wisp/infra/circuit_breaker.py:175` | 2 | `wisp/infra/circuit_breaker.py:93` | `wisp/core/stateless.py:1324` | — |
 | `CircuitBreakerOpenError` | `Exception` | recoverable | subagent | `wisp/multi_agent/_circuit_breaker.py:102` | 1 | `wisp/multi_agent/_circuit_breaker.py:44` | — | — |
 | `OllamaError` | `Exception` | recoverable | provider | `wisp/ollama_client.py:46` | 10 | `wisp/ollama_client.py:273` | `wisp/ollama_client.py:288`, `wisp/ollama_client.py:427` | — |
 | `OllamaConfigurationError` | `OllamaError` | recoverable | provider | `wisp/ollama_client.py:72` | 2 | `wisp/ollama_client.py:347` | — | ADR-0038 |

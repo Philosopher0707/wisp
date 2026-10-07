@@ -138,7 +138,7 @@ def check_command(command: str, ctx: GateContext) -> tuple[Violation, ...]:
             if problem:
                 found.append(Violation("path", "OUTSIDE_WORKSPACE", f"{target.via}: {problem}"))
             elif ctx.deps_locked and target.via not in ("source", ".", "git") and is_manifest_path(target.word.text):
-                found.append(Violation("dependency", "MANIFEST_LOCKED", f"{target.via} would change {posixpath.basename(target.word.text)}, a dependency manifest"))
+                found.append(Violation("dependency", "MANIFEST_LOCKED", f"{target.via} would change {posixpath.basename(target.word.text)}, a dependency manifest or protected project file"))
         found += _network_violations(inv)
     return _unique(found)
 
@@ -153,7 +153,7 @@ def check_tool_args(name: str, args: dict[str, object], ctx: GateContext) -> tup
         if problem:
             found.append(Violation("path", "OUTSIDE_WORKSPACE", f"{name} {key}: {problem}"))
         elif ctx.deps_locked and is_manifest_path(value):
-            found.append(Violation("dependency", "MANIFEST_LOCKED", f"{name} would change {posixpath.basename(value)}, a dependency manifest"))
+            found.append(Violation("dependency", "MANIFEST_LOCKED", f"{name} would change {posixpath.basename(value)}, a dependency manifest or protected project file"))
     return _unique(found)
 
 
