@@ -6,14 +6,16 @@ Status: **notes, 2026-10-07. Nothing here is built.** Owner decision: **verify #
 
 | # | Idea | Evidence | State |
 |---|---|---|---|
-| 1 | One launcher for every child interpreter (`wisp/proc/launch.py`: pins `sys.executable`, `-P`, the running package's path, credential-free env, a cwd that is never the workspace; an AST test lets only the launcher start `sys.executable` children) | **Verified:** 7 files build child Python commands separately (`benchmark/swebench.py`, `benchmark/tasks.py`, `test_runner.py` x3, `judge/core.py` x2, `__main__.py`, `wisp_net/evaluation.py`) with different env, cwd and path policy | accepted, waits on #3-#5 |
-| 2 | Provenance, "which wisp am I": version/doctor/judge verdict report interpreter, Python version, package root, git SHA, dirty flag; live and judge runs fail closed if the child's root is not the expected checkout | **Verified:** the venv's `wisp` imported `~/dev/wisp` (the owner's checkout), so a live run would have silently tested old code; the global command lags `origin/main` | accepted, waits on #3-#5 |
-| 3 | Project-interpreter resolution and attestation (one resolver for run_bash PATH, run_tests, judge and the verification floor; the ledger records which interpreter ran each verification) | **From the code, not run:** `wisp/test_runner.py` uses `sys.executable` (Wisp's own interpreter) while `run_bash` puts the workspace venv first | **TO VERIFY** |
-| 4 | Process registry and reaper for ALL harness children (tiers, hooks, MCP servers, subagents, containers), reported by `wisp doctor` | **Verified count:** 66 exited `wisp-sandbox-*` containers (55 on `python:3.12-slim`, 11 on `wisp-sandbox:py312`); **cause read, not proven:** `DockerSandbox` starts one container per instance and I found no removal | **TO VERIFY** |
+| 1 | One launcher for every child interpreter (`wisp/proc/launch.py`: pins `sys.executable`, `-P`, the running package's path, credential-free env, a cwd that is never the workspace; an AST test lets only the launcher start `sys.executable` children) | **Verified:** 7 files build child Python commands separately (`benchmark/swebench.py`, `benchmark/tasks.py`, `test_runner.py` x3, `judge/core.py` x2, `__main__.py`, `wisp_net/evaluation.py`) with different env, cwd and path policy | accepted; waits on #5 |
+| 2 | Provenance, "which wisp am I": version/doctor/judge verdict report interpreter, Python version, package root, git SHA, dirty flag; live and judge runs fail closed if the child's root is not the expected checkout | **Verified:** the venv's `wisp` imported `~/dev/wisp` (the owner's checkout), so a live run would have silently tested old code; the global command lags `origin/main` | accepted; waits on #5 |
+| 3 | Project-interpreter resolution and attestation (one resolver for run_bash PATH, run_tests, judge and the verification floor; the ledger records which interpreter ran each verification) | **From the code, not run:** `wisp/test_runner.py` uses `sys.executable` (Wisp's own interpreter) while `run_bash` puts the workspace venv first | **CONFIRMED 2026-10-07** (see Results) |
+| 4 | Process registry and reaper for ALL harness children (tiers, hooks, MCP servers, subagents, containers), reported by `wisp doctor` | **Verified count:** 66 exited `wisp-sandbox-*` containers (55 on `python:3.12-slim`, 11 on `wisp-sandbox:py312`); **cause read, not proven:** `DockerSandbox` starts one container per instance and I found no removal | **CONFIRMED 2026-10-07** (see Results) |
 | 5 | Child interpreter flags policy (`-P`, `PYTHONHASHSEED=0` for judge and verification, `-X faulthandler`, `PYTHONDONTWRITEBYTECODE`, `PYTHONUTF8`) | `AGENTS_LEARNING.md` records a judge task (`dedupe`) whose result depended on `PYTHONHASHSEED`; the effect of the other flags on workspace diffs is a hypothesis | **TO VERIFY** |
 | 6 | Exit diagnostics: the exit watchdog names live non-daemon threads; SIGUSR1 dumps stacks via `faulthandler` | open item: the thread that blocks exit is unidentified | later |
 | 7 | Runtime manifest and one blessed interpreter shared by the CLI and the macOS app | the app bundles its own Python; earlier we removed two stale `wisp` binaries | later |
 | 8 | Cold-start import-time budget (`-X importtime` test) | hypothesis | later |
+| 10 | `run_tests` must use the credential-free environment and the project's interpreter (found by #3: the project's tests saw the API key and ran under Wisp's Python) | **Verified** by experiment (see Results) | new, follows from #3 |
+| 11 | Register container cleanup at process exit and on signals; `wisp doctor` reports stray `wisp-sandbox-*` containers (found by #4) | **Verified** by experiment (see Results) | new, follows from #4 |
 | 9 | Uniform rlimits for all children (the PTY tier already has them) | read in `sandbox/router.py` | later |
 
 Already fixed from this exploration: a workspace carrying its own `wisp/` package hijacked `python -m wisp` when the workspace was the working directory (verified in a throwaway directory); the background-jobs supervisor was launched that way and now uses `-P` and its own directory (PR #102, `62d1684`, test written first and RED before the fix).
@@ -41,7 +43,35 @@ Already fixed from this exploration: a workspace carrying its own `wisp/` packag
 
 ## Results
 
-_Not yet run._ Each section above gets: the exact command, the output, and one of confirmed or refuted. Then #1 and #2 are designed (a single launcher and provenance), using the verified findings.
+### #3 CONFIRMED (2026-10-07), in both directions, plus a credential exposure
+
+Script: a throwaway project with its own venv (pytest and a module `projdep` installed only there; no `httpx`), run through three paths with a throwaway `HOME` and a FAKE key `MY_FAKE_API_KEY` (never a real one). Each test wrote `sys.executable` and whether the fake key was visible.
+
+| project's test needs | `run_bash` (host or PTY) | `run_tests` tool |
+|---|---|---|
+| `projdep` (only in the project's venv) | **passed**, interpreter = the project's `.venv/bin/python` | **error** (0/1 passed, collection error): a false failure |
+| `httpx` (only in Wisp's own venv) | **error** (collection error): correct, the project does not declare it | **passed 1/1**, interpreter = `~/.venvs/wisp/bin/python`: a **false pass** |
+
+- `run_tests` runs `[sys.executable, "-m", "pytest", ...]` with no `env=`, so it answers "do the tests pass?" under **Wisp's** interpreter, and `run_bash` answers it under the **project's**. They disagree for the same project in either direction.
+- **Credential exposure:** under `run_tests` the project's tests saw `MY_FAKE_API_KEY` (**KEY-VISIBLE**); under `run_bash` they did not (**key-hidden**, `credential_free_env`). Any API key in Wisp's environment is visible to the project's test code when `run_tests` runs it. New finding, not in the ideas table before: add as idea 10.
+- Consequence for the reasoning core: the ledger records `run_tests` as a VERIFICATION_RUN, so a false pass counts as fresh verification. Which of `_VERIFY_TOOLS` (`run_bash`, `exec_sandbox` only) or the `run_tests` evidence rule in `core/verification.py` the verification floor consults was **not traced**: unverified.
+- Caveat: with the throwaway `HOME` the router fell back to the PTY tier ("no Docker daemon": the Docker context lives under `HOME`), so the Docker tier (a third interpreter, the container's `python:3.12-slim`) was **not** exercised here.
+
+### #4 CONFIRMED (2026-10-07): every process that uses the Docker tier leaves a running container
+
+- Before: 66 `wisp-sandbox-*` containers, all Exited. Three separate short-lived Python processes each ran one `tool_run_bash("echo hi-N")` on the Docker tier. After the three processes had exited: 69 containers, the 3 new ones **still `Up`**.
+- Cause (read in code, matches the observation): `docker_run_args` starts the container with `-d` and `--entrypoint sleep ... infinity`, no `--rm`; `DockerSandbox.cleanup()` exists, but its only caller path is `reset_router()`, whose docstring says "(tests)" and which nothing in production calls (no `atexit`, no exit hook). So the container runs until Docker restarts, and the 66 Exited ones are the containers a Docker or machine restart stopped, never removed. Each held `--memory=2g --cpus=2` limits while running.
+- Cleaned up: only the 3 created by this experiment (exact names from a before/after diff); the original 66 are untouched. Final count 66.
+- Not checked: leftover non-container children (a `run_bash` that backgrounds a process, hooks, MCP servers started by a session): not run.
+- New idea 11 follows: register `cleanup()` for every router at process exit and on signals, and have `wisp doctor` report stray `wisp-sandbox-*` containers.
+
+### #5 not yet run
+
+The plan above is unchanged.
+
+## What is open
+
+Run #5, and the leftover-children part of #4. Then #1 (one launcher) and #2 (provenance) are designed with these findings: the launcher must give `run_tests` the same credential-free environment and interpreter resolution as `run_bash`, and the process registry (#4) must include sandbox containers.
 
 ## Constraints
 
