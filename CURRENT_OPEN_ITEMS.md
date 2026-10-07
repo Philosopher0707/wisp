@@ -13,7 +13,7 @@
 > `CURRENT_FINDINGS.md` (every recorded finding and its status), `CURRENT_FLAGS.md` (every
 > rollback flag and its default). All four are derived; none may decide.
 >
-> Generated 2026-10-07 at `b32ca72` · **102 items** · **23 open**, 79 closed (kept, in §The closed items).
+> Generated 2026-10-07 at `2821711` · **102 items** · **23 open**, 79 closed (kept, in §The closed items).
 
 ---
 
@@ -203,7 +203,7 @@ the brief's six (`OPEN`, `DECIDED`, `CLOSED`) are absent from it, and two of the
 
 ## (c) The open count, by state
 
-Measured 2026-10-07 at `b32ca72` over the 102 rows below. A count is canonical
+Measured 2026-10-07 at `2821711` over the 102 rows below. A count is canonical
 only if it is measured after the LAST change to any member (**F85**), which is why the
 generator recomputes it rather than the page stating it.
 
