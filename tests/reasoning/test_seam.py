@@ -44,6 +44,23 @@ def _final_text(turn) -> str:
     return "".join(str(e.get("text", "")) for e in turn.events if e.get("type") == "content")
 
 
+class TestDefaultEnforces:
+    """The owner's 2026-10-07 decision, witnessed through a real turn: with nothing set, R1 and R4 are enforced and the rest observe."""
+
+    def test_with_nothing_set_a_real_turn_withholds_an_unbacked_claim_once(self, tmp_path, cores, monkeypatch):
+        monkeypatch.delenv("WISP_REASONING_CORE_RULES", raising=False)
+        monkeypatch.setattr("wisp.config.load_config", lambda: {})
+        _turn(tmp_path, [_tool_round("write_file", {"path": str(tmp_path / "a.txt"), "content": "x"}, "c0"), _content_round("All tests pass."), _content_round("All tests pass.")], "e1")
+        modes = cores[0].modes
+        assert (modes.for_rule("R1").value, modes.for_rule("R4").value, modes.for_rule("R2").value) == ("enforce", "enforce", "observe")
+        assert any(r.get("applied") and r["action"] == "withhold_done" for r in cores[0].journal)
+
+    def test_the_kill_switch_restores_observe_through_a_real_turn(self, tmp_path, cores, monkeypatch):
+        monkeypatch.setenv("WISP_REASONING_CORE", "observe")
+        _turn(tmp_path, [_tool_round("write_file", {"path": str(tmp_path / "a.txt"), "content": "x"}, "c0"), _content_round("All tests pass.")], "e2")
+        assert not any(r.get("applied") for r in cores[0].journal)
+
+
 class TestObserve:
     def test_the_default_mode_is_observe_and_a_core_exists(self, tmp_path, cores):
         _turn(tmp_path, [_tool_round("write_file", {"path": str(tmp_path / "a.txt"), "content": "x"}, "c0"), _content_round("All tests pass.")], "d1")
@@ -54,7 +71,8 @@ class TestObserve:
         kinds = [(f.kind.value, f.subject) for f in cores[0].ledger.facts]
         assert ("file_mutation", "write_file") in kinds
 
-    def test_an_unbacked_claim_is_journaled_but_the_answer_is_untouched(self, tmp_path, cores):
+    def test_an_unbacked_claim_is_journaled_but_the_answer_is_untouched(self, tmp_path, cores, monkeypatch):
+        monkeypatch.setenv("WISP_REASONING_CORE", "observe")  # an explicit setting replaces the enforce default: this is the kill switch
         turn = _turn(tmp_path, [_tool_round("write_file", {"path": str(tmp_path / "a.txt"), "content": "x"}, "c0"), _content_round("All tests pass.")], "d3")
         rows = [r for r in cores[0].journal if r["seam"] == "final"]
         assert rows and rows[0]["action"] == "annotate_final" and rows[0]["claims"][0]["verdict"] == "unsupported"

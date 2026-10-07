@@ -676,3 +676,13 @@ Three checks for PR #97 looked green or red for the wrong reason in one afternoo
 - **An unmatched zsh glob can silently empty a list.** `tests/test_desktop*` matched nothing, the target variable was empty, and a 79-test run stood in for the intended 3201. Print the resolved target list and the collected count before trusting a pass.
 - **The `rtk` hook rewrites `npx`.** `npx -y npm@10 ci` became "Unknown command: npm@10", which looked like a lockfile failure. `rtk proxy npx -y npm@10 ci --dry-run --ignore-scripts` exits 0, so the lockfile was in sync all along.
 - General rule: when a check fails or passes unexpectedly, first prove that the check ran (resolved arguments, collected count, real exit status), then read the result.
+
+## Lesson: R1 and R4 are enforced by default; an explicit setting is the kill switch (2026-10-07)
+
+Search: reasoning core default enforce, DEFAULT_ENFORCED_RULES, WISP_REASONING_CORE observe kill switch, enforce roadmap flipped
+
+The owner decided on 2026-10-07 to enforce R1 (unbacked success claim: withhold once, then flag) and R4 (affordability: one bounded retry, else an honest stop) when nothing is configured. This is a **decision made before the roadmap's exit criteria were met**: no false-positive rate on real transcripts, no valid live run (429 noise), and a real "can only afford N" 402 from OpenRouter was seen with `curl` but not driven through Wisp. The roadmap rows say so.
+
+- One constant (`DEFAULT_ENFORCED_RULES` in `wisp/core/reasoning/decision.py`), applied in `WispConfig` only when neither `reasoning_core` nor `reasoning_core_rules` is set anywhere (env or file). **Any explicit value replaces it**: `WISP_REASONING_CORE=observe` makes every rule observe, `off` disables the core, `WISP_REASONING_CORE_RULES=` (empty) means no overrides. A per-rule override beats a global `observe`, so without the "explicit replaces default" rule the observe switch would not have worked; a global `off` already wins over overrides (`test_a_default_of_off_switches_everything_off`).
+- Tests written first (two RED), a real-turn witness for the default and one for the kill switch, and four config mutants all killed. One seam test relied on the old default and now sets observe explicitly.
+- Full-suite run on this branch: two failures, neither caused by the flip. `test_preflight_doctor::...no_runner_fails` fails on clean `main` as well when the Docker daemon is not reachable. `test_judge_cli::...judged_noop` passes alone and fails when `HOME` holds the state of a whole suite run; with that `HOME` it gives the same INFRA "Traceback" on clean `main` code. The trigger inside that `HOME` was not isolated: a test-isolation weakness, not a regression.

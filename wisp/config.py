@@ -1037,12 +1037,20 @@ class WispConfig:
         from wisp.core.reasoning.decision import parse_mode as _parse_reasoning_mode
 
         object.__setattr__(self, "reasoning_core", _parse_reasoning_mode(get_setting("reasoning_core", "observe")).value)
-        # Per-rule overrides, `R1=enforce,R4=enforce`: each heuristic is flipped on its own once its baseline looks right.
+        # Per-rule overrides, `R1=enforce,R4=enforce`: each heuristic is flipped on its own. Setting nothing enforces R1 and R4 (owner decision,
+        # 2026-10-07); ANY explicit `reasoning_core` or `reasoning_core_rules` (even empty) replaces that default, which is the kill switch.
         object.__setattr__(self, "reasoning_journal", str(get_setting("reasoning_journal", "") or ""))
-        from wisp.core.reasoning.decision import parse_modes as _parse_reasoning_modes, render_modes as _render_reasoning_modes
+        from wisp.core.reasoning.decision import (
+            DEFAULT_ENFORCED_RULES,
+            parse_modes as _parse_reasoning_modes,
+            render_modes as _render_reasoning_modes,
+        )
 
+        explicit_core = get_setting("reasoning_core", None)
+        explicit_rules = get_setting("reasoning_core_rules", None)
+        rules = explicit_rules if explicit_rules is not None else ("" if explicit_core is not None else DEFAULT_ENFORCED_RULES)
         object.__setattr__(self, "reasoning_core_rules", _render_reasoning_modes(_parse_reasoning_modes(
-            get_setting("reasoning_core", "observe"), get_setting("reasoning_core_rules", ""))))
+            get_setting("reasoning_core", "observe"), rules)))
         object.__setattr__(self, "dependency_lock", "locked" if parse_lock(get_setting("dependency_lock", "locked")) else "unlocked")
         object.__setattr__(self, "gate_write_roots", tuple(
             r.strip() for r in str(get_setting("gate_write_roots", "") or "").split(os.pathsep) if r.strip()))

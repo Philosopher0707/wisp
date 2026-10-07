@@ -123,7 +123,7 @@ Four seams in `WispAgentCore._turn_inner`, each one call, each wrapped so RC6 ho
 3. **At the `done` gate**: the composed decision (R1, R5).
 4. **Turn end**: the decision journal record.
 
-Two settings: `reasoning_core` = `off | observe | enforce`, default **`observe`**, and `reasoning_core_rules` (`R1=enforce,R4=observe`), a per-rule override so each heuristic is flipped on its own once its baseline looks right (a typo for a rule is `observe`; `off` as the default wins). It does **not** flip the six OFF flags (ADR-0002: one flag per concern; the matrix
+Two settings: `reasoning_core` = `off | observe | enforce`, whose own default is **`observe`**, and `reasoning_core_rules` (`R1=enforce,R4=observe`), a per-rule override so each heuristic is flipped on its own (a typo for a rule is `observe`; `off` as the default wins). **With neither setting present, R1 and R4 are enforced and R2 and R3 observe** (`DEFAULT_ENFORCED_RULES`, owner decision of 2026-10-07); setting either one, even to an empty string, replaces that list, so `WISP_REASONING_CORE=observe` or `off` is the kill switch. It does **not** flip the six OFF flags (ADR-0002: one flag per concern; the matrix
 in `CURRENT_FLAGS.md` stays authoritative). §8 proposes an optional profile that sets them together, as a separate decision.
 
 ## 7. How it uses what exists
@@ -209,17 +209,17 @@ Remaining: R2/R3 (repeat/refusal nudges), a Linux (Docker) run of the new suites
 
 ## Enforcement roadmap (a standing reminder: enforce at some point)
 
-`observe` is the safe default while evidence is gathered. It is not a destination: while a rule only observes, the failure it targets still reaches the user (see the baseline). Flip each rule to `enforce` (`WISP_REASONING_CORE_RULES=R4=enforce,...`) when its row below is met; record the flip, the date and the evidence here.
+**2026-10-07: the owner decided to enforce R1 and R4 by default** (see the table: the exit criteria below were NOT met when this was decided; the rows say what is still unmeasured). `observe` is the safe default while evidence is gathered. It is not a destination: while a rule only observes, the failure it targets still reaches the user (see the baseline). Flip each rule to `enforce` (`WISP_REASONING_CORE_RULES=R4=enforce,...`) when its row below is met; record the flip, the date and the evidence here.
 
 | Rule | Built | Applied in `enforce` | Exit criteria to flip it on by default | Status |
 |---|---|---|---|---|
-| R4 affordability | yes | yes (retry once / honest stop) | live paired runs against a provider that returns a real "can only afford N" 402; no retry loop observed | **owed** |
-| R1 unbacked success claims | yes | yes (withhold once, then flag) | false-positive rate on real transcripts measured (needs consent to read sessions) and small; the first ~10 live tasks in `observe` show no legitimate answer would have been withheld | **owed** |
+| R4 affordability | yes | yes (retry once / honest stop) | live paired runs against a provider that returns a real "can only afford N" 402; no retry loop observed | **enforced by default since 2026-10-07 (owner decision).** Not yet met: a real OpenRouter 402 ("can only afford 846", seen with curl on 2026-10-07) has not been driven through Wisp live; a local stub of that body is the substitute |
+| R1 unbacked success claims | yes | yes (withhold once, then flag) | false-positive rate on real transcripts measured (needs consent to read sessions) and small; the first ~10 live tasks in `observe` show no legitimate answer would have been withheld | **enforced by default since 2026-10-07 (owner decision).** Not yet met: no false-positive rate on real transcripts and no valid live run (429 noise). A false positive costs one extra round, then a flagged answer; `WISP_REASONING_CORE_RULES=R1=observe` turns it back |
 | R2 repeated failure | decision only | no | enforcement path written (nudge, then `RecoveryLadder` rung); persona row moves | **not built** |
 | R3 repeated refusal | decision only | no | enforcement path written (nudge naming the rule and a narrower route); persona row moves | **not built** |
 | search limits, token budgets per turn, probe detection | no | no | design first: these are not in the core today | **not designed** |
 
-Until a row is flipped, say so when reporting: "built and witnessed, running in observe".
+Until a row is flipped, say so when reporting: "built and witnessed, running in observe". R1 and R4 are flipped by default; report them as "enforced by default, evidence still owed" until the criteria above are met.
 
 ## 11. Risks
 
