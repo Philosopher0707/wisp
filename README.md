@@ -154,9 +154,10 @@ Threat model (`docs/THREAT-MODEL.md`): the developer is trusted; **model output,
 | **Credentials** | `config.json` and `.env` written `0o600`; subprocess envs are credential-stripped; 6 secret families redacted at record construction. |
 | **Server** | `wisp server` refuses to boot unauthenticated (exit 2 + key-minting instructions). `--no-auth` is loopback-only and loudly warned; non-loopback binds always require `WISP_API_KEY`. |
 | **Transport/API** | WebSocket message caps; SQLite-backed rate limits on mutating routes; security headers + opt-in HSTS; error sanitization on production routes. |
+| **Invariant gates** | Five deterministic layers run before every tool call and on every result, before any approval prompt (no human "yes" overrides them): canonical-path write confinement, a real shell parser that refuses irreversible commands however they are spelled (and anything it cannot analyse), secret scrubbing before the model sees a tool result, a dependency lock, and a completion verifier that only counts a real test/lint/build run. `WISP_INVARIANT_GATES=enforce|observe|off` (a typo means `enforce`), `WISP_DEPENDENCY_LOCK`. Invariant table with a witness test per row: [`docs/harness/invariant-gates.md`](docs/harness/invariant-gates.md). |
 | **Governance** | Ed25519 bundles, revocation + expiry-trim, extension consent + origin pinning, quarantine markers that deny writes even in full mode. |
 
-What Wisp does **not** claim: the dangerous-command check (`sudo`, recursive `rm`, disk writes, pipe-to-shell) is a best-effort heuristic deny-list, not a security boundary — it cannot catch obfuscation, and it is documented as such. Confinement means Docker; everything else is defense in depth. Production hardening knobs:
+What Wisp does **not** claim: the legacy dangerous-command check (`sudo`, recursive `rm`, disk writes, pipe-to-shell) is a best-effort heuristic deny-list, not a security boundary. The invariant gates replace guesswork with a parser for what a *shell* can see, but they do not parse inline interpreter code (`python -c`, `node -e`) and cannot defend a symlink swapped between check and write (both stated in `docs/harness/invariant-gates.md`). Confinement means Docker; everything else is defense in depth. Production hardening knobs:
 
 ```bash
 export WISP_API_KEY="$(openssl rand -hex 32)"   # required for wisp server

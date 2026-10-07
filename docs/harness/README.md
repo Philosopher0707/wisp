@@ -107,3 +107,21 @@ The generated pages (`register.md`, `CURRENT_FLAGS.md`, `CURRENT_AUTHORITIES.md`
 test requires the stamp to be an ancestor of `HEAD`. A **squash** merge replaces the branch commit and turns `main` CI red until the
 pages are re-pinned (this happened on #85). Prefer merge commits, or re-pin right after a squash.
 
+## Invariant gates
+
+Five deterministic layers sit between the model and the machine: path confinement, command interception, secret scrubbing, a dependency
+lock, and a completion verifier. They run once per tool call **before** the approval prompt and once per tool result, are pure functions
+of their input (no clock, randomness, network or environment), and fail closed. Full design, the invariant table (every row names a witness
+test, and a test checks the witness exists) and the stated limits: [`invariant-gates.md`](invariant-gates.md).
+
+| setting | env | default | meaning |
+|---|---|---|---|
+| `invariant_gates` | `WISP_INVARIANT_GATES` | `enforce` | `enforce` blocks; `observe` logs what it would block; `off` disables all layers. An unknown value means `enforce` |
+| `dependency_lock` | `WISP_DEPENDENCY_LOCK` | `locked` | only the exact word `unlocked` opens it. While locked it also protects `.gitignore` and CI workflow files (`.github/workflows/`, `.circleci/`, `.gitlab-ci.yml`, ...) |
+| `reasoning_core` | `WISP_REASONING_CORE` | `observe` | default mode of the reasoning core (`docs/harness/reasoning-core-design.md`): `observe` records only, `enforce` applies its rules, `off` disables it. A typo means `observe` |
+| `reasoning_core_rules` | `WISP_REASONING_CORE_RULES` | empty | per-rule override of the default, `R1=enforce,R4=enforce` (R1 unbacked success claims, R2 repeated failure, R3 repeated refusal, R4 affordability). A typo for a known rule means `observe`; an unknown rule is ignored; `off` as the default wins over every override. Only R1 and R4 act in `enforce` today |
+| `gate_write_roots` | `WISP_GATE_WRITE_ROOTS` | empty | extra writable directories |
+
+Verified 2026-10-07: `pytest tests/gates` (873 tests) passes; a 26-mutation probe breaks each layer on purpose and the suite catches 26 of 26
+(the one survivor on the first run exposed a real fixed-point bug in the scrubber, now fixed and pinned).
+

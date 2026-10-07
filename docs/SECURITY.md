@@ -24,6 +24,7 @@ do not open public issues for unpatched holes. Target acknowledgment:
 - `ToolExecutor` is the only action path; no-executor fallback is
   read-only (M2 structural tests).
 - Secrets redacted at record construction (audit, traces, diagnostics).
+- Invariant gates (paths, commands, secrets, dependency lock, completion verifier) run before approval and cannot be overridden by it; deterministic and fail-closed, with an executable invariant table (`docs/harness/invariant-gates.md`). Stated limit: inline interpreter code is not parsed.
 - Subagents derive narrowed capabilities, never root (M2).
 - Policy bundles Ed25519-signed, expiry trims authority (M4).
   **⚠️ Not enforced at runtime** — the loader is never invoked by any entry

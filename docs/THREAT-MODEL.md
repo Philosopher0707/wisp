@@ -27,6 +27,10 @@
 | Malicious hook persistence | Hook-dir mutation guard in `authorize()` L4 (M2) |
 | Subagent privilege escalation | Narrowing derivation + capability enforcement (M2) |
 | Credential exfiltration | Keychain handles; scrubbed subprocess env; redaction at construction (M2) |
+| Irreversible or out-of-workspace action by the model | Deterministic gates before every tool call, before approval: shell parser + canonical-path confinement; fail closed on anything unanalysable (`docs/harness/invariant-gates.md`) |
+| Secret reaching the model or the network | Tool results scrubbed before the model sees them; a secret or credentials file in a network command is refused |
+| Unprompted dependency change | Dependency lock closed by default; only the operator opens it |
+| "Verified" claimed on a command that proves nothing | Completion guard counts only a recognised test/lint/build run whose exit status decides the result |
 | Tampered policy | Ed25519 bundles; revocation_seq; expiry trims authority (M4) |
 | Lost approval / repeated write after crash | Durable transitions + idempotency first-write-wins (M3) |
 | Unverifiable release | SBOM + lock verify + license audit + evidence gate (M7) |

@@ -97,4 +97,66 @@ def withhold_if_injected(event: Any) -> Any:
         return event
 
 
-__all__ = ["withhold_if_injected", "WITHHELD_TEMPLATE"]
+def _result_holder(event: Any) -> dict[str, Any] | None:
+    """The dict that holds `"result"`, for every shape a tool_result event takes.
+
+    `_payload` understands an `AgentEvent` (`.data`) and a nested `{"data": {...}}`, but the engine yields a FLAT dict
+    (`{"type", "name", "result", "tool_call_id", ...}`) after `_flatten_event`, which `_payload` does not recognise. The secret scrub
+    must see that shape or it scrubs nothing in production (found by tests/gates/test_gate_seam.py).
+    """
+    inner = _payload(event)
+    if inner is not None:
+        return inner
+    if isinstance(event, dict) and "result" in event:
+        return event
+    return None
+
+
+def _scrub_value(value: Any, kinds: set[str]) -> Any:
+    from wisp.core.gates.secrets import scrub
+
+    if isinstance(value, str):
+        r = scrub(value)
+        kinds.update(f.kind for f in r.findings)
+        return r.text
+    if isinstance(value, dict):
+        return {k: _scrub_value(v, kinds) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_scrub_value(v, kinds) for v in value]
+    if isinstance(value, tuple):
+        return tuple(_scrub_value(v, kinds) for v in value)
+    return value
+
+
+def scrub_secrets(event: Any) -> Any:
+    """Replace secret material in a tool result with `[REDACTED:kind]` before the model can read it (layer 3).
+
+    Same contract as `withhold_if_injected`: returns the event unchanged when it is not a tool result or nothing is found, and
+    never raises. A failure to scrub must not become a failure to run, but it must not pass the raw text on silently either, so
+    an unexpected error withholds the result.
+    """
+    try:
+        if getattr(event, "type", None) != "tool_result" and not (
+                isinstance(event, dict) and event.get("type") == "tool_result"):
+            return event
+        payload = _result_holder(event)
+        if payload is None or "result" not in payload:
+            return event
+        kinds: set[str] = set()
+        cleaned = _scrub_value(payload["result"], kinds)
+        if kinds:
+            payload["result"] = cleaned
+            payload["scrubbed_secret_kinds"] = sorted(kinds)
+        return event
+    except Exception:
+        try:
+            payload = _result_holder(event)
+            if payload is not None and "result" in payload:
+                payload["result"] = "[Withheld: this tool result could not be checked for secrets.]"
+                payload["withheld"] = True
+        except Exception:
+            pass
+        return event
+
+
+__all__ = ["withhold_if_injected", "scrub_secrets", "WITHHELD_TEMPLATE"]

@@ -625,6 +625,12 @@ class OpenAIProvider(Provider):
                 max_tok = 16384
             payload["max_tokens"] = max_tok
 
+        # The reasoning core's learned affordability ceiling (R4, enforce mode): what the provider itself said the account can pay for.
+        # It only ever lowers the request, and the engine clears it at the start of the next turn.
+        ceiling = getattr(self, "affordable_ceiling", None)
+        if isinstance(ceiling, int) and ceiling > 0:
+            payload["max_tokens"] = min(int(payload.get("max_tokens") or ceiling), ceiling)
+
         if tools:
             payload["tools"] = self._convert_tools(tools)
 
