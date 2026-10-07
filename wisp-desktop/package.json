@@ -11,13 +11,17 @@
     "dev:full": "electron-vite dev",
     "build": "electron-vite build && node scripts/fix-preload-cjs.mjs",
     "preview": "electron-vite preview",
-    "package": "npm run build && electron-builder",
+    "bundle": "bash scripts/bundle-backend.sh",
+    "package": "npm run bundle && npm run build && electron-builder",
+    "verify:packaged": "node scripts/verify-packaged.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:ui": "vitest --ui",
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "electron-updater": "^6.8.3",
     "highlight.js": "^11.11.1",
     "lucide-react": "^0.460.0",

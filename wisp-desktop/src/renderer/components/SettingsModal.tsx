@@ -263,7 +263,7 @@ export const SettingsModal: React.FC = () => {
                 {t.label}
               </button>
             ))}
-            <div className="settings-tabs-footer"><p className="settings-version">Wisp Desktop v0.2.0</p></div>
+            <div className="settings-tabs-footer"><p className="settings-version">Wisp Desktop v{typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'dev'}</p></div>
           </nav>
 
           <div className="settings-content">

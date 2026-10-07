@@ -8,6 +8,8 @@
 - **Extensions** (MCP servers, plugins, hooks, skills — scoped, consented).
 - **Org admin** (trusted via signed bundles; can narrow, never widen).
 - **Network peer** (untrusted; LAN server binds are deny-by-default).
+- **Desktop app user** (trusted; the macOS app's Terminal tab is their own shell, outside the agent's tool policy by decision, ADR 2026-10-07).
+- **Web pages opened in the app's Browser tab** (untrusted; isolated from the app's backend key and IPC).
 
 ## Trust boundaries (see `docs/enterprise-target-architecture.md` §2)
 
@@ -33,9 +35,14 @@
 | Lost approval / repeated write after crash | Durable transitions + idempotency first-write-wins (M3) |
 | Unverifiable release | SBOM + lock verify + license audit + evidence gate (M7) |
 | LAN RCE via server | Loopback default; auth required off-loopback; deny-by-default approvals (audit §2 + M2) |
+| Desktop: code in the app window drives the host terminal | Sandboxed renderer, no Node integration; terminal IPC accepts only the main window's renderer; backend key kept out of the shell's environment; working directory must be inside the home folder (desktop ADR) |
+| Desktop: a web page reaches the app's backend or IPC | Browser tab is a separate `WebContentsView`: own partition, no preload, sandboxed, every permission denied, http(s) navigation only |
+| Desktop: the app rewrites the user's session history | Other stores opened read-only; opening a session copies it; delete and rename of foreign sessions refused (409); tests hash the sources |
 
 ## Residual risks (accepted, tracked)
 
 - Container/VM sandbox backends beyond the Docker adapter (M3 deferred).
 - CI artifact signing + provenance (M7 deferred to CI keys).
 - Live-model nightly matrix is policy, not enforced code (M5).
+- Desktop: the in-app Terminal is not governed by the agent policy, so a compromised renderer could type into it (revisit if the main renderer ever shows untrusted HTML).
+- Desktop: the Mac app is ad-hoc signed, not Developer-ID signed or notarized; the auto-updater will not accept unsigned updates.

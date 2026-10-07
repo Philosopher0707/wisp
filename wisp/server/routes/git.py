@@ -79,3 +79,63 @@ async def git_commit(req: GitCommitRequest) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"git commit failed: {commit.stderr}")
 
     return {"committed": True, "message": req.message or "Wisp auto-commit"}
+
+
+MAX_DIFF_FILES = 60
+MAX_DIFF_BYTES_PER_FILE = 60_000
+
+
+def _status_label(code: str) -> str:
+    if code == "??":
+        return "untracked"
+    if "D" in code:
+        return "deleted"
+    if "R" in code:
+        return "renamed"
+    if "A" in code:
+        return "added"
+    return "modified"
+
+
+@router.get("/api/git/diff", dependencies=[Depends(verify_api_key), Depends(RATE_LIMITER)])
+async def git_diff() -> dict[str, Any]:
+    """Working-tree changes against HEAD, one unified diff per file.
+
+    Takes no path from the client: the file list comes from `git status` itself, so there is no
+    user-supplied path to escape the workspace with. Output is capped per file and in file count.
+    """
+    if not (WORKSPACE_ROOT / ".git").exists():
+        return {"git": False, "files": [], "truncated": False}
+
+    status = await _git(["git", "status", "--porcelain", "-z", "-uall"], timeout=10)
+    if status.returncode != 0:
+        raise HTTPException(status_code=500, detail="git status failed")
+
+    entries: list[tuple[str, str]] = []
+    parts = [p for p in status.stdout.split("\0") if p]
+    skip_next = False
+    for part in parts:
+        if skip_next:  # the origin path of a rename follows the entry
+            skip_next = False
+            continue
+        code, path = part[:2], part[3:]
+        if "R" in code or "C" in code:
+            skip_next = True
+        entries.append((code, path))
+
+    files: list[dict[str, Any]] = []
+    for code, path in entries[:MAX_DIFF_FILES]:
+        if code == "??":
+            proc = await _git(["git", "diff", "--no-color", "--no-index", "--", "/dev/null", path], timeout=10)
+        else:
+            proc = await _git(["git", "diff", "HEAD", "--no-color", "--", path], timeout=10)
+        text = proc.stdout if proc.returncode in (0, 1) else ""
+        clipped = len(text) > MAX_DIFF_BYTES_PER_FILE
+        files.append({
+            "path": path,
+            "status": _status_label(code),
+            "diff": text[:MAX_DIFF_BYTES_PER_FILE],
+            "clipped": clipped,
+            "binary": "Binary files" in text,
+        })
+    return {"git": True, "files": files, "truncated": len(entries) > MAX_DIFF_FILES}

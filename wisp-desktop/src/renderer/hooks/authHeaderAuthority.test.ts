@@ -53,7 +53,6 @@ const KNOWN_RENDERER_DUPLICATES: Record<string, number> = {
   'src/renderer/components/chat/InlineEdit.tsx': 2,
   'src/renderer/components/chat/MentionPopup.tsx': 1,
   'src/renderer/components/chat/MessageBubble.tsx': 1,
-  'src/renderer/components/chat/ProjectContextBar.tsx': 1,
   'src/renderer/components/files/FileExplorer.tsx': 1,
   'src/renderer/components/topbar/TopBar.tsx': 1,
   'src/renderer/hooks/useMenuIPC.ts': 1,

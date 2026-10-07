@@ -43,3 +43,28 @@ wisp release sbom --out sbom-<version>.json   # signed in CI (follow-up)
 Signed release artifacts, provenance attestations (SLSA-style),
 reproducible-build checks, platform installers (macOS/Linux/WSL),
 dependency vulnerability scanning. Tracking: promote only with these green.
+
+## Desktop app (macOS) — current status
+
+The tag workflow (`.github/workflows/release.yml`, on `v*.*.*`) builds the Android APK and the Docker image. **It does not
+build or publish the Mac app.** `wisp-desktop/electron-builder.yml` declares a GitHub publish target for auto-update, but
+nothing uploads artifacts to it yet.
+
+What exists today (local, see [`wisp-desktop/README.md`](../wisp-desktop/README.md)):
+
+```
+cd wisp-desktop && npm run package            # bundles the backend, builds, produces .dmg/.zip (arm64) in release/
+node scripts/verify-packaged.mjs              # exits non-zero unless the built .app passes every check
+```
+
+Artifacts are **ad-hoc signed**: other Macs show a Gatekeeper warning, and the auto-updater will not accept unsigned updates.
+
+To make it a real release channel, add (by someone who holds the credentials, as repository secrets, never in the repo):
+
+1. An Apple **Developer ID Application** certificate and its password, for signing (set `mac.identity`, drop the ad-hoc hook).
+2. **Notarization** credentials (an Apple ID app-specific password or an App Store Connect API key, plus the team id).
+3. A `macos-latest` job that runs `npm ci` (npm 10 lockfile), `npm run package`, `verify-packaged.mjs`, then uploads
+   `Wisp-<version>-mac.{dmg,zip}` and `latest-mac.yml` to the GitHub release for the tag.
+
+Until then, treat the Mac app as a preview channel build.
+

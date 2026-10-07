@@ -31,6 +31,7 @@ do not open public issues for unpatched holes. Target acknowledgment:
   point, so a bundle does not currently restrict a tool call. See
   `PHASE_10_M4_GOVERNANCE_UNWIRED.md`.
 - Hash-chained audit trail with `wisp audit verify` (M5).
+- macOS app: the backend binds `127.0.0.1` and needs a per-launch Bearer key on every route except `/api/health`; the renderer is sandboxed with context isolation; the Browser tab is an isolated view; `scripts/verify-packaged.mjs` checks these on the built `.app` (see `wisp-desktop/README.md`).
 
 ## Supported versions
 

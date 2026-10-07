@@ -1,6 +1,8 @@
 import { BrowserWindow, shell } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { registerBrowserView } from './browser-view.js';
+import { registerTerminal } from './terminal.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -27,6 +29,9 @@ export function createMainWindow(opts: WindowOpts): BrowserWindow {
       sandbox: true,
     },
   });
+
+  registerBrowserView(win);
+  registerTerminal(win);
 
   win.on('ready-to-show', () => {
     win.show();
