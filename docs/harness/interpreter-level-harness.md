@@ -65,13 +65,27 @@ Script: a throwaway project with its own venv (pytest and a module `projdep` ins
 - Not checked: leftover non-container children (a `run_bash` that backgrounds a process, hooks, MCP servers started by a session): not run.
 - New idea 11 follows: register `cleanup()` for every router at process exit and on signals, and have `wisp doctor` report stray `wisp-sandbox-*` containers.
 
-### #5 not yet run
+### #5 MOSTLY REFUTED (2026-10-07): the flags are not the fix; `-P` stays for security
 
-The plan above is unchanged.
+Script: `verify5.py` in throwaway directories with a throwaway `HOME`, 100 seeds per case (`PYTHONPATH` pinned to the worktree).
+
+| question | measured | verdict |
+|---|---|---|
+| Is the judge's `dedupe` result seed-dependent? | current hidden check (12 strings): buggy `list(set(xs))` passes **0/100** seeds, correct solution **100/100**; visible check (ints): buggy **0/100** | **No.** The 3-string version was fixed earlier. |
+| Is the hazard real in general? (positive control: 3-string order check against the buggy solution) | passes **16/100** seeds (expected 1 in 6) | Yes, for any check that depends on set order. |
+| Would forcing `PYTHONHASHSEED=0` help? | seed 0 alone decides the control forever (it failed): a fixed seed makes a set-order bug permanently visible OR permanently hidden (deterministic by design; one seed measured, not 100 repeated runs) | **No: do not force a seed.** Run with a random seed and **record it** with the verification so a failure can be reproduced. |
+| Do bytecode and cache files pollute workspace diffs? | default pytest run created `.pytest_cache`; `git status --untracked-files=all` saw **0** untracked (pytest ignores its own cache); `judge.snapshot` saw **no** extra files; with `PYTHONDONTWRITEBYTECODE=1 -p no:cacheprovider` no files were created at all | **No measurable effect.** No `__pycache__` appeared even in the default run, probably because this environment already sets a bytecode flag: not investigated. Wisp's own `/api/git/diff` uses git and so shares the result; other file-walking diffs were not tested. |
+| Do `-P` and `-X faulthandler` change any result? | `tests/reasoning`: **451 passed** plain and with `-P -X faulthandler`, 29.7 s vs 28.9 s | No. Harmless. |
+
+Revised policy for idea 5: always `-P` (justified by the verified import-hijack, not by test results), `-X faulthandler` is harmless and useful for the exit diagnostics (idea 6), **do not** force `PYTHONHASHSEED` (record it instead), `PYTHONDONTWRITEBYTECODE` is not needed for diffs.
+
+### A second occurrence of idea 2, found while running these
+
+The first run of `verify5.py` failed with `ModuleNotFoundError: No module named 'wisp.judge'`: a script run from the scratch directory put the venv's installed `wisp` (the owner's own checkout at `~/dev/wisp`, which has no `judge` package) ahead of the worktree under test. Pinning with `PYTHONPATH=<worktree>` fixed it. Same cause as the live-run provenance problem: nothing says which `wisp` a process imported.
 
 ## What is open
 
-Run #5, and the leftover-children part of #4. Then #1 (one launcher) and #2 (provenance) are designed with these findings: the launcher must give `run_tests` the same credential-free environment and interpreter resolution as `run_bash`, and the process registry (#4) must include sandbox containers.
+**Gate cleared (2026-10-07): #3 confirmed, #4 confirmed, #5 mostly refuted.** Still open: the leftover-children part of #4 (a backgrounded `run_bash` child, hooks, MCP servers; not run). Next is the design of #1 (one launcher) and #2 (provenance) with these findings: the launcher must give `run_tests` the same credential-free environment and interpreter resolution as `run_bash`, always passes `-P`, does not force a hash seed, and the process registry (#4) must include sandbox containers.
 
 ## Constraints
 
