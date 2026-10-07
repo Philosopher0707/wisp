@@ -66,6 +66,16 @@ def _translate_nvidia_404(body: str, requested_model: str) -> str:
     )
 
 
+def _retry_after_seconds(resp: Any) -> float | None:
+    """The response's ``Retry-After`` in seconds, or None. Never raises: a mock or odd response object simply has no advice."""
+    try:
+        from wisp.core.transport import parse_retry_after
+
+        return parse_retry_after(resp.headers.get("Retry-After"))
+    except Exception:  # noqa: BLE001
+        return None
+
+
 class OpenAIProvider(Provider):
     """OpenAI-compatible provider using the Chat Completions API."""
 
@@ -185,6 +195,9 @@ class OpenAIProvider(Provider):
                     stream=True,
                     timeout=HARDENED_TIMEOUT,
                     max_attempts=3,
+                    # Statuses (429/5xx) are retried by the guarded stream, which honours Retry-After and owns the turn. Retrying
+                    # them here as well made one message up to nine requests against an endpoint that was already throttling.
+                    retry_status=False,
                 )
             except ImportError:
                 # Fallback to raw requests with hardened timeout tuple
@@ -230,7 +243,7 @@ class OpenAIProvider(Provider):
                     translated = _translate_nvidia_404(body, self.model)
                     if translated:
                         body = translated
-                yield {
+                error_event: dict[str, Any] = {
                     "type": "error",
                     "message": f"API error {resp.status_code}: {body}{hint}",
                     # Machine-readable so the guarded stream can retry
@@ -238,6 +251,11 @@ class OpenAIProvider(Provider):
                     # them as fatal turn errors.
                     "status": resp.status_code,
                 }
+                if resp.status_code == 429 or resp.status_code >= 500:
+                    advised = _retry_after_seconds(resp)
+                    if advised is not None:
+                        error_event["retry_after"] = advised  # what the server asked for, so the retry waits that long
+                yield error_event
                 return
 
             self._stream_response = {"status_code": resp.status_code}
