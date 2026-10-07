@@ -1,6 +1,6 @@
 # Background jobs for Wisp: design (draft for review)
 
-Status: design only, 2026-10-07. Nothing is built. Branch `feat/background-jobs` (worktree `~/dev/_scratch/wisp-bg`), from `origin/main` 7b34349.
+Status: design plus P0 (store, supervisor, spawn; not wired into any tool), 2026-10-07. Branch `feat/background-jobs` (worktree `~/dev/_scratch/wisp-bg`), from `origin/main` 7b34349.
 Request: "`run_in_background` for Wisp, for shell commands and for agents; jobs survive restarts; build it surgically and carefully."
 
 ## 1. What exists (verified in this checkout)
@@ -62,6 +62,15 @@ wisp (any process)                         supervisor (own session, survives wis
 | P2 | Verification-floor and ledger folding for background results (BJ5) | start-before-edit stale; floor and reasoning-core behaviour unchanged for foreground |
 | P3 | Mid-turn delivery (inject at the next provider round) | a long turn learns of a finished job without polling |
 | P4 | Restart survival for background **agents** | separate design; the durable run rows and leases are the starting point |
+
+### P0 status (2026-10-07)
+
+Built: `wisp/jobs/{store,procs,spawn,supervisor}.py` and `tests/jobs/` (92 tests, 4 skipped: 3 opt-in Docker, 1 Linux-only). No tool wiring, no setting, no engine change: nothing in the product calls it yet.
+Witnessed with real processes: BJ1 (refused command creates nothing), BJ2 (workspace binding; traversal with an existing id), BJ3/BJ8 (kill reaches children, a grandchild in its own session, a SIGTERM-ignoring command, a SIGSTOPped supervisor; a SIGKILLed supervisor is `lost` and the reaper kills what it left), BJ4 (truncated/alien state is never success), BJ6 (output cap), BJ7 (ceilings), BJ9 (prune), and the feature itself (a job outlives the process that spawned it). Host, PTY and Docker tiers each tested (Docker opt-in, `WISP_JOBS_TEST_DOCKER=1`; kill removes the container).
+Findings that changed the design: the tiers cannot be killed through `run_bash_confined` (PTY runs in a thread and its child has its own session; Docker leaves the command running in the container; the host tier's own kill orphans grandchildren), so the supervisor kills the process **tree plus remembered process groups** and removes its own container; macOS `ps` hides the environment of Apple-signed binaries, so the `WISP_JOB_ID` marker sweep is Linux-only and the process-group sweep is the portable path; the hard runtime cap is 1 hour because `run_bash_confined` validates timeouts to 1..3600.
+Changed from section 3: there is no partial output while a job runs (the tier returns output only at the end), so `bash_output` of a running job reports `running`; streaming needs a sandbox-provider change and is deferred.
+Mutation probe: 44 mutants over the package, first pass 17 survivors (all real gaps, closed with tests), second pass and a Docker pass 0 real survivors; recorded equivalent or backstop mutants: the "descendants now" merge in the kill and the `g not in mine` guard (the own-pid pop covers it), the early return in `kill_job` for a finished job, and the 30 s watchdog backstop (needs fault injection to witness).
+Not verified: the jobs suite on Linux (Docker run pending), behaviour at fd/disk limits, the watchdog.
 
 ## 6. What is deliberately out of scope for the first release
 
