@@ -43,7 +43,7 @@ provider terminal → stream state → turn predicate → acceptance verdict
 
 | | |
 |---|---|
-| **Current owner** | `guarded_provider_stream` (`wisp/core/provider_stream.py:117`); the two facts are `got_meaningful` (`wisp/core/provider_stream.py:143`) and `saw_terminal` (`wisp/core/provider_stream.py:144`) |
+| **Current owner** | `guarded_provider_stream` (`wisp/core/provider_stream.py:122`); the two facts are `got_meaningful` (`wisp/core/provider_stream.py:150`) and `saw_terminal` (`wisp/core/provider_stream.py:151`) |
 | **Cannot decide** | turn success · acceptance · goal state |
 | **Current ADRs** | **ADR-0039** R5 (the guard owns *recovery*, not canonicalization; it reads the normalization boundary) → **ADR-0041** R3/R7 — **superseded** by **ADR-0043** R1–R7 (payload-based meaningfulness for every type; the classifier owns no vocabulary but `TERMINAL_TYPES`) |
 | **Durable record fields** | **none.** It is an in-flight guard, not a recorded fact: its output is consumed by the turn predicate within the same turn. Nothing replays it, so there is nothing to journal — stated so a reader does not go looking for a key that does not exist |

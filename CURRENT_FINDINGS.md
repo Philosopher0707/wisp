@@ -14,7 +14,7 @@
 > `CURRENT_OPEN_ITEMS.md` (what is open), `CURRENT_FLAGS.md` (every rollback flag and its
 > default). All four are derived; none may decide.
 >
-> Generated 2026-09-25 at `ff42fcf` · **104 findings** (F1–F104) · **13 not closed** · vocabulary in §(a), classes in §(b).
+> Generated 2026-09-25 at `672e057` · **104 findings** (F1–F104) · **13 not closed** · vocabulary in §(a), classes in §(b).
 
 ---
 
