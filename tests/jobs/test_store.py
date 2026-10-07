@@ -9,7 +9,7 @@ import time
 import pytest
 
 from tests.jobs.conftest import fake_running
-from wisp.jobs.store import ID_RE, LOST, RUNNING, UNKNOWN, JobStore, Limits, _write_atomic, workspace_hash
+from wisp.jobs.store import EXITED, ID_RE, LOST, RUNNING, UNKNOWN, JobStore, Limits, _write_atomic, read_json, reap_lost, workspace_hash
 
 
 def finish(store, job_id, status="exited", code=0, finished=None):
@@ -62,6 +62,41 @@ class TestHonestStatus:
         job_id = fake_running(store)
         (store.path(job_id) / "supervisor.json").write_text(json.dumps({"pid": os.getpid(), "start": "Mon Jan  1 00:00:00 1990"}))
         assert store.view(job_id).status == LOST
+
+    def test_a_result_written_while_the_status_is_being_read_is_not_lost(self, store, monkeypatch):
+        """CI failure of PR 102: the supervisor wrote its result and exited between the reader's first look at state.json and its liveness check."""
+        job_id = fake_running(store)
+
+        def finishes_during_the_read(pid, start):
+            finish(store, job_id, code=3)
+            return False
+
+        monkeypatch.setattr("wisp.jobs.procs.alive", finishes_during_the_read)
+        v = store.view(job_id)
+        assert (v.status, v.exit_code) == (EXITED, 3)
+
+    def test_the_reaper_never_overwrites_a_result_that_arrived_during_its_read(self, store, monkeypatch):
+        job_id = fake_running(store)
+
+        def finishes_during_the_read(pid, start):
+            finish(store, job_id, code=3)
+            return False
+
+        monkeypatch.setattr("wisp.jobs.procs.alive", finishes_during_the_read)
+        assert reap_lost(store) == []
+        assert read_json(store.path(job_id) / "state.json")["status"] == EXITED
+        assert read_json(store.path(job_id) / "state.json")["exit_code"] == 3
+
+    def test_the_reaper_never_overwrites_a_result_that_arrives_while_it_kills(self, store, monkeypatch):
+        job_id = fake_running(store)
+        (store.path(job_id) / "supervisor.json").write_text(json.dumps({"pid": 2**30, "start": "Thu Jan  1 00:00:00 1970"}))
+
+        def result_lands(targets, grace=1.0):
+            finish(store, job_id, code=3)
+
+        monkeypatch.setattr("wisp.jobs.procs.kill_all", result_lands)
+        assert reap_lost(store) == []
+        assert read_json(store.path(job_id) / "state.json")["status"] == EXITED
 
     @pytest.mark.parametrize("content", ["", "{", "[]", "null", '{"status": "exited"', '{"status": "success"}', '{"status": 5}', "\x00\x01"])
     def test_bj4_a_truncated_or_alien_state_is_never_a_result(self, store, content):

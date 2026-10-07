@@ -608,3 +608,14 @@ Search: derive_register python3 version, register.md raise sites 285 286, genera
 - Regenerate every derived page with the project's venv interpreter (`/Users/philosopher/.venvs/wisp/bin/python scripts/derive_*.py`), never a bare `python3`.
 - A new exception class needs a data row in `scripts/derive_register.py` first (`JobLimitError` in `wisp/jobs/spawn.py` failed `test_every_defined_class_has_a_row` until it had one); regenerating alone does not add it.
 - Related to the interpreter-level findings (`docs/harness/findings-2026-10-07.md`, section A): which interpreter ran a tool changes its result.
+
+## Lesson: read-then-check-liveness reported a finished job as lost (2026-10-07)
+
+Search: jobs lost exited race, TOCTOU state.json supervisor alive, test_a_failing_command_keeps_its_exit_status, reap_lost overwrite
+
+PR #102's Linux CI failed one test in 11,124 (`test_a_failing_command_keeps_its_exit_status`: `('lost', None)` instead of `('exited', 3)`). It passed locally. Cause, read in `JobStore._status`: the reader looked at `state.json` (not there yet), then asked whether the supervisor was alive; the supervisor wrote its result and exited in between, so the reader saw "dead, no result" and said `lost`. `reap_lost` had the same shape and was worse: it wrote `lost` into `state.json`, which could replace a real result for good.
+
+- When a writer's last act is "write the result, then exit", a reader that finds the writer dead must **read the result again**; the first read is stale by definition.
+- A settler that records a verdict must create-if-absent (`os.link` of a temp file), never overwrite.
+- Test the race by injecting the writer's action into the check (`procs.alive` writes the result, then returns False); both tests were RED first and reproduced the CI values exactly. Mutation probe: reverting either change fails a test.
+- A single failure in a long suite on one OS is a signal, not noise: read the assertion before calling it a flake.

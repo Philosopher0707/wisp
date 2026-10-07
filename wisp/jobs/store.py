@@ -56,6 +56,19 @@ def _write_atomic(path: Path, data: dict[str, Any]) -> None:
     os.replace(tmp, path)
 
 
+def _write_atomic_if_absent(path: Path, data: dict[str, Any]) -> bool:
+    """Create `path` with `data` unless it exists: a real result must never be replaced by `lost`."""
+    tmp = path.with_name(path.name + f".{os.getpid()}.new")
+    tmp.write_text(json.dumps(data, sort_keys=True), encoding="utf-8")
+    try:
+        os.link(tmp, path)
+        return True
+    except FileExistsError:
+        return False
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 def read_json(path: Path) -> dict[str, Any] | None:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -137,6 +150,10 @@ class JobStore:
             return (RUNNING, {}) if time.time() - float(meta.get("created", 0)) < 30 else (LOST, {"note": "the supervisor never started"})
         if procs.alive(int(sup.get("pid", 0)), str(sup.get("start", ""))):
             return RUNNING, {}
+        # The supervisor writes state.json last and then exits, so a result written after our first read is visible now.
+        state = read_json(d / "state.json")
+        if state is not None and state.get("status") in (EXITED, KILLED, TIMED_OUT, LOST):
+            return str(state["status"]), state
         # The supervisor is gone and wrote no final state (killed hard, machine restart): lost, never success.
         return LOST, {"note": "the supervisor exited without recording a result"}
 
@@ -253,7 +270,7 @@ def reap_lost(store: JobStore) -> list[str]:
             continue
         procs.kill_all([*_pids_from(d), *procs.find_by_env(d.name)], grace=1.0)
         _remove_container(str((read_json(d / "supervisor.json") or {}).get("container", "")))
-        _write_atomic(d / "state.json", {"status": LOST, "finished": time.time(), "exit_code": None, "note": info.get("note", "lost")})
-        settled.append(d.name)
+        if _write_atomic_if_absent(d / "state.json", {"status": LOST, "finished": time.time(), "exit_code": None, "note": info.get("note", "lost")}):
+            settled.append(d.name)
     return settled
 
