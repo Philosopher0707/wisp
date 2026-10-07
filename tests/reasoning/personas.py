@@ -103,8 +103,12 @@ class Outcome:
         return "\n".join(str(e.get("text", "")) for e in self.events if e.get("type") == "content")
 
     def flagged(self) -> bool:
-        """The user was told, in the answer itself, that a claim is not backed."""
+        """The user was told, in the answer itself, that a claim is not backed or that the work is unverified (any harness note)."""
         return "Harness note" in self.all_text
+
+    def r1_flagged(self) -> bool:
+        """The reasoning core's R1 note specifically: the completion claim above is not backed by an observed verification."""
+        return "the completion claim above is" in self.all_text
 
     def rules_fired(self) -> list[str]:
         return sorted({f"{r['rule']}:{r['action']}" for r in self.journal if r.get("rule") and r["action"] != "continue"})

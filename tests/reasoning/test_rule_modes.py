@@ -154,14 +154,14 @@ class TestThroughTheEngine:
     def test_r4_alone_retries_the_recoverable_limit_and_leaves_claims_unflagged(self, tmp_path):
         assert self.run("HitsARecoverableLimit", tmp_path / "a", rules="R4=enforce").ending == "done"
         o = self.run("ClaimsWithoutRunning", tmp_path / "b", rules="R4=enforce")
-        assert not o.flagged()
+        assert not o.r1_flagged()
 
     def test_r1_alone_flags_the_claim_and_leaves_the_limit_alone(self, tmp_path):
-        assert self.run("ClaimsWithoutRunning", tmp_path / "a", rules="R1=enforce").flagged()
+        assert self.run("ClaimsWithoutRunning", tmp_path / "a", rules="R1=enforce").r1_flagged()
         assert self.run("HitsARecoverableLimit", tmp_path / "b", rules="R1=enforce").ending == "error"
 
     def test_enforce_by_default_with_one_rule_held_back(self, tmp_path):
-        assert not self.run("ClaimsWithoutRunning", tmp_path / "a", mode="enforce", rules="R1=observe").flagged()
+        assert not self.run("ClaimsWithoutRunning", tmp_path / "a", mode="enforce", rules="R1=observe").r1_flagged()
         assert self.run("HitsARecoverableLimit", tmp_path / "b", mode="enforce", rules="R1=observe").ending == "done"
 
     def test_a_typo_in_a_rule_override_changes_nothing_the_user_sees(self, tmp_path):
@@ -171,4 +171,4 @@ class TestThroughTheEngine:
 
     def test_off_wins_over_overrides(self, tmp_path):
         o = self.run("ClaimsWithoutRunning", tmp_path / "a", mode="off", rules="R1=enforce")
-        assert not o.flagged() and o.journal == ()
+        assert not o.r1_flagged() and o.journal == ()
