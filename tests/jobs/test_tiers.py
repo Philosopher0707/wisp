@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 import subprocess
 from pathlib import Path
 
@@ -41,7 +42,7 @@ class TestPty:
         pid_file, kid_file = tmp_path / "pid", tmp_path / "kid"
         (Path(ws) / "spawner.py").write_text(
             f"import subprocess, time\nc = subprocess.Popen(['sleep', '60'], start_new_session=True)\nopen({str(kid_file)!r}, 'w').write(str(c.pid))\ntime.sleep(60)\n")
-        job_id = spawn_job(store, f"echo $$ > {pid_file}; /usr/bin/python3 spawner.py")
+        job_id = spawn_job(store, f"echo $$ > {pid_file}; {sys.executable} spawner.py")  # absolute: the PTY tier's PATH has no python on Linux
         pid, kid = pid_of(pid_file), pid_of(kid_file)
         assert wait_until(lambda: store.view(job_id).tier == "" or True)
         assert kill_job(store, job_id).status == KILLED
