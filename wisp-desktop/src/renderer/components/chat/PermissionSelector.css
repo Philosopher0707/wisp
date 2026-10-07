@@ -90,3 +90,5 @@
   color: var(--text-muted);
   margin-left: auto;
 }
+
+.perm-badge { white-space: nowrap; flex-shrink: 0; }

@@ -484,6 +484,52 @@ Still open: ~30% of the prompt is appended after budgeting; `config.skill_dirs` 
 - **`rtk` filters output and can mislead:** it showed `06bc076` as `origin/main` when the real value was `f660329`. Use `rtk proxy git ...` for a SHA or a count that decides something.
 - **Verify a subcommand through the checkout under test:** a subprocess `python -m wisp judge ...` ran the older installed wisp, which has no `judge` and sent "judge run ..." to the model as a prompt (a mock reply, exit 0, a green-looking wrong result). The end-to-end test sets `PYTHONPATH` to its own checkout.
 
+## macOS app: self-contained Wisp.app (bundled Python), packaging and verification (2026-10-06)
+
+Search words: electron-builder, python-build-standalone, uv, codesign, ad-hoc, afterPack, Gatekeeper, bundled backend, Wisp.app.
+
+- Ship the interpreter, not the machine's Python: `wisp-desktop/scripts/bundle-backend.sh` copies a uv-managed python-build-standalone 3.12 and `uv pip install`s wisp into it (non-editable, so both `wisp` and `agent` land in site-packages). The app resolves WISP_PYTHON, then `Resources/backend/python/bin/python3`, then dev venv, then system python (`src/main/backend-launch.ts`, 21 unit tests).
+- Seal the bundled interpreter: `PYTHONDONTWRITEBYTECODE=1` (never write into a signed app), `PYTHONNOUSERSITE=1` (a user package must not shadow the bundled one), drop `PYTHONHOME`.
+- `import wisp.server` creates `WISP_WORKSPACE` (default `/workspace`) at import time; on a Mac that fails with a read-only file system. Any smoke import must set a scratch `WISP_WORKSPACE`. Evidence: the first bundle smoke run.
+- electron-builder with an unsigned bundle leaves a broken seal (`codesign --verify`: "code has no resources but signature indicates they must be present"). Ad-hoc sign in an `afterPack` hook (`scripts/adhoc-sign.cjs`) with `mac.identity: null`. Ad-hoc is not a Developer ID: other Macs need right-click > Open until the app is signed and notarized.
+- Verify the artifact you ship, not the build directory: `scripts/verify-packaged.mjs` launches the app (Playwright `_electron`, throwaway HOME) and checks window, managed backend, health, 401 without and with a wrong key, backend is the bundled python, loopback only, no renderer errors, and no orphan after quit. It passed on `release/mac-arm64/Wisp.app` and on the app unzipped from `Wisp-0.1.0-mac.zip`.
+- `npx electron-builder` can fail with "Missing script"; call `./node_modules/.bin/electron-builder`.
+
+## desktop layout: sidebar / header / workbench dock, overlap checks (2026-10-06)
+
+Search words: overlap, header, traffic lights, hiddenInset, container query, WebContentsView, dock, diff tab, box-sizing.
+
+- macOS window buttons (`hiddenInset`) sit top-left of the window, i.e. over whatever is leftmost. Give that strip to the sidebar (`--traffic-light-offset` padding, drag region) and let a hidden sidebar add the same padding to the main header. A narrow icon rail cannot clear them, so "collapsed" means hidden.
+- Header overlap was structural, not cosmetic: absolutely centred chips collided with the left and right groups. A flex row where only the title shrinks, plus container-query breakpoints that drop low-value chips, cannot overlap. Measured, not eyeballed: the bounding boxes of every leaf item in the header, pairwise, at 1400/1100/900 px and with the sidebar hidden (`scratchpad/shots.mjs` pattern): 0 overlaps.
+- `width:100%` plus padding on a button without `box-sizing: border-box` overflowed the shell by ~8-25 px and clipped the chevron and diff counts. Set border-box on new components and `overflow:hidden` on the shell.
+- A native `WebContentsView` (the Browser tab) is not in page screenshots and paints above all web content: hide it when a modal/approval is open, and check it from the main process (`app.evaluate`: url, title, bounds). It is sandboxed, own partition, no preload, http(s) only (`browser-url.ts`).
+- Auth headers are built in one pinned place (`useApi`); new endpoints (`/api/git/diff`, `/api/bash`, `/api/models`, `/api/models/select`) were added there, not as raw `fetch` in components.
+- `/api/git/diff` takes no path from the client (the file list comes from `git status -z -uall`), caps files and bytes per file; 7 tests against a real repo.
+- The Terminal tab calls `/api/bash`, which the default AUTO_EDIT policy refuses ("no approver is present over REST"). That is the policy working; the tab says so and does not bypass it. Widening it is the user's decision.
+
+## app shows "No sessions yet": sessions are per-workspace databases (2026-10-06)
+
+Search words: sessions, wisp.db, workspace store, read-only, import, session_sources, untitled.
+
+- Wisp stores sessions in `<workspace>/.wisp/wisp.db`. The app's workspace is `~/.wisp/workspace`, so its store started empty while the user's history sat in `~/.config/wisp/wisp.db` (8188 sessions) and `~/.wisp/wisp.db` (433). Measured with `sqlite3 -readonly immutable=1` counts, no content read.
+- Fix is additive: `GET /api/sessions` merges the app store with the other known stores, opened `mode=ro` (no migration, no WAL checkpoint). Opening a foreign session is an explicit copy into the app store (`POST /api/sessions/{id}/import`); delete and rename are refused (409) for sessions that exist only elsewhere. Tests hash the source files before and after list/get/import and require them unchanged (`tests/test_session_sources.py`).
+- `PATCH /api/sessions/{id}` was a stub returning `{session_id}`, so the UI's rename always reported failure; it now renames.
+- Untitled rows are labelled from the first text message via `json_extract` guarded by `json_type` (multimodal content is a list). 400 rows in 0.07 s on the real data; 40 stay untitled.
+- Not covered: per-project stores (`<project>/.wisp/wisp.db`) are not scanned; a registry of known workspaces would be needed.
+
+## switching the project folder did nothing: stale WORKSPACE_ROOT copies, allowlist, silent UI (2026-10-07)
+
+Search words: workspace switch, WORKSPACE_ROOT, allowed roots, from-import copy, rebind, project folder, prefs.json.
+
+- Three independent causes, each enough to make the selector look dead: (1) the backend only allows switching inside the *current* workspace unless `WISP_ALLOWED_WORKSPACE_ROOTS` is set, so choosing a real project returned 400; (2) ~20 route modules did `from ...workspace import WORKSPACE_ROOT`, which copies the Path at import, so even an accepted switch never reached Diff/Files/git/shell routes; (3) the UI ignored a non-ok response (`if (resp.ok)` with no else).
+- Fix: `workspace._rebind_workspace_root` rebinds, by identity, every `wisp.server*` module still holding the old value (a module deliberately given another path is left alone) and clears the three caches built for the old folder (`codebase._semantic_index`, `mcp._mcp_manager`, `suggestions._app_suggestion_watcher`). The desktop app passes `WISP_ALLOWED_WORKSPACE_ROOTS=$HOME` (an explicit environment value wins). The UI shows the server's reason.
+- A from-import of a mutable module global is a latent bug anywhere it is reassigned later; mutation probe: removing the rebind call fails 3 of the 7 tests in `tests/test_workspace_switch.py`.
+- The remembered project lives in a main-process file (`userData/prefs.json`, atomic write, 0600), not localStorage: Chromium flushes localStorage lazily, so a killed or crashed app lost it (seen in the e2e restart check).
+- The shell's cwd follows the project (validated in main: absolute, exists, inside home, no `..`); a running shell in another folder shows a "restart in the project folder" prompt instead of being killed.
+- `deleteSession` tested `data.ok` but the server returns `{"deleted": true}`: every delete in the UI looked failed. Found by reading the call site against the route while fixing something else; now covered by `useApi.sessions.test.ts` against the real response shapes.
+- The auth-header ratchet test (`authHeaderAuthority.test.ts`) fails *when a known duplicate disappears*: delete the entry (that is the design).
+- Glued assistant text ("available.Swift 6.2") in one opened session is already glued in the stored message content; that session came from another producer (CodeAgentMac), so it is data as stored, not a wisp-core finding.
+
 ## invariant gates: five deterministic layers before every tool call (2026-10-07)
 
 Search words: gates, shellparse, PIPESTATUS, fail closed, fixed point, flat event, tool_result_guard, verification floor, mutation probe, denial vocabulary.
@@ -583,3 +629,14 @@ Search words: pipefail, PIPESTATUS, pipeline, exit code, `| tail`, run_bash, mas
 - **A message that counts attempts must count requests.** "after 3 attempts" was nine requests.
 - **Mutation probes found a pattern that matched two loops** (`hardened_post` and `hardened_get` share a retry shape): a replace-first on a verified range is safer than loosening the assertion.
 - **Not the user's config or the model's fault to fix here:** the route (`inclusionai/ling-3.1-flash` on OpenRouter) was rate-limiting; switching with `/provider nvidia <model>` works since PR 92.
+
+## Lesson: a check that did not run reported success (2026-10-07)
+
+Search: ci parity, pytest tail exit code, export HOME tilde, zsh no matches found glob, rtk npx, npm 10 ci dry-run, empty target list
+
+Three checks for PR #97 looked green or red for the wrong reason in one afternoon. Evidence: the command outputs of that run.
+
+- **`export HOME=$(mktemp -d)` changes what `~` means for the rest of the command.** `~/.venvs/wisp/bin/python` then pointed into the empty temp HOME, pytest never started, and the background task still reported `exit code 0` because the last stage was `tail`. Use an absolute interpreter path and set `HOME=...` only on the pytest command (`HOME=$H /abs/python -m pytest ...`), and write the real status to the output file (`echo rc=$?`).
+- **An unmatched zsh glob can silently empty a list.** `tests/test_desktop*` matched nothing, the target variable was empty, and a 79-test run stood in for the intended 3201. Print the resolved target list and the collected count before trusting a pass.
+- **The `rtk` hook rewrites `npx`.** `npx -y npm@10 ci` became "Unknown command: npm@10", which looked like a lockfile failure. `rtk proxy npx -y npm@10 ci --dry-run --ignore-scripts` exits 0, so the lockfile was in sync all along.
+- General rule: when a check fails or passes unexpectedly, first prove that the check ran (resolved arguments, collected count, real exit status), then read the result.
