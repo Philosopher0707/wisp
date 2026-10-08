@@ -381,6 +381,11 @@ def _run_graph_turn(runner: Any, ctx: TaskContext, decision: StrategyDecision,
         from wisp.config import WispConfig
         live_config = cfg if isinstance(cfg, WispConfig) else None
         final = run_coding_template(template, ctx, emit=emit, config=live_config)
+    except KeyboardInterrupt:
+        # The REPL's SIGINT handler raises this from inside the signal handler when no engine turn task exists, which is always the case
+        # here (the graph runs under its own asyncio.run). Uncaught it ends the REPL; the engine path reports an interrupted turn and goes on.
+        _emit_line(out, "\nTurn interrupted: the graph run was cancelled.")
+        return True
     except Exception as exc:
         _emit_line(out, f"graph run failed: {exc}")
         return True

@@ -333,3 +333,35 @@ class TestParallelMergeTemplate:
         line = C.render_progress({"type": "graph.route_selected",
                                   "data": {"node_id": "merge", "label": "merged"}})
         assert line and "merge" in line
+
+
+class TestAnInterruptedGraphTurn:
+    """Field log O-3: Ctrl-C during the graph path must interrupt the turn, not end the REPL (the pty version is tests/test_graph_cancel_pty.py)."""
+
+    def _runner(self):
+        import io
+        from types import SimpleNamespace
+
+        return SimpleNamespace(config=None, out=io.StringIO())
+
+    def test_keyboard_interrupt_from_the_graph_run_is_a_handled_turn(self, monkeypatch):
+        runner = self._runner()
+
+        def boom(*a, **kw):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(C, "run_coding_template", boom)
+        prompt = "implement the new auth module and refactor the api across multiple files and add tests."
+        assert C.handle_prompt(runner, prompt) is True
+        assert "Turn interrupted" in runner.out.getvalue()
+
+    def test_an_ordinary_graph_failure_is_still_reported_as_a_failure(self, monkeypatch):
+        runner = self._runner()
+
+        def boom(*a, **kw):
+            raise RuntimeError("planner exploded")
+
+        monkeypatch.setattr(C, "run_coding_template", boom)
+        prompt = "implement the new auth module and refactor the api across multiple files and add tests."
+        assert C.handle_prompt(runner, prompt) is True
+        assert "graph run failed: planner exploded" in runner.out.getvalue() and "Turn interrupted" not in runner.out.getvalue()
