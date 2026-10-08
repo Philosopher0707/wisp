@@ -698,3 +698,14 @@ A real session (the owner's kvagent project) ran its tests many times with `pyte
 - **Do not define "empty" by one event type.** The first version tested `partial_content`, which only collects `content` events; a provider whose text arrives as `token` events looked empty and got an extra round. Two old tests caught it. Production providers emit `content`, but the gate must never call a streamed answer empty: it now watches content/text/token (not reasoning).
 - **A new harness line changes baselines.** The persona `ClaimsWithoutRunning` no longer "reaches the user" with the core off, because the floor's own note now tells the user; `flagged()` in the persona harness was split into any harness note and R1's note specifically. A published table and eight tests had to say which one they meant.
 - Method that worked: reproduce the owner's sequence with a scripted provider first (it showed the same event order), RED tests, 12 mutants (11 killed first time; the survivor was a test bound that was too loose), full suite twice. Two failures remain locally and are environmental (Docker daemon; a test that needs a clean `HOME`); a third group (web tests) failed once because DNS dropped during the run.
+
+## Lesson: a second code path needs the first path's signal fix (2026-10-07)
+
+Search: ctrl-c graph path, KeyboardInterrupt, _on_sigint, _turn_task, run_coding_template, asyncio.run, pty test, field log O-3
+
+The owner pressed Ctrl-C during a prompt that the strategy gate had routed to the graph path ("graph path (complex): complexity score 2") and the REPL died with a traceback. PR #90 had fixed the same class for the engine path: `_on_sigint` cancels cleanly only when a `_turn_task` exists, otherwise it raises KeyboardInterrupt from inside the signal handler. The graph path (`coding.handle_prompt` → `run_coding_template` → `asyncio.run`) runs under its own loop, never sets `_turn_task`, and its callers catch `Exception`, which does not include KeyboardInterrupt.
+
+- **When a signal fix is made for one path, list every path that blocks the REPL thread** (here: `run_turn` and `_run_graph_turn`; `run_coding_template` has exactly one caller). Grep `asyncio.run(` and `run_until_complete(` in the REPL's reach.
+- **Reproduce with a real signal in a real pty**, with the stalled-provider stub #90 used: the new test failed with the owner's traceback (`_run_once` → `select` → KeyboardInterrupt) before any change. A fake exception would not have shown that the shutdown of `asyncio.run` does not hang (it did not: `/exit` still left within 12 s).
+- Test the handler stays armed: two interrupted graph turns, then a normal command, then `/exit`.
+- Not verified: whether work the graph's workers had already started (a shell command) is stopped by the cancel.
