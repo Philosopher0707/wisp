@@ -33,7 +33,8 @@ HIDDEN_NAME = "_hidden_check.py"
 IGNORED_DIRS = frozenset({"__pycache__", ".pytest_cache", ".git", ".wisp", ".agent"})
 # Substrings in wisp's output that mean the run died before real work.
 INFRA_MARKERS = ("402", "NO_APPROVER", "Traceback", "Connection refused", "rate limit",
-                 "insufficient", "timed out", "401", "403")
+                 "insufficient", "timed out", "401", "403",
+                 "429", "rate-limited", "Too Many Requests")
 
 
 @dataclass

@@ -117,6 +117,8 @@ def _referenced(imported: set[str], module: str) -> bool:
 
 # Modules with no importer, each with a recorded reason for existing.
 KNOWN_UNREFERENCED = {
+    # The dashboard's entry point: launched as `python -m wisp.dashboard`, never imported.
+    "wisp.dashboard.__main__",
     # Background-job supervisor: launched as a detached process (`python -m wisp.jobs.supervisor`), never imported.
     "wisp.jobs.supervisor",
     # Spec-compliance shim: an external spec names this import path, so being

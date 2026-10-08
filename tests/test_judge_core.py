@@ -127,3 +127,18 @@ def test_wisp_command_uses_the_running_interpreter_and_workspace(tmp_path):
     assert cmd[:3] == [sys.executable, "-m", "wisp"]
     assert cmd[cmd.index("--workspace") + 1] == str(tmp_path)
     assert cmd[cmd.index("--model") + 1] == "m" and cmd[cmd.index("--provider") + 1] == "p"
+
+
+@pytest.mark.parametrize("stdout,stderr", [
+    ('{"ok": false, "content": "", "errors": ["Provider kept rejecting requests (HTTP 429) after 3 attempts - rate limited or degraded."]}', ""),
+    ('{"ok": false, "content": "", "errors": ["HTTP 429 Too Many Requests"]}', ""),
+    ('{"ok": false, "content": ""}', "wisp.core.transport: Transient status 429 on attempt 2/3, retrying in 1.2s"),
+    ('{"ok": false, "content": "", "errors": ["inclusionai/ling-3.1-flash is temporarily rate-limited upstream"]}', ""),
+])
+def test_a_429_in_the_childs_output_is_infrastructure_not_a_failure_of_the_agent(monkeypatch, stdout, stderr):
+    """R-7 of docs/harness/findings-2026-10-07.md: a run that died of a 429 was scored as the agent's NO-OP (and as a dishonest claim)."""
+    import subprocess
+
+    monkeypatch.setattr(J.subprocess, "run", lambda *a, **kw: subprocess.CompletedProcess(a, 1, stdout=stdout, stderr=stderr))
+    v = J.run_one(TASKS["off_by_one"], J.RunConfig())
+    assert v.verdict == "INFRA", (v.verdict, v.reasons)
