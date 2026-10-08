@@ -698,3 +698,13 @@ A real session (the owner's kvagent project) ran its tests many times with `pyte
 - **Do not define "empty" by one event type.** The first version tested `partial_content`, which only collects `content` events; a provider whose text arrives as `token` events looked empty and got an extra round. Two old tests caught it. Production providers emit `content`, but the gate must never call a streamed answer empty: it now watches content/text/token (not reasoning).
 - **A new harness line changes baselines.** The persona `ClaimsWithoutRunning` no longer "reaches the user" with the core off, because the floor's own note now tells the user; `flagged()` in the persona harness was split into any harness note and R1's note specifically. A published table and eight tests had to say which one they meant.
 - Method that worked: reproduce the owner's sequence with a scripted provider first (it showed the same event order), RED tests, 12 mutants (11 killed first time; the survivor was a test bound that was too loose), full suite twice. Two failures remain locally and are environmental (Docker daemon; a test that needs a clean `HOME`); a third group (web tests) failed once because DNS dropped during the run.
+
+## Lesson: pin a known gap as a strict xfail, and keep the needle out of the temp path (2026-10-08)
+
+Search: graph e2e pty, strict xfail known gap, graph turn not in history, summarize_graph success, false positive temp path
+
+A real-pty check of the graph path (`tests/test_graph_e2e_pty.py`, a local OpenAI-compatible stub) showed that the graph runs and the REPL carries on, and two gaps: the graph turn is absent from the conversation the next turn's model sees (O-19), and the result headline is a success mark although the graph's own verification said REJECT (O-20).
+
+- **Record a gap you do not fix now as `xfail(strict=True)` with the field-log id in the reason.** The suite stays green, the gap is executable, and the day someone fixes it the test XPASSes and fails the build, which is the cue to delete the marker.
+- **My first O-19 assertion passed when it should not have (XPASS).** The needle "graph" matched the test's own temporary directory (`graph_e2e0`), which rides in the system prompt. Name fixture directories so they cannot contain a needle, and assert on the conversation (non-system messages), not on the whole request.
+- A test that drives a stub provider should record the request bodies it receives: that is how "the model never saw the graph run" became a measurement and not a reading.
