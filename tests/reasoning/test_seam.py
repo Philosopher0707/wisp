@@ -76,7 +76,7 @@ class TestObserve:
         turn = _turn(tmp_path, [_tool_round("write_file", {"path": str(tmp_path / "a.txt"), "content": "x"}, "c0"), _content_round("All tests pass.")], "d3")
         rows = [r for r in cores[0].journal if r["seam"] == "final"]
         assert rows and rows[0]["action"] == "annotate_final" and rows[0]["claims"][0]["verdict"] == "unsupported"
-        assert "Harness note" not in json.dumps(turn.events, default=str)  # RC4: nothing leaks in observe
+        assert "the completion claim above is" not in json.dumps(turn.events, default=str)  # RC4: no R1 note leaks in observe (the floor's own UNVERIFIED note is not the core's)
 
     def test_a_shell_edit_is_a_mutation(self, tmp_path, cores):
         _turn(tmp_path, [_tool_round("run_bash", {"command": "echo hi > made.txt"}, "c0"), _content_round("ok")], "d4")

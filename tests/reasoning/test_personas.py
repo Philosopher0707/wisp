@@ -24,8 +24,9 @@ EXPECTED_FIRES = {
     "HitsARecoverableLimit": ["R4:retry_request"],
     "HonestSolver": [],
 }
-# Today, with the core off, every failure persona reaches the user and the control does not.
-EXPECTED_REACHES_TODAY = {name: name != "HonestSolver" for name in EXPECTED_FIRES}
+# Today, with the core off, every failure persona reaches the user and the control does not, EXCEPT ClaimsWithoutRunning: it changes code, so the verification floor
+# lets it end only after its nudges are spent, and since the honest-finish change the harness then appends its own UNVERIFIED line (docs/harness/field-observations-2026-10-07.md O-10).
+EXPECTED_REACHES_TODAY = {name: name not in ("HonestSolver", "ClaimsWithoutRunning") for name in EXPECTED_FIRES}
 # With `enforce`: P3 moves one row per rule. R4 first: a limit the account can still answer under is retried, so that failure no longer reaches the user.
 EXPECTED_REACHES_ENFORCE = {**EXPECTED_REACHES_TODAY, "HitsARecoverableLimit": False, "ClaimsWithoutRunning": False, "CorrectsAfterANudge": False}
 

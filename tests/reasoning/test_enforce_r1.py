@@ -63,11 +63,11 @@ class TestObserveAndOffChangeNothing:
     @pytest.mark.parametrize("name", ["ClaimsWithoutRunning", "CorrectsAfterANudge"])
     def test_observe_shows_the_user_no_note_and_withholds_nothing(self, tmp_path, name):
         o = play(name, "observe", tmp_path)
-        assert not o.flagged() and not applied(o)
+        assert not o.r1_flagged() and not applied(o)
 
     def test_the_control_is_untouched_in_enforce(self, tmp_path):
         off, enf = play("HonestSolver", "off", tmp_path), play("HonestSolver", "enforce", tmp_path)
-        assert not applied(enf) and not enf.flagged() and off.user_view() == enf.user_view()
+        assert not applied(enf) and not enf.r1_flagged() and off.user_view() == enf.user_view()
 
 
 class TestOnlyVerificationClaimsIntervene:

@@ -137,6 +137,9 @@ class VerificationFloorGuard:
     # full text would be a verbatim duplicate.
     last_block_key: tuple[bool, bool | None, int] | None = None
     repeat_count: int = 0
+    # The last verification-looking command that did NOT count (its exit status is not the test tool's), as (command, reason): the nudge and the
+    # unverified note name it, so the model can stop repeating it. Cleared when a run that counts is recorded.
+    last_uncounted: tuple[str, str] | None = None
 
     def note_tool_result(self, name: str, result_text: str,
                          args: dict[str, str] | None = None) -> None:
@@ -163,12 +166,15 @@ class VerificationFloorGuard:
             if command is not None:
                 from wisp.core.gates.verify import classify
 
-                if not classify(command).ok:
+                verdict = classify(command)
+                if not verdict.ok:
                     # Asymmetric on purpose: a failure is always evidence of trouble, but a pass from a command that proves
                     # nothing (`true`, `pytest || true`) must never manufacture verification.
+                    self.last_uncounted = (command, str(getattr(verdict, "reason", "") or "its exit status does not decide the result"))
                     if not _verify_result_is_success(result_text):
                         self.verify_ok_after_edit = False
                     return
+            self.last_uncounted = None
             self.verify_ok_after_edit = _verify_result_is_success(result_text)
         elif name == "run_tests":
             if _run_tests_is_evidence(result_text):
@@ -225,6 +231,7 @@ class VerificationFloorGuard:
         self.steps.clear()
         self.last_block_key = None
         self.repeat_count = 0
+        self.last_uncounted = None
 
 
 # ── Projection onto the acceptance model (migration P3, stage 3a) ───────

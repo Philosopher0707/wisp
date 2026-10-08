@@ -519,6 +519,13 @@ class WispAgentCore:
             _VERIFY_TOOLS,
             compose_nudge,
         )
+        from wisp.core.honest_finish import (
+            NO_ANSWER_NOTE,
+            compose_empty_round_nudge,
+            is_empty_answer,
+            uncounted_reason,
+            unverified_note,
+        )
 
         verification_enabled = True
         if self.config is not None:
@@ -572,11 +579,13 @@ class WispAgentCore:
         # journaled, not a goal-state input, and a field would make it shared
         # state across concurrent turns.
         stagnation_interventions_used = 0
+        empty_round_nudges_used = 0
         for iteration in range(max_iterations):
             pending_tool_calls: list[dict[str, Any]] = []
             tool_results_events_early: list[dict[str, Any]] = []
             provider_events: list[dict[str, Any]] = []
             partial_content: list[str] = []
+            answer_event_seen = False  # any text answer (content/text/token, not reasoning): the honest-finish gates must never call a streamed answer empty
             has_tool_calls = False
             # G1B: the provider round-trip ended non-complete (error event
             # or mid-stream stall). The error is already yielded live below;
@@ -630,6 +639,9 @@ class WispAgentCore:
                     if normalized.get("type") == "content":
                         partial_content.append(normalized.get("text", ""))
                         streamed_any_content = True
+                    if (normalized.get("type") in ("content", "text", "token") and normalized.get("phase") != "thinking"
+                            and str(normalized.get("text") or normalized.get("content") or "").strip()):
+                        answer_event_seen = True
 
                     # Security + extension checks for tool calls
                     if normalized.get("type") in ("tool_call", "tool_calls"):
@@ -825,6 +837,8 @@ class WispAgentCore:
                                 "the most recent verification command FAILED "
                                 "(non-zero exit status)"
                             )
+                        elif guard.last_uncounted is not None:
+                            reason = uncounted_reason(*guard.last_uncounted)
                         else:
                             reason = (
                                 "no verification command (tests/linter) has been "
@@ -922,6 +936,14 @@ class WispAgentCore:
                     announces_next_step, compose_continue_nudge)
 
                 round_text = "".join(partial_content)
+                # A round that ends with no answer at all (reasoning only) gets ONE nudge, then the turn ends with a plain statement below.
+                if (is_empty_answer(round_text) and not answer_event_seen and empty_round_nudges_used < 1
+                        and iteration + 1 < max_iterations):
+                    empty_round_nudges_used += 1
+                    nudge = compose_empty_round_nudge()
+                    messages.append(nudge_message(nudge))
+                    yield _flatten_event(system(nudge, level="warning"))
+                    continue
                 if (announces_next_step(round_text)
                         and stagnation_interventions_used
                         < _MAX_STAGNATION_INTERVENTIONS
@@ -932,6 +954,7 @@ class WispAgentCore:
                     messages.append(nudge_message(nudge))
                     yield _flatten_event(system(nudge, level="warning"))
                     continue
+                r1_flagged_the_answer = False
                 # Reasoning core, R1 (enforce only; None in observe). It sits AFTER every other completion gate so the verification floor
                 # keeps its exact behaviour and a turn is never nudged twice: it asks only about a success claim the ledger cannot back.
                 if reasoning is not None:
@@ -946,6 +969,15 @@ class WispAgentCore:
                             continue
                         # Withheld once already (or no round left): the answer stands, flagged, and the turn ends unverified.
                         yield _flatten_event(content_event(f"\n\n{_r1.note}"))
+                        r1_flagged_the_answer = True
+                # A turn that changed code and ends without a verification run that exited 0 says so itself: the only other statement of it
+                # was the nudge to the model, which a model that answers with reasoning only never relays.
+                if (guard.enabled and guard.wrote_code and not guard.resolved() and not r1_flagged_the_answer
+                        and "unverified" not in round_text.lower()):
+                    yield _flatten_event(content_event("\n\n" + unverified_note(
+                        failed=guard.verify_ok_after_edit is False, uncounted=guard.last_uncounted)))
+                if is_empty_answer(round_text) and not answer_event_seen:
+                    yield _flatten_event(content_event("\n\n" + NO_ANSWER_NOTE))
                 # RESOLVED (verified, not surrendered) → distill the trail
                 # into a permanent auto skill, best-effort, never blocking.
                 if guard.resolved():
