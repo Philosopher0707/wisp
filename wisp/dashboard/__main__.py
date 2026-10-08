@@ -19,10 +19,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--bench-dir", default="", help="where benchmark results live (default: $WISP_BENCH_DIR or ~/.local/state/wisp/bench)")
     s.add_argument("--workspace", action="append", default=[], help="a workspace whose .wisp data to include (repeatable; default: scan common roots)")
     b = sub.add_parser("bench", help="run the benchmark and write one line per attempt")
-    b.add_argument("--model", required=True)
-    b.add_argument("--provider", default="")
-    b.add_argument("--api-base", default="")
-    b.add_argument("--key-from", default="", help="NAME of the environment variable or ~/.config/wisp/.env line that holds the key; the key is never printed or written")
+    b.add_argument("--model", default="", help="default: WISP_MODEL from this environment, then from ~/.config/wisp/.env")
+    b.add_argument("--provider", default="", help="default: WISP_PROVIDER")
+    b.add_argument("--api-base", default="", help="default: WISP_API_BASE")
+    b.add_argument("--key-from", default="", help="NAME of the environment variable or ~/.config/wisp/.env line that holds the key; default WISP_API_KEY when it is set; the key is never printed or written")
     b.add_argument("--label", default="default", help="the harness configuration being measured, e.g. default or core-off")
     b.add_argument("--env", action="append", default=[], metavar="KEY=VALUE", help="environment for the child wisp (how a configuration is chosen); repeatable")
     b.add_argument("--tasks", default="", help="comma-separated task ids (default: all)")
@@ -49,7 +49,18 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"--env expects KEY=VALUE, got {item!r}", file=sys.stderr)
                 return 2
             env[key] = value
-        spec = bench.BenchSpec(model=args.model, provider=args.provider, api_base=args.api_base, key_from=args.key_from, label=args.label, env=env,
+        import wisp.dashboard.presence as presence
+
+        resolved = presence.resolve_model()
+        model = args.model or resolved.get("model", "")
+        if not model:
+            print("no model: pass --model, or set WISP_MODEL in the environment or in ~/.config/wisp/.env", file=sys.stderr)
+            return 2
+        provider, api_base = args.provider or resolved.get("provider", ""), args.api_base or resolved.get("api_base", "")
+        key_from = args.key_from or ("WISP_API_KEY" if presence.env_has("WISP_API_KEY") else "")
+        source = "--model" if args.model else resolved.get("model_source", "")
+        print(f"measuring {model} ({source}) provider={provider or 'default'} key from {key_from or 'nothing'}; this spends tokens on that provider's account", flush=True)
+        spec = bench.BenchSpec(model=model, provider=provider, api_base=api_base, key_from=key_from, label=args.label, env=env,
                                tasks=[t for t in args.tasks.split(",") if t], repeats=args.repeats, timeout=args.timeout,
                                infra_retries=args.infra_retries, backoff_s=args.backoff, wisp_path=args.wisp_path or _checkout_root(),
                                isolate_home=not args.no_isolate_home, min_free_mb=args.min_free_mb)

@@ -40,7 +40,7 @@ function h(tag,attrs,...kids){const e=document.createElement(tag);for(const[k,v]
 function s(tag,attrs,...kids){const e=document.createElementNS("http://www.w3.org/2000/svg",tag);for(const[k,v]of Object.entries(attrs||{}))e.setAttribute(k,String(v));for(const c of kids.flat()){if(c==null)continue;e.append(c.nodeType?c:document.createTextNode(String(c)));}return e;}
 const pct=(x,d=0)=>x==null?"–":(x*100).toFixed(d)+"%";const num=x=>x==null?"–":Number(x).toLocaleString();
 const when=t=>t?String(t).replace("T"," ").slice(0,16):"–";const secs=x=>x==null?"–":(x<90?x.toFixed(0)+" s":(x/60).toFixed(1)+" min");
-const TABS=[["overview","Overview"],["accuracy","Accuracy"],["models","Models"],["usage","Real use"],["harness","Harness"],["findings","Findings"],["learning","Learning"]];
+const TABS=[["overview","Overview"],["live","Live"],["accuracy","Accuracy"],["models","Models"],["usage","Real use"],["harness","Harness"],["findings","Findings"],["learning","Learning"]];
 const data={};let current=(location.hash||"#overview").slice(1);
 async function load(name){try{const r=await fetch("/api/"+name,{cache:"no-store"});data[name]=await r.json();}catch(e){data[name]={error:String(e)};}return data[name];}
 function errBox(o){return o&&o.error?h("div",{class:"note err",text:"This section could not be computed: "+o.error}):null;}
@@ -62,6 +62,7 @@ function share(label,v,mx,color){return h("div",{},h("div",{class:"small"},label
 let showAll=false;
 function overview(){const o=data.overview||{};const root=h("div",{});const e=errBox(o);if(e)root.append(e);
  const grid=h("div",{class:"grid"});
+ if(o.running)grid.append(card("Running now",h("div",{class:"big",text:String(o.running)}),h("p",{class:"small mute"},"session(s) announced in the last 20 s. ",h("a",{href:"#live",text:"See which"}))));
  if(!(o.headline||[]).length)grid.append(card("Measured accuracy",h("div",{class:"big bad",text:"no number yet"}),h("p",{class:"mute"},"Nothing has been benchmarked, so how well the agent codes is not known. Run, then reload:"),h("code",{text:o.bench_command||""})));
  (o.headline||[]).forEach(g=>{const sm=g.summary;const small=sm.scored<10;grid.append(card("Measured accuracy · "+g.model+" · "+g.label,
   h("div",{class:"big"+(small?" mute":""),text:sm.pass_rate==null?"–":(small?`${sm.solved}/${sm.scored}`:pct(sm.pass_rate))}),
@@ -105,6 +106,18 @@ function models(){const u=data.usage||{};const b=data.bench||{};const root=h("di
  const mm={};(b.groups||[]).forEach(g=>{(mm[g.model]=mm[g.model]||[]).push(g);});
  root.append(card("Measured accuracy by model",Object.keys(mm).length?table([{h:"model",f:r=>r[0]},{h:"configurations",f:r=>r[1].map(g=>`${g.label}: ${pct(g.summary.pass_rate)} (${g.summary.solved}/${g.summary.scored})`).join(" · ")}],Object.entries(mm)):h("p",{class:"mute",text:"No benchmark data yet."})));return root;}
 
+const age=x=>x==null?"–":(x<90?x.toFixed(0)+" s":x<5400?(x/60).toFixed(0)+" min":(x/3600).toFixed(1)+" h");
+function live(){const l=data.live||{};const root=h("div",{});const e=errBox(l);if(e)root.append(e);
+ const ss=l.sessions||[];const dm=l.default_model||{};
+ root.append(card("Running now ("+(l.running||0)+" announced, "+ss.length+" found)",ss.length?table([
+  {h:"state",f:x=>h("span",{class:"tag",text:(x.this?"this · ":"")+x.state})},{h:"kind",f:x=>x.kind},{h:"model",f:x=>x.model?h("span",{},x.model," ",h("span",{class:"mute small",text:x.model_source||""})):h("span",{class:"mute",text:"unknown"})},
+  {h:"workspace",f:x=>x.workspace||"–"},{h:"pid",num:1,f:x=>x.pid},{h:"up",num:1,f:x=>age(x.uptime_s)},{h:"last heartbeat",num:1,f:x=>x.heartbeat_age_s==null?"–":age(x.heartbeat_age_s)+" ago"}],ss):
+  h("p",{class:"mute",text:"No wisp session is running. Start one with `wisp`; it appears here within a few seconds."}),
+  h("p",{class:"small mute",text:(l.notes||[]).join(" ")})));
+ root.append(card("A session started now would use",dm.model?h("p",{},h("b",{text:dm.model})," via ",dm.provider||"default provider"," ",h("span",{class:"mute small",text:"("+(dm.model_source||"")+")"})):h("p",{class:"mute",text:"No WISP_MODEL in this environment or in ~/.config/wisp/.env; the configured default applies."})));
+ root.append(card("Touched in the last "+Math.round((l.recent_window_s||0)/60)+" minutes",(l.recent||[]).length?table([{h:"session",f:x=>x.session_id.slice(0,8)},{h:"model",f:x=>x.model},{h:"workspace",f:x=>x.workspace},{h:"messages",num:1,f:x=>num(x.messages)},{h:"idle",num:1,f:x=>age(x.idle_s)}],l.recent):h("p",{class:"mute",text:"No session changed in that window."}),
+  h("p",{class:"small mute",text:"From each workspace database; includes sessions that have already closed."})));return root;}
+
 function usage(){const u=data.usage||{};const rt=data.runtime||{};const root=h("div",{});const e=errBox(u);if(e)root.append(e);const grid=h("div",{class:"grid"});
  const tools=(u.tools||[]).slice(0,14);const mx=Math.max(1,...tools.map(t=>t.calls));
  grid.append(card("Tools: calls and share not ok",...tools.map(t=>share(`${t.tool}  ${num(t.calls)} calls · ${t.error_rate==null?"–":pct(t.error_rate,1)} not ok`,t.calls,mx,t.error_rate>0.2?"var(--bad)":"var(--accent)")),
@@ -141,15 +154,16 @@ function learning(){const l=data.learning||{};const root=h("div",{});const e=err
  const cs=l.captured_skills||{total:0,by_day:{},by_workspace:{}};grid.append(card("Auto-captured skills",h("div",{class:"big",text:num(cs.total)}),bars(Object.entries(cs.by_day||{}),{label:d=>d}),
   h("div",{class:"small mute",text:`global skills installed: ${num(l.global_skills)} · whether captured skills are ever used is not measured`})));root.append(grid);return root;}
 
-const VIEWS={overview,accuracy,models,usage,harness,findings,learning};
-const NEEDS={overview:["overview","bench","usage","harness","learning","findings","overhead"],accuracy:["bench","harness"],models:["usage","bench","harness"],usage:["usage","runtime","harness"],harness:["harness","overhead"],findings:["findings","harness"],learning:["learning","harness"]};
+const VIEWS={overview,live,accuracy,models,usage,harness,findings,learning};
+const NEEDS={overview:["overview","bench","usage","harness","learning","findings","overhead"],live:["live","harness"],accuracy:["bench","harness"],models:["usage","bench","harness"],usage:["usage","runtime","harness"],harness:["harness","overhead"],findings:["findings","harness"],learning:["learning","harness"]};
 function render(){const main=$("#main");main.replaceChildren();const sec=h("section",{class:"on"},VIEWS[current]?VIEWS[current]():h("p",{text:"unknown view"}));main.append(sec);
  document.querySelectorAll("#tabs button").forEach(b=>b.setAttribute("aria-selected",b.dataset.k===current));
  const hd=data.harness||{};$("#sha").textContent=(hd.sha||"?")+(hd.dirty?" · dirty":"");$("#stamp").textContent="updated "+new Date().toLocaleTimeString();}
 async function refresh(){await Promise.all((NEEDS[current]||[]).map(load));render();}
 const tabs=$("#tabs");TABS.forEach(([k,label])=>{const b=h("button",{role:"tab","data-k":k,text:label});b.addEventListener("click",()=>{current=k;location.hash=k;refresh();});tabs.append(b);});
 window.addEventListener("hashchange",()=>{const k=location.hash.slice(1);if(VIEWS[k]&&k!==current){current=k;refresh();}});
-refresh();setInterval(()=>{if(!document.hidden)refresh();},10000);
+let last=0;async function tick(){if(document.hidden)return;if(current==="live"||Date.now()-last>=10000){last=Date.now();await refresh();}}
+refresh();last=Date.now();setInterval(tick,3000);
 </script></body></html>
 """
 

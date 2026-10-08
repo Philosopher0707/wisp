@@ -4,8 +4,10 @@ A local, read-only web page over what Wisp measures about itself. Started 2026-1
 
 ```
 python -m wisp.dashboard serve            # http://127.0.0.1:8765, Ctrl-C to stop
-python -m wisp.dashboard bench --model <model> --provider <provider> --key-from <ENV_NAME> --label default --repeats 3
+python -m wisp.dashboard bench --label default --repeats 3     # model, provider, base URL and key name come from WISP_MODEL, WISP_PROVIDER, WISP_API_BASE, WISP_API_KEY
 ```
+
+Inside a REPL: `/dashboard` serves it from that session on a background thread (`/dashboard status`, `/dashboard stop`); `WISP_DASHBOARD=1 wisp repl` does it at start. Either way the page opens at the **Live** tab's URL.
 
 `serve` shows; `bench` measures. **The dashboard never starts a benchmark and never spends a token**; `bench` does, so only a person runs it.
 
@@ -14,12 +16,27 @@ python -m wisp.dashboard bench --model <model> --provider <provider> --key-from 
 | Tab | Question | Source |
 |---|---|---|
 | Overview | What is the measured accuracy, and what should I look at first? | benchmark rows, plus alerts computed from every section |
+| Live | Which wisp sessions are running right now, with which model, and which sessions changed in the last 15 minutes? Refreshes every 3 s. | each session's own announcement file (below), `ps` for sessions that do not announce, the workspace databases |
 | Accuracy | How often does each model, under each harness configuration, solve the judge's tasks? | `<bench dir>/*.jsonl` (default `~/.local/state/wisp/bench`, or `$WISP_BENCH_DIR`) |
 | Models | Which models ran in real sessions, how much, when? | each workspace's `.wisp/wisp.db` (`sessions`) |
 | Real use | Which tools, how often not ok, what share of turns ended with `done`, background and graph run outcomes, harness events in `.agent/runtime.log` | `.wisp/audit.jsonl`, `.wisp/wisp.db`, `.agent/runtime.log` |
 | Harness | Which commit, which flags a new session would use, the tokens every request carries, the merged pull requests | git (offline), `WispConfig`, the tool and skill schemas |
 | Findings | What is open, fixed, refuted? | `docs/harness/field-observations-*.md` and `findings-*.md` |
 | Learning | Does the agent keep what it learns? | `~/.config/wisp/memory.json` (counts), its backups, `agent_memory`, captured skills, the `remember` tool's outcomes |
+
+## Live sessions and where the model comes from
+
+macOS and Linux do not let a script read another process's environment (checked: `ps eww` and `sysctl kern.procargs2` return no variables for a process of the same user), so a session **announces itself**: a REPL writes `~/.local/state/wisp/live/<pid>.json` (override with `$WISP_LIVE_DIR`) at start, rewrites it every 5 s and removes it on exit. The file holds the pid, the workspace, the session id, the start time, the heartbeat, and the model and provider **as that session's own environment resolved them**, with the source (`env WISP_MODEL`, or `config`). It never holds a prompt, a message or a key. Another session sweeps files of dead pids when it starts.
+
+| State | Meaning |
+|---|---|
+| running | announced within the last 20 s |
+| silent | the process exists but stopped reporting (a stalled loop, a suspended laptop) |
+| not announced | found by `ps` (`python -m wisp <subcommand>`), an older version that does not announce: the model is unknown, not guessed |
+
+"A session started now would use" is `WISP_MODEL` / `WISP_PROVIDER` from the dashboard process's environment, then from `~/.config/wisp/.env` (only those keys are read from that file). `bench` takes its defaults from the same place and prints the model, its source and "this spends tokens" before it starts; `--model` overrides.
+
+Limits: a later `/model` switch is not written to the file; a session that crashed with `kill -9` shows as gone as soon as its pid is, but its file stays until another session starts; `ps` and `lsof` are called with fixed arguments, never through a shell.
 
 ## How the accuracy number is made, and what it does not mean
 

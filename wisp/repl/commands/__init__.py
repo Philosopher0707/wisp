@@ -134,3 +134,4 @@ from wisp.repl.commands.agents import (  # noqa: E402,F401
     cmd_approve, cmd_thinking, cmd_spawn, cmd_agents, cmd_swarm,
 )
 from wisp.repl.commands.doctor import cmd_doctor  # noqa: E402,F401
+from wisp.repl.commands.dashboard import cmd_dashboard  # noqa: E402,F401

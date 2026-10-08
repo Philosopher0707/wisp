@@ -365,10 +365,23 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
     # constructed by run_mode before dispatch. Nothing to build here.
     # Step 4: single-frame startup banner.
     runner.banner(is_continuation=is_continuation, skill=skill)
+    # Let the dashboard's Live tab list this session (a file that is removed on exit; failures never reach the REPL).
+    from wisp.dashboard import presence
+    presence.announce(session_id=session_id, model=str(config.model or ""), provider=str(getattr(config, "provider", "") or ""),
+                      workspace=str(config.workspace or ""), kind="repl")
+    if os.environ.get("WISP_DASHBOARD") == "1":
+        try:
+            from wisp.dashboard import embed
+            started = embed.start()
+            if started.get("port"):
+                sys.stderr.write(f"Dashboard: {embed.url(started['port'])}\n")
+        except Exception:  # noqa: BLE001 — a dashboard problem must not stop the session
+            pass
     # Step 5: hand off to the interactive loop (shutdown runs inside).
     try:
         runner.run()
     finally:
+        presence.withdraw()
         # Loop teardown stays here: the loop is owned by this driver
         # (or shared with single-shot mode), not by the runner.
         _previous_sigint = signal.getsignal(signal.SIGINT)

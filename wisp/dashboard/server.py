@@ -17,10 +17,12 @@ from typing import Any, Callable
 
 import wisp.dashboard.bench as bench
 import wisp.dashboard.collect as collect
+import wisp.dashboard.live as live
 import wisp.dashboard.ui as ui
 
-SECTIONS = ("overview", "bench", "usage", "runtime", "harness", "overhead", "findings", "learning")
+SECTIONS = ("overview", "live", "bench", "usage", "runtime", "harness", "overhead", "findings", "learning")
 _TTL_S = 8.0
+_TTL_BY_SECTION = {"live": 2.0}  # what is running changes in seconds; the databases behind the other sections do not
 
 
 def alerts(sections: dict[str, dict[str, Any]]) -> list[dict[str, str]]:
@@ -90,6 +92,8 @@ class Dashboard:
 
     def _compute(self, name: str) -> dict[str, Any]:
         ws = self.workspaces()
+        if name == "live":
+            return live.live_data(ws)
         if name == "bench":
             return collect.bench_data(self.bench_dir)
         if name == "usage":
@@ -106,19 +110,20 @@ class Dashboard:
             return collect.learning_data(ws)
         if name == "overview":
             secs = {k: self.get(k) for k in ("bench", "usage", "harness", "learning", "findings", "overhead")}
+            running = self.get("live")
             return {"alerts": alerts(secs), "generated": time.strftime("%Y-%m-%dT%H:%M:%S"), "workspaces": [collect.tilde(w) for w in ws],
                     "headline": [{"group": g["group"], "model": g["model"], "label": g["label"], "summary": g["summary"], "trust": g["trust"], "harness_shas": g["harness_shas"]}
                                  for g in secs["bench"]["groups"]],
                     "in_progress": [r for r in secs["bench"]["runs"] if r["in_progress"]],
-                    "findings": secs["findings"]["counts"], "sha": secs["harness"].get("sha"), "dirty": secs["harness"].get("dirty"),
-                    "bench_command": "python -m wisp.dashboard bench --model <model> --provider <provider> --key-from <ENV_NAME> --label default --repeats 3"}
+                    "running": running.get("running", 0), "findings": secs["findings"]["counts"], "sha": secs["harness"].get("sha"), "dirty": secs["harness"].get("dirty"),
+                    "bench_command": "python -m wisp.dashboard bench --label default --repeats 3   (model, provider and base URL come from WISP_MODEL, WISP_PROVIDER, WISP_API_BASE; --model overrides)"}
         raise KeyError(name)
 
     def get(self, name: str) -> dict[str, Any]:
         now = self._clock()
         with self._lock:
             hit = self._cache.get(name)
-            if hit and now - hit[0] < _TTL_S:
+            if hit and now - hit[0] < _TTL_BY_SECTION.get(name, _TTL_S):
                 return hit[1]
         try:
             value = self._compute(name)
