@@ -259,10 +259,16 @@ async def converge_on_objective(
     criteria: tuple[Any, ...] | None = None,
     specs: tuple[MeasureSpec, ...] | None = None,
     allow_rollback: bool = False,
+    revert_no_progress: bool = False,
     journal_path: str | Path | None = None,
     resume: bool = False,
     root: Any = None,
     on_attempt: Any = None,
+    approval_handler: Any = None,
+    on_event: Any = None,
+    on_attempt_start: Any = None,
+    on_record: Any = None,
+    context: str = "",
 ) -> ConvergenceResult:
     """Run an objective to convergence, or to an honest terminal state.
 
@@ -273,6 +279,16 @@ async def converge_on_objective(
     value (`auto_edit`, in which `run_bash` is blocked). Acceptance does not
     depend on it — the harness measures, not the agent — but an agent that
     cannot run the project's tests cannot check its own work.
+
+    `revert_no_progress` is keep-or-revert: an attempt whose measurement did not improve is undone (its version of each file is kept beside the
+    journal first), so the next attempt starts from the best state reached. It needs a journal and a workspace small enough to snapshot, and does
+    nothing, saying why, when either is missing.
+
+    For a caller that already has a runtime and a person at the keyboard (the
+    REPL): `approval_handler` is the prompt for gated tools, `on_event` sees every
+    event of every attempt, `on_attempt_start` and `on_record` announce an attempt
+    before and after it, and `context` is a short reference block (the conversation
+    so far) appended to each attempt's prompt. None of them is consulted by a decision.
     """
     from wisp.composition import CompositionRoot
     from wisp.config import WispConfig
@@ -360,9 +376,22 @@ async def converge_on_objective(
             before = workspace_fingerprint(workspace)
             events: list[Any] = []
             started = time.monotonic()
+            if on_attempt_start is not None:
+                try:
+                    on_attempt_start(request)
+                except Exception:
+                    logger.debug("on_attempt_start callback failed", exc_info=True)
+            prompt = compose_attempt_prompt(request)
+            if context.strip():
+                prompt = f"{prompt}\n\n[Conversation context, for reference only]\n{context.strip()}"
             async for event in root.runtime.run_turn(
-                    session, compose_attempt_prompt(request)):
+                    session, prompt, approval_handler=approval_handler):
                 events.append(event)
+                if on_event is not None:
+                    try:
+                        on_event(event)
+                    except Exception:
+                        logger.debug("on_event callback failed", exc_info=True)
             observation = observe_turn(events)
             after = workspace_fingerprint(workspace)
             observation = TurnObservation(
@@ -389,6 +418,8 @@ async def converge_on_objective(
             snapshot=WorkspaceSnapshot() if allow_rollback else None,
             journal_path=journal_path,
             baseline=baseline,
+            on_record=on_record,
+            revert_no_progress=revert_no_progress,
         )
         return await controller.converge(objective, resume=resume)
     finally:

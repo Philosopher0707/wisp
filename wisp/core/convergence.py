@@ -55,6 +55,7 @@ import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -1303,6 +1304,10 @@ class AttemptRecord:
     #: its own inputs is an assertion.
     progress: str = ""
     progress_signals: tuple[str, ...] = ()
+    #: Files this attempt changed that the controller put back because the objective did not move (keep-or-revert). Empty
+    #: when nothing was reverted; `revert_note` then says why a revert that was wanted did not happen.
+    reverted: tuple[str, ...] = ()
+    revert_note: str = ""
     started_at: float = field(default_factory=time.time)
     duration_s: float = 0.0
 
@@ -1338,6 +1343,8 @@ class AttemptRecord:
             "measurement_digest": self.measurement_digest,
             "progress": self.progress,
             "progress_signals": list(self.progress_signals),
+            "reverted": list(self.reverted),
+            "revert_note": self.revert_note,
             "duration_s": round(self.duration_s, 3),
             "started_at": self.started_at,
         }
@@ -1367,6 +1374,8 @@ class AttemptRecord:
             measurement_digest=d.get("measurement_digest", ""),
             progress=d.get("progress", ""),
             progress_signals=tuple(d.get("progress_signals") or ()),
+            reverted=tuple(d.get("reverted") or ()),
+            revert_note=d.get("revert_note", ""),
             duration_s=float(d.get("duration_s") or 0.0),
             started_at=float(d.get("started_at") or 0.0),
         )
@@ -1419,8 +1428,18 @@ class ConvergenceController:
         snapshot: "WorkspaceSnapshot | None" = None,
         journal_path: str | Path | None = None,
         baseline: Measurement | None = None,
+        on_record: Callable[["AttemptRecord"], None] | None = None,
+        revert_no_progress: bool = False,
+        snapshot_factory: "Callable[[], WorkspaceSnapshot] | None" = None,
     ):
         self._run_turn = run_turn
+        #: Keep-or-revert (Karpathy's autoresearch `program.md`): an attempt whose measurement did not improve is undone, and what it
+        #: did is kept beside the journal. Off by default for callers that did not ask; the REPL asks.
+        self._revert_no_progress = revert_no_progress
+        self._snapshot_factory = snapshot_factory or WorkspaceSnapshot
+        #: Told about each attempt once it is recorded and journaled, so a caller can show progress as it happens. It only
+        #: OBSERVES: it is never consulted, and an exception in it is logged and dropped (a display must not end a run).
+        self._on_record = on_record
         self._probe = probe
         self._ladder = ladder if ladder is not None else RecoveryLadder()
         self._max_attempts = max(1, int(max_attempts))
@@ -1520,6 +1539,9 @@ class ConvergenceController:
         previous_lines: tuple[str, ...] = ()
         stagnation_witness = ""
         last_measurement: Measurement | None = None
+        #: The lines describing the state the workspace is IN. They differ from the last attempt's lines exactly when that attempt was
+        #: reverted: the workspace is back where it was before the attempt, so the next attempt is shown that state, not the discarded one.
+        kept_lines: tuple[str, ...] = self._baseline.lines if self._baseline is not None else ()
         #: The measurement the NEXT attempt's progress is compared against.
         #: The baseline for attempt 0 — so a first attempt that times out
         #: mid-work is judged against the repository as it was, not against
@@ -1527,9 +1549,12 @@ class ConvergenceController:
         previous_measurement: Measurement | None = self._baseline
         if self.attempts:
             last_record = self.attempts[-1]
-            previous_lines = last_record.measurement_lines
-            stagnation_witness = last_record.measurement_digest
-            previous_measurement = last_record.measurement
+            kept_record = next((r for r in reversed(self.attempts) if not r.reverted), None)
+            if kept_record is not None:
+                kept_lines = kept_record.measurement_lines
+                stagnation_witness = kept_record.measurement_digest
+                previous_measurement = kept_record.measurement
+            previous_lines = ((_revert_evidence(last_record),) + kept_lines) if last_record.reverted else kept_lines
 
         for attempt in range(start, max_attempts):
             rung = INITIAL_RUNG if attempt == 0 else self._last_rung
@@ -1543,6 +1568,11 @@ class ConvergenceController:
 
             if rung == RecoveryRung.ROLLBACK.name and self._snapshot is not None:
                 self._snapshot.restore(objective.workspace)
+
+            attempt_snapshot: "WorkspaceSnapshot | None" = None
+            if self._revert_no_progress:
+                attempt_snapshot = self._snapshot_factory()
+                attempt_snapshot.capture(objective.workspace)
 
             started = time.time()
             observation = await self._run_turn(AttemptRequest(
@@ -1655,6 +1685,12 @@ class ConvergenceController:
                     reason="an authorization event ended the run",
                     evidence=tuple(measurement.lines) or ("authorization event",))
 
+            reverted: tuple[str, ...] = ()
+            revert_note = ""
+            if (self._revert_no_progress and not passed and not authorization_event
+                    and (progress.verdict is ProgressVerdict.NO_PROGRESS or progress.unsafe)):
+                reverted, revert_note = self._revert_attempt(attempt_snapshot, objective.workspace, attempt)
+
             record = AttemptRecord(
                 index=attempt, rung=rung, directive=directive,
                 observation=observation,
@@ -1670,6 +1706,7 @@ class ConvergenceController:
                 measurement_digest=measurement.digest,
                 progress=progress.verdict.value,
                 progress_signals=progress.signals,
+                reverted=reverted, revert_note=revert_note,
                 started_at=started,
                 duration_s=time.time() - started,
             )
@@ -1689,6 +1726,11 @@ class ConvergenceController:
             ))
             self.attempts.append(record)
             self._write_journal(record)
+            if self._on_record is not None:
+                try:
+                    self._on_record(record)
+                except Exception:  # noqa: BLE001 — an observer must never end the run
+                    logger.debug("on_record callback failed", exc_info=True)
 
             if authorization_event:
                 return ConvergenceResult(
@@ -1706,10 +1748,13 @@ class ConvergenceController:
                             "produced by the harness"),
                     final_measurement=measurement)
 
-            previous_lines = measurement.lines
             last_measurement = measurement
-            previous_measurement = measurement
-            stagnation_witness = measurement.digest
+            if reverted:
+                previous_lines = (_revert_evidence(record),) + kept_lines
+            else:
+                previous_lines = kept_lines = measurement.lines
+                previous_measurement = measurement
+                stagnation_witness = measurement.digest
             self._last_rung = ""
             self._last_progress = ""
             self._last_progress_signals = ()
@@ -1866,6 +1911,37 @@ class ConvergenceController:
 
     # -- durability ------------------------------------------------------
 
+    def _revert_attempt(self, snapshot: "WorkspaceSnapshot | None", workspace: str, attempt: int) -> tuple[tuple[str, ...], str]:
+        """Undo what attempt `attempt` did, after keeping its version of every file. Returns `(paths, note)`; `note` says why a wanted revert did not happen.
+
+        Fails closed at every step: no journal to keep the discarded work in, no snapshot, or a workspace that cannot be compared with it
+        means nothing is touched.
+        """
+        if self._journal is None:
+            return (), "not reverted: there is no journal to keep the discarded work in"
+        keep = discarded_dir(self._journal, attempt)
+        if snapshot is None or not snapshot.captured:
+            return (), f"not reverted: snapshot refused ({snapshot.refused if snapshot is not None else 'not taken'})"
+        found = snapshot.changes(workspace)
+        if found is None:
+            return (), "not reverted: the workspace could not be compared with its snapshot"
+        modified, created, deleted = found
+        paths = tuple(sorted({*modified, *created, *deleted}))
+        if not paths:
+            return (), ""
+        try:
+            for rel in (*modified, *created):
+                (keep / rel).parent.mkdir(parents=True, exist_ok=True)
+                (keep / rel).write_bytes((Path(workspace) / rel).read_bytes())
+        except OSError as exc:
+            return (), f"not reverted: could not keep the discarded work ({str(exc)[:120]})"
+        failed = snapshot.revert(workspace, modified, created, deleted)
+        if failed:
+            shown = ", ".join(failed[:3]) + ("…" if len(failed) > 3 else "")
+            return (), (f"revert failed for {len(failed)} file(s) ({shown}): the workspace may be in a mixed state; "
+                        f"the attempt's own files are in {keep}")
+        return paths, ""
+
     def _write_journal(self, record: AttemptRecord) -> None:
         """Append one attempt. Append-only, so a crash cannot corrupt it."""
         if self._journal is None:
@@ -1932,9 +2008,15 @@ class ConvergenceController:
                 continue
             try:
                 payload = json.loads(line)
-                if payload.get("kind") == "baseline":
+                kind = payload.get("kind")
+                if kind == "baseline":
                     self._journal_baseline = Measurement.from_dict(
                         payload.get("measurement") or {})
+                    continue
+                if kind not in (None, "attempt"):
+                    # `derivation` (ADR-0048 R3) and any record kind a later version adds are not
+                    # attempts. Reading one as an attempt raised KeyError, and the `break` below then
+                    # dropped EVERY attempt after it: a resumed run started again at attempt 0.
                     continue
                 self.attempts.append(AttemptRecord.from_dict(payload))
             except (json.JSONDecodeError, KeyError, TypeError, ValueError):
@@ -1974,7 +2056,24 @@ def read_journal_baseline(journal_path: str | Path | None) -> Measurement | None
     return None
 
 
+def discarded_dir(journal: Path, attempt_index: int) -> Path:
+    """Where a reverted attempt's own version of its files is kept: beside the journal, outside anything the attempt was told about."""
+    return journal.with_suffix(".discarded") / f"attempt-{attempt_index + 1}"
+
+
+def _revert_evidence(record: AttemptRecord) -> str:
+    """The harness's own line telling the next attempt that the last one was undone and why, so it does not build on work that is no longer there."""
+    shown = ", ".join(record.reverted[:5]) + ("…" if len(record.reverted) > 5 else "")
+    return (f"attempt {record.index + 1} was reverted because it did not move the objective ({record.progress}); "
+            f"the workspace is as it was before that attempt. Files put back: {shown}")
+
+
 # ── Workspace snapshot (the Rollback rung's substrate) ──────────────────
+
+#: How much a snapshot will hold. Wisp's own tree is 1,804 files / 24 MB under the skip rules, so the bound has to sit well above a real project's size
+#: or keep-or-revert would turn itself off on the first big change; above it the snapshot refuses (and says so) rather than truncating.
+SNAPSHOT_MAX_FILES = 10_000
+SNAPSHOT_MAX_BYTES = 128 * 1024 * 1024
 
 
 class WorkspaceSnapshot:
@@ -1987,8 +2086,9 @@ class WorkspaceSnapshot:
     is worse than refusing.
     """
 
-    def __init__(self, max_files: int = 2000, max_bytes: int = 64 * 1024 * 1024):
+    def __init__(self, max_files: int = SNAPSHOT_MAX_FILES, max_bytes: int = SNAPSHOT_MAX_BYTES):
         self._files: dict[str, bytes] = {}
+        self._modes: dict[str, int] = {}
         self._max_files = max_files
         self._max_bytes = max_bytes
         self.captured = False
@@ -1998,10 +2098,9 @@ class WorkspaceSnapshot:
         root = Path(workspace)
         total = 0
         files: dict[str, bytes] = {}
+        modes: dict[str, int] = {}
         try:
-            for path in sorted(root.rglob("*")):
-                if not path.is_file() or _skip(path, root):
-                    continue
+            for path in _snapshot_files(root):
                 if len(files) >= self._max_files:
                     self.refused = f"more than {self._max_files} files"
                     return False
@@ -2010,12 +2109,27 @@ class WorkspaceSnapshot:
                 if total > self._max_bytes:
                     self.refused = f"more than {self._max_bytes} bytes"
                     return False
-                files[str(path.relative_to(root))] = data
+                rel = str(path.relative_to(root))
+                files[rel] = data
+                modes[rel] = stat.S_IMODE(path.stat().st_mode)
         except OSError as exc:
             self.refused = str(exc)[:200]
             return False
         self._files = files
+        self._modes = modes
         self.captured = True
+        return True
+
+    def _put_back(self, root: Path, rel: str) -> bool:
+        """Write one captured file back with the permissions it had (a script that lost its executable bit is not the file that was captured)."""
+        target = root / rel
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(self._files[rel])
+            target.chmod(self._modes[rel])
+        except (OSError, KeyError):
+            logger.debug("restore write failed for %s", rel, exc_info=True)
+            return False
         return True
 
     def restore(self, workspace: str) -> bool:
@@ -2025,20 +2139,90 @@ class WorkspaceSnapshot:
         for rel, data in self._files.items():
             target = root / rel
             try:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                if not target.exists() or target.read_bytes() != data:
-                    target.write_bytes(data)
+                differs = not target.exists() or target.read_bytes() != data or stat.S_IMODE(target.stat().st_mode) != self._modes[rel]
             except OSError:
-                logger.debug("rollback write failed for %s", rel, exc_info=True)
+                differs = True
+            if differs and not self._put_back(root, rel):
                 return False
         return True
+
+    def changes(self, workspace: str) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]] | None:
+        """What differs from the snapshot now: `(modified, created, deleted)` as sorted relative paths, or None when that cannot be said.
+
+        None (never an empty answer) when nothing was captured or the tree is now bigger than the snapshot's bounds: "no differences found" must mean
+        the whole tree was compared, because the caller reverts on this answer.
+        """
+        if not self.captured:
+            return None
+        root = Path(workspace)
+        seen: set[str] = set()
+        modified: list[str] = []
+        created: list[str] = []
+        total = 0
+        try:
+            for path in _snapshot_files(root):
+                rel = str(path.relative_to(root))
+                seen.add(rel)
+                if len(seen) > self._max_files:
+                    return None
+                data = path.read_bytes()
+                total += len(data)
+                if total > self._max_bytes:
+                    return None
+                if rel not in self._files:
+                    created.append(rel)
+                elif self._files[rel] != data or self._modes[rel] != stat.S_IMODE(path.stat().st_mode):
+                    modified.append(rel)
+        except OSError:
+            return None
+        deleted = sorted(rel for rel in self._files if rel not in seen)
+        return tuple(sorted(modified)), tuple(sorted(created)), tuple(deleted)
+
+    def revert(self, workspace: str, modified: Iterable[str], created: Iterable[str], deleted: Iterable[str]) -> tuple[str, ...]:
+        """Put exactly those files back: rewrite the modified and deleted ones from the snapshot and remove the created ones. Nothing else is touched.
+
+        Returns the paths that could not be put back (empty when the workspace is as it was captured).
+        """
+        if not self.captured:
+            return (*modified, *created, *deleted)
+        root = Path(workspace)
+        failed: list[str] = []
+        for rel in (*modified, *deleted):
+            if not self._put_back(root, rel):
+                failed.append(rel)
+        for rel in created:
+            target = root / rel
+            try:
+                target.unlink()
+            except FileNotFoundError:
+                continue
+            except OSError:
+                logger.debug("revert remove failed for %s", rel, exc_info=True)
+                failed.append(rel)
+                continue
+            parent = target.parent
+            while parent != root:
+                try:
+                    parent.rmdir()
+                except OSError:
+                    break
+                parent = parent.parent
+        return tuple(failed)
 
 
 _SKIP_DIRS = frozenset({
     ".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
-    "node_modules", ".venv", "venv", ".tox", ".wisp",
+    "node_modules", ".venv", "venv", ".tox", ".wisp", ".agent",
 })
 
 
-def _skip(path: Path, root: Path) -> bool:
-    return any(part in _SKIP_DIRS for part in path.relative_to(root).parts)
+def _snapshot_files(root: Path) -> Iterable[Path]:
+    """The regular files a snapshot covers, in a stable order. Directories in `_SKIP_DIRS` are not entered, and symlinks are never followed or listed:
+    a revert that wrote through one would leave the workspace."""
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if d not in _SKIP_DIRS and not os.path.islink(os.path.join(dirpath, d)))
+        for name in sorted(filenames):
+            path = Path(dirpath) / name
+            if not path.is_symlink() and path.is_file():
+                yield path
+

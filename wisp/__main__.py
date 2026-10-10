@@ -1131,7 +1131,7 @@ _SUBCOMMAND_HELP: dict[str, str] = {
     "converge": (
         "Usage: wisp converge \"<objective>\" [--max-attempts N]\n"
         "                    [--permission-mode full] [--resume] [--journal PATH]\n"
-        "                    [--allow-rollback] [--json] [-w dir] [-m model]\n"
+        "                    [--allow-rollback] [--revert] [--json] [-w dir] [-m model]\n"
         "\n"
         "Run an objective to convergence: measure acceptance evidence after\n"
         "each attempt, and re-attempt with a strategy the recovery ladder\n"

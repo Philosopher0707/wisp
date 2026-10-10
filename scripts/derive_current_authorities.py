@@ -56,7 +56,7 @@ AUTHORITIES: list[tuple[str, str, str, str, str]] = [
      "arbitration input; still recorded)",
      "`terminal_outcome`, `turn_succeeded` — the goal-state record (`wisp/core/runtime.py:1342`, "
      "`wisp/core/runtime.py:1357`); `terminal_outcome`, `turn_succeeded` — the attempt journal "
-     "line `{\"kind\":\"attempt\"}` (`wisp/core/convergence.py:1323`)"),
+     "line `{\"kind\":\"attempt\"}` (`wisp/core/convergence.py:1327`)"),
     ("1.2 stream state",
      "`guarded_provider_stream` (`wisp/core/provider_stream.py:122`); the two facts are "
      "`got_meaningful` (`wisp/core/provider_stream.py:150`) and `saw_terminal` "
@@ -78,7 +78,7 @@ AUTHORITIES: list[tuple[str, str, str, str, str]] = [
      "it) · **ADR-0042** (the verdict is an **input**, not a second authority)",
      "`verdict` in the verdict envelope (ADR-0013, `wisp/core/acceptance.py:204`) · "
      "`acceptance_verdict` in the goal-state record (`wisp/core/runtime.py:1343`) · `verdict`, "
-     "`unmet`, `evidence_ids` in the attempt journal (`wisp/core/convergence.py:1333-1334`)"),
+     "`unmet`, `evidence_ids` in the attempt journal (`wisp/core/convergence.py:1337-1338`)"),
     ("1.4 progress verdict",
      "`progress.evaluate_progress` (`wisp/core/progress.py:155`); verdicts `NO_PROGRESS` / "
      "`MEANINGFUL_PROGRESS` / `PROGRESS_UNDETERMINABLE` (`wisp/core/progress.py:50-63`)",
@@ -87,7 +87,7 @@ AUTHORITIES: list[tuple[str, str, str, str, str]] = [
      "the failure) → **ADR-0047** R6 (it is the witness that the state changed) and R8 (a "
      "regression, a tampered input, or an unmeasurable attempt cannot unlock it)",
      "`progress`, `progress_signals` (`wisp/core/convergence.py:1305-1306`, "
-     "`wisp/core/convergence.py:1340-1341`) · `measurement_observations` + `measurement_digest` "
+     "`wisp/core/convergence.py:1344-1345`) · `measurement_observations` + `measurement_digest` "
      "— the raw payloads, digested over `WITNESS_FIELDS` only (F63; "
      "`wisp/core/convergence.py:1192-1205`)"),
     ("1.5 goal state",
