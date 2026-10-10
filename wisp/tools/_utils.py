@@ -70,9 +70,33 @@ class _TextExtractor(HTMLParser):
 _MAX_READ_SIZE = 50 * 1024 * 1024       # 50 MB
 _MAX_WRITE_SIZE = 100 * 1024 * 1024     # 100 MB
 _MAX_BASH_OUTPUT = 50_000               # chars of output to return to model
+_TRUNCATION_MARK = "\n... [output truncated]"  # other code (tool metadata, tests) looks for this exact text
 _MAX_CMD_LENGTH = 16384                 # max command length for safety
 _MAX_OLD_TEXT_LENGTH = 5_000_000          # max length for old_text in edit operations
 _ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
+def truncate_output(text: str, limit: int = _MAX_BASH_OUTPUT, head_share: float = 0.25) -> str:
+    """`text` cut to at most `limit` characters keeping BOTH ends and saying how much was left out of the middle.
+
+    A command that prints a lot prints its verdict last (a test run's `FAILED ...` lines and summary), so keeping only the start hid the one thing
+    the model needed; the start still carries the exit code and the first errors. The tail gets most of the room. Cuts fall on line boundaries when a
+    newline is near.
+    """
+    if len(text) <= limit:
+        return text
+    worst_note = f"{_TRUNCATION_MARK}\n({len(text):,} characters omitted from the middle; the end of the output follows)\n"
+    room = max(0, limit - len(worst_note))
+    head_n = int(room * head_share)
+    head, tail = text[:head_n], text[len(text) - (room - head_n):] if room - head_n > 0 else ""
+    cut = head.rfind("\n")
+    if cut > 0 and cut >= len(head) - 200:
+        head = head[:cut]
+    cut = tail.find("\n")
+    if 0 <= cut < 200:
+        tail = tail[cut + 1:]
+    note = f"{_TRUNCATION_MARK}\n({len(text) - len(head) - len(tail):,} characters omitted from the middle; the end of the output follows)\n"
+    return head + note + tail
+
+
 def check_dangerous_command(command: str) -> Optional[str]:
     """Check if a shell command is potentially dangerous.
 

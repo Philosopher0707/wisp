@@ -31,7 +31,9 @@ async def test_output_past_the_cap_still_reports_the_exit_status(tmp_path):
     rc, out, _err = await PtySandbox(str(tmp_path)).run(
         "head -c 400000 /dev/zero | tr '\\0' x; exit 5", timeout=20)
     assert rc == 5
-    assert out.endswith("[output truncated]")
+    # The contract changed on purpose: the old test pinned that the OUTPUT ENDS with the marker, i.e. that the end was thrown away. The end is the
+    # part a test run needs (its verdict is printed last), so both ends are kept and the marker sits between them.
+    assert "[output truncated]" in out and out.endswith("x") and len(out) <= 50_000
 
 
 @pytest.mark.asyncio

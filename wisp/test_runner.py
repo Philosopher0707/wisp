@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import subprocess
 import sys
 import time
@@ -18,6 +19,8 @@ from typing import Optional
 from wisp.core.workspace_walk import is_home_directory
 from wisp.import_graph import ImportGraphTooLarge, build_import_graph, find_affected_tests
 from wisp.test_distill import distill_traceback
+
+_FALLBACK_TAIL_CHARS = 3000
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +74,10 @@ class UnitTestRunSummary:
                     if shown >= max_results:
                         lines.append(f"\n... and {self.failed + self.errors - shown} more")
                         break
+            if not any(r.traceback for r in self.results if r.outcome in ("failed", "error")) and (self.stdout or self.stderr):
+                # Nothing was parsed into a per-test reason: show the end of the output, where pytest prints it, rather than a bare "failed".
+                tail = (self.stdout + ("\n" + self.stderr if self.stderr else ""))[-_FALLBACK_TAIL_CHARS:]
+                lines.append(f"\n### Output (end)\n```\n{tail.strip()}\n```")
 
         return "\n".join(lines)
 
@@ -229,43 +236,82 @@ def _parse_json_report(report: dict, summary: UnitTestRunSummary) -> None:
         ))
 
 
+_SUMMARY_LINE = re.compile(r"^[=\s]*(\d+ \w+(?:\s*\([^)]*\))?(?:, \d+ \w+(?:\s*\([^)]*\))?)*) in \d+(?:\.\d+)?s\b")
+_COUNT = re.compile(r"(\d+) (passed|failed|errors?|skipped)")
+_BANNER = re.compile(r"^=+ (.+?) =+$")
+_BLOCK_HEADER = re.compile(r"^_{2,} (.+?) _{2,}$")
+_SHORT_SUMMARY = re.compile(r"^(FAILED|ERROR) (\S+)(?: - (.*))?$")
+_VERBOSE_LINE = re.compile(r"(\S+)::(\S+) (PASSED|FAILED|ERROR|SKIPPED)")
+
+
+def _failure_blocks(lines: list[str]) -> dict[str, str]:
+    """The per-test sections of pytest's `FAILURES` and `ERRORS` output, by their header (`test_add`, `TestK.test_m`, `ERROR collecting x.py`)."""
+    blocks: dict[str, list[str]] = {}
+    inside, current = False, ""
+    for line in lines:
+        banner = _BANNER.match(line)
+        if banner:
+            inside, current = banner.group(1).strip() in ("FAILURES", "ERRORS"), ""
+            continue
+        header = _BLOCK_HEADER.match(line) if inside else None
+        if header:
+            current = header.group(1).strip()
+            blocks.setdefault(current, [])
+        elif inside and current:
+            blocks[current].append(line)
+    return {k: "\n".join(v).strip() for k, v in blocks.items()}
+
+
+def _block_for(test_id: str, blocks: dict[str, str]) -> str:
+    _, _, name = test_id.partition("::")
+    wanted = name.replace("::", ".")
+    for header, text in blocks.items():
+        if wanted and header == wanted:
+            return text
+    for header, text in blocks.items():  # a collection error has no `::` in its id: its header names the file
+        if not wanted and test_id in header:
+            return text
+    return ""
+
+
 def _parse_pytest_output(stdout: str, stderr: str, summary: UnitTestRunSummary) -> None:
-    """Parse plain pytest -v output as a fallback."""
-    # Count outcomes from summary line
-    # Example: "1 passed, 2 failed, 3 skipped in 0.5s"
-    import re
-    summary_line = ""
-    for line in stdout.splitlines():
-        # Pytest summary line: "==== 147 passed in 3.78s ====" or "1 passed, 2 failed in 0.5s"
-        if re.search(r"^=+\s+\d+\s+(passed|failed|error)", line):
-            summary_line = line
-            break
+    """Parse plain pytest output when the json-report plugin is absent (the usual case).
 
-    if summary_line:
-        summary.passed = len(re.findall(r"(\d+) passed", summary_line)) and int(
-            re.findall(r"(\d+) passed", summary_line)[0]
-        ) or 0
-        summary.failed = len(re.findall(r"(\d+) failed", summary_line)) and int(
-            re.findall(r"(\d+) failed", summary_line)[0]
-        ) or 0
-        summary.skipped = len(re.findall(r"(\d+) skipped", summary_line)) and int(
-            re.findall(r"(\d+) skipped", summary_line)[0]
-        ) or 0
-        summary.errors = len(re.findall(r"(\d+) error", summary_line)) and int(
-            re.findall(r"(\d+) error", summary_line)[0]
-        ) or 0
-        summary.total = summary.passed + summary.failed + summary.skipped + summary.errors
+    Whatever the verbosity: a project whose `addopts` holds `-q` cancels our `-v`, so there are no per-test lines and no `====` banner, but the
+    short-summary lines and the `FAILURES` sections are always printed, and those are what say WHY a test failed.
+    """
+    lines = stdout.splitlines()
+    for line in lines:
+        m = _SUMMARY_LINE.match(line)
+        if m and _COUNT.search(m.group(1)):
+            counts = {k.rstrip("s") if k.startswith("error") else k: int(n) for n, k in _COUNT.findall(m.group(1))}
+            summary.passed = counts.get("passed", 0)
+            summary.failed = counts.get("failed", 0)
+            summary.skipped = counts.get("skipped", 0)
+            summary.errors = counts.get("error", 0)
+            summary.total = summary.passed + summary.failed + summary.skipped + summary.errors
 
-    # Parse individual test results
-    for line in stdout.splitlines():
-        m = re.match(r"(\S+)::(\S+) (PASSED|FAILED|ERROR|SKIPPED)", line)
-        if m:
-            outcome = m.group(3).lower()
-            summary.results.append(UnitTestResult(
-                test_id=f"{m.group(1)}::{m.group(2)}",
-                outcome=outcome,
-                duration=0.0,
-            ))
+    by_id: dict[str, UnitTestResult] = {}
+    for line in lines:
+        v = _VERBOSE_LINE.match(line)
+        if v:
+            tid = f"{v.group(1)}::{v.group(2)}"
+            by_id[tid] = UnitTestResult(test_id=tid, outcome=v.group(3).lower(), duration=0.0)
+    blocks = _failure_blocks(lines)
+    for line in lines:
+        short = _SHORT_SUMMARY.match(line.strip())
+        if not short:
+            continue
+        outcome, tid, message = short.group(1).lower(), short.group(2), short.group(3) or ""
+        result = by_id.setdefault(tid, UnitTestResult(test_id=tid, outcome=outcome, duration=0.0))
+        result.outcome = outcome
+        result.traceback = _block_for(tid, blocks) or message
+    summary.results.extend(by_id.values())
+    if not summary.total:
+        summary.total = len(summary.results)
+        summary.failed = sum(1 for r in summary.results if r.outcome == "failed")
+        summary.errors = sum(1 for r in summary.results if r.outcome == "error")
+        summary.passed = sum(1 for r in summary.results if r.outcome == "passed")
 
 
 #: Workspaces whose import graph was refused, by monotonic time. Every write and edit asks for affected tests, and
