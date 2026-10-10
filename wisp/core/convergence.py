@@ -2070,6 +2070,11 @@ def _revert_evidence(record: AttemptRecord) -> str:
 
 # ── Workspace snapshot (the Rollback rung's substrate) ──────────────────
 
+#: How much a snapshot will hold. Wisp's own tree is 1,804 files / 24 MB under the skip rules, so the bound has to sit well above a real project's size
+#: or keep-or-revert would turn itself off on the first big change; above it the snapshot refuses (and says so) rather than truncating.
+SNAPSHOT_MAX_FILES = 10_000
+SNAPSHOT_MAX_BYTES = 128 * 1024 * 1024
+
 
 class WorkspaceSnapshot:
     """A bounded, in-memory copy of a workspace's files.
@@ -2081,7 +2086,7 @@ class WorkspaceSnapshot:
     is worse than refusing.
     """
 
-    def __init__(self, max_files: int = 2000, max_bytes: int = 64 * 1024 * 1024):
+    def __init__(self, max_files: int = SNAPSHOT_MAX_FILES, max_bytes: int = SNAPSHOT_MAX_BYTES):
         self._files: dict[str, bytes] = {}
         self._modes: dict[str, int] = {}
         self._max_files = max_files

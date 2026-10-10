@@ -16,6 +16,7 @@ import pytest
 
 from wisp import autonomous_repl as AR
 from wisp import coding as C
+from wisp.core import convergence as CV
 from wisp.config import WispConfig
 from wisp.core.engine import WispAgentCore
 from wisp.core.runtime import AgentRuntime
@@ -428,12 +429,12 @@ class TestKeepOrRevert:
     def test_a_workspace_too_big_to_snapshot_is_left_alone_and_the_loop_says_why(self, make_runner, project):
         data = project / "data"
         data.mkdir()
-        for i in range(2001):  # one more than the snapshot's bound
+        for i in range(CV.SNAPSHOT_MAX_FILES + 1):  # one more than the snapshot's bound
             (data / f"{i}.txt").write_text("")
         runner = make_runner({1: ("totals.py", WRONG)})
         result = AR.run_repl_converge(runner, OBJECTIVE, attempts=1)
         assert result.attempts[0].reverted == ()
-        assert "not reverted: snapshot refused (more than 2000 files)" in runner.printed
+        assert f"not reverted: snapshot refused (more than {CV.SNAPSHOT_MAX_FILES} files)" in runner.printed
         assert (project / "totals.py").read_text() == WRONG
 
     def test_the_switch_reads_off_in_its_usual_spellings(self):

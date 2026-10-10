@@ -454,3 +454,21 @@ def test_the_converge_command_prints_what_was_reverted(monkeypatch, tmp_path, ca
     out = capsys.readouterr().out
     assert "reverted: a.py, b.py" in out
     assert "not reverted: there is no journal to keep the discarded work in" in out
+
+
+def test_the_default_bound_admits_a_real_projects_worth_of_files(tmp_path):
+    """Wisp's own tree is 1,804 files / 24 MB under the skip rules; a bound only 10% above that would silently turn keep-or-revert off on the next big change."""
+    for i in range(5000):
+        (tmp_path / f"f{i}.txt").write_text("x")
+    snap = WorkspaceSnapshot()
+    assert snap.capture(str(tmp_path)), snap.refused
+
+
+def test_the_bounds_are_named_and_the_refusal_quotes_them(tmp_path):
+    from wisp.core.convergence import SNAPSHOT_MAX_BYTES, SNAPSHOT_MAX_FILES
+
+    assert SNAPSHOT_MAX_FILES >= 10_000 and SNAPSHOT_MAX_BYTES >= 128 * 1024 * 1024
+    snap = WorkspaceSnapshot(max_files=2)
+    for i in range(3):
+        (tmp_path / f"f{i}.txt").write_text("x")
+    assert not snap.capture(str(tmp_path)) and snap.refused == "more than 2 files"
