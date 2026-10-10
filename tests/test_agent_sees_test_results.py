@@ -56,6 +56,17 @@ class TestTruncateOutput:
         assert out.startswith("S") and out.endswith("E") and len(out) <= 1000
 
 
+class TestTheBashFormatterKeepsTheEnd:
+    """`_format_bash_output` is also reached without the PTY (Docker, the host, background jobs), so it needs its own witness."""
+
+    def test_a_huge_failing_stdout_keeps_the_exit_code_on_top_and_the_verdict_at_the_bottom(self):
+        from wisp.tools.bash import _format_bash_output
+
+        out = _format_bash_output(1, numbered(60000) + "\nFAILED test_core.py::test_answer - AssertionError", "")
+        assert out.startswith("[exit code: 1]\n") and out.endswith("FAILED test_core.py::test_answer - AssertionError")
+        assert MARK in out and len(out) <= _MAX_BASH_OUTPUT
+
+
 class TestThePtyCaptureKeepsTheEnd:
     @pytest.mark.asyncio
     async def test_output_past_the_capture_cap_keeps_its_last_line_and_the_exit_status(self, tmp_path):
@@ -63,6 +74,13 @@ class TestThePtyCaptureKeepsTheEnd:
         assert rc == 5
         assert out.rstrip().endswith("FAILED-AT-THE-VERY-END")
         assert out.startswith("1\n") and MARK in out and len(out) <= _MAX_BASH_OUTPUT
+
+    @pytest.mark.asyncio
+    async def test_output_whose_start_and_end_overlap_in_the_capture_keeps_the_last_line(self, tmp_path):
+        """About 138 KB: more than the recorded head (~115 KB) and less than head plus tail, so the two buffers overlap."""
+        rc, out, _err = await PtySandbox(str(tmp_path)).run("seq 1 25000", timeout=30)
+        nums = [int(x) for x in out.replace(MARK, "\n").split() if x.isdigit()]
+        assert rc == 0 and nums[-1] == 25000 and nums == sorted(set(nums))
 
     @pytest.mark.asyncio
     async def test_output_just_over_the_cap_has_no_gap_or_repeat(self, tmp_path):
@@ -121,6 +139,27 @@ class TestRunTestsShowsTheFailure:
 
         s = UnitTestRunSummary(total=3, passed=1, failed=2, stdout="x" * 10000 + "\nTHE-REASON-AT-THE-END", stderr="")
         assert "THE-REASON-AT-THE-END" in s.format_for_llm()
+
+    def test_a_failure_with_only_the_short_summary_line_still_shows_its_message(self):
+        from wisp.test_runner import UnitTestRunSummary, _parse_pytest_output
+
+        s = UnitTestRunSummary()
+        _parse_pytest_output("FAILED tests/test_a.py::test_x - AssertionError: 41 != 42\n1 failed in 0.1s\n", "", s)
+        assert "41 != 42" in s.format_for_llm() and s.failed == 1
+
+    def test_counts_come_from_the_per_test_lines_when_there_is_no_summary_line(self):
+        from wisp.test_runner import UnitTestRunSummary, _parse_pytest_output
+
+        s = UnitTestRunSummary()
+        _parse_pytest_output("t.py::test_a PASSED\nt.py::test_b PASSED\nt.py::test_c FAILED\n", "", s)
+        assert (s.total, s.passed, s.failed) == (3, 2, 1)
+
+    def test_passing_tests_are_listed_too_in_a_verbose_run(self, tmp_path):
+        from wisp.test_runner import run_tests
+
+        ws = self.project(tmp_path)
+        ids = {r.test_id: r.outcome for r in run_tests([ws / "test_x.py"], workspace=ws, timeout=60).results}
+        assert ids.get("test_x.py::test_ok") == "passed" and ids.get("test_x.py::test_add") == "failed"
 
     def test_a_green_run_stays_short(self, tmp_path):
         from wisp.test_runner import run_tests
