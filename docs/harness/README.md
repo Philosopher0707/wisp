@@ -125,3 +125,6 @@ test, and a test checks the witness exists) and the stated limits: [`invariant-g
 Verified 2026-10-07: `pytest tests/gates` (873 tests) passes; a 26-mutation probe breaks each layer on purpose and the suite catches 26 of 26
 (the one survivor on the first run exposed a real fixed-point bug in the scrubber, now fixed and pinned).
 
+## Dashboard
+
+`docs/harness/dashboard.md`: a local, read-only web page over the benchmark (the measured pass rate per model and harness configuration, with intervals), real-use statistics, the harness's flags and token overhead, the findings registers and the learning stores. `python -m wisp.dashboard serve`.
