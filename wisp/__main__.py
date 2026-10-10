@@ -1128,6 +1128,25 @@ _SUBCOMMAND_HELP: dict[str, str] = {
         "on the tune tasks and does not drop on the held-out ones. Common options: --model M\n"
         "--provider P --api-base URL --key-from ENV_NAME --timeout S."
     ),
+    "review": (
+        "Usage: wisp review [--staged | --base B [--head H] | --commit SHA | --pr N] [--rules FILE] [--no-model]\n"
+        "                   [--lens correctness|security|tests] [--run-tests] [--json] [--fail-on blocked|incomplete|attention]\n"
+        "\n"
+        "Review a change (default: the uncommitted work). Deterministic checks first: secrets, merge-conflict markers, files that\n"
+        "do not parse, weakened tests, new public code no test mentions, CI and dependency files, debug leftovers, and the rules in\n"
+        ".wisp/review-rules.toml. Model lenses (all three by default; --no-model skips them) must quote the code a finding is about;\n"
+        "a quote the diff does not contain is dropped, and a model can warn but never block. The verdict (blocked, incomplete,\n"
+        "attention, clean) is derived by the harness; anything not reviewed makes it incomplete. --run-tests runs the affected tests\n"
+        "of the local checkout (refused with --pr). Exit 0 unless the verdict reaches --fail-on (default blocked); 2 is a usage or\n"
+        "source error.\n"
+    ),
+    "triage": (
+        "Usage: wisp triage [--limit N] [--repo OWNER/NAME] [--stale-days N] [--json]\n"
+        "\n"
+        "Read-only triage of the open pull requests (through gh): ready for review, changes requested, CI failing, conflicting,\n"
+        "possible duplicate, missing requirements, security review, waiting for CI, draft, or a human decision. It never merges,\n"
+        "closes, comments, labels or approves.\n"
+    ),
     "converge": (
         "Usage: wisp converge \"<objective>\" [--max-attempts N]\n"
         "                    [--permission-mode full] [--resume] [--journal PATH]\n"
@@ -1160,7 +1179,7 @@ _SUBCOMMAND_NAMES = frozenset({
     "completion", "release",
     "git", "plan", "progress", "diagnose",
     "locks", "changes", "acp", "server", "compact", "swarm", "agents", "graph",
-    "bench", "converge", "fleet", "judge",
+    "bench", "converge", "fleet", "judge", "review", "triage",
 })
 
 
@@ -1505,6 +1524,14 @@ def main():
             from wisp.judge.cli import run_judge
             sys.exit(run_judge(rest))
 
+        def _do_review():
+            from wisp.review.cli import run_review
+            sys.exit(run_review(rest, workspace=flags_workspace or None, model=flags_model or None, provider=flags_provider or None))
+
+        def _do_triage():
+            from wisp.review.cli import run_triage
+            sys.exit(run_triage(rest, workspace=flags_workspace or None))
+
         def _do_converge():
             from wisp.autonomous_cli import run_converge
             sys.exit(run_converge(rest, model=flags_model or None,
@@ -1550,6 +1577,8 @@ def main():
             "converge": _do_converge,
             "fleet": _do_fleet,
             "judge": _do_judge,
+            "review": _do_review,
+            "triage": _do_triage,
         }
         return _run_with_config_error_handling(_SUBCOMMAND_TABLE[first])
 

@@ -67,6 +67,7 @@ ROWS: list[tuple[str, str, str, str, str, str]] = [
      "provider", "—"),
     ("CircuitBreakerOpenError", "wisp/multi_agent/_circuit_breaker.py:102", "Exception",
      "recoverable", "subagent", "—"),
+    ("_Exit", "wisp/review/cli.py:32", "Exception", "recoverable", "cli", "—"),
     ("OllamaError", "wisp/ollama_client.py:46", "Exception", "recoverable", "provider", "—"),
     ("OllamaConfigurationError", "wisp/ollama_client.py:72", "OllamaError", "recoverable",
      "provider", "ADR-0038"),
@@ -76,6 +77,8 @@ ROWS: list[tuple[str, str, str, str, str, str]] = [
     ("CostError", "wisp/runtime/cost.py:48", "RuntimeError", "guard", "turn", "—"),
     ("UnknownModel", "wisp/runtime/cost.py:54", "CostError", "guard", "turn", "—"),
     ("FleetManifestError", "wisp/fleet.py:28", "ValueError", "guard", "cli", "—"),
+    ("UsageError", "wisp/review/cli.py:28", "Exception", "guard", "cli", "—"),
+    ("RulesError", "wisp/review/rules.py:28", "ValueError", "guard", "cli", "—"),
     ("IdempotencyError", "wisp/runtime/idempotency.py:57", "RuntimeError", "guard", "tool", "—"),
     ("KeyReuse", "wisp/runtime/idempotency.py:63", "IdempotencyError", "guard", "tool", "—"),
     ("UnstableKey", "wisp/runtime/idempotency.py:78", "IdempotencyError", "guard", "tool", "—"),
@@ -97,6 +100,8 @@ ROWS: list[tuple[str, str, str, str, str, str]] = [
     ("JobLimitError", "wisp/jobs/spawn.py:20", "ToolError", "guard", "tool", "—"),
 
     # ── Faults: an error the caller must handle. The bulk. ─────────────────────────────
+    ("SourceError", "wisp/review/source.py:39", "Exception", "fault", "cli", "—"),
+    ("TriageError", "wisp/review/triage.py:54", "Exception", "fault", "cli", "—"),
     ("ToolError", "wisp/tools/errors.py:8", "Exception", "fault", "tool", "—"),
     ("PlanError", "wisp/graph/planner.py:72", "Exception", "fault", "plan", "—"),
     ("LSPServerError", "wisp/lsp/client.py:24", "Exception", "fault", "tool", "—"),
