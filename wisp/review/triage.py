@@ -128,6 +128,19 @@ def classify(prs: Sequence[Any], *, now: datetime | None = None, default_branch:
             unreadable.append(TriageRow(number, "", "", "", "", "", "human_decision", _NEXT_ACTION["human_decision"], "unknown", "", "", ["unreadable pull request entry from gh"]))
     files_by_number = {p["number"]: [f["path"] for f in p.get("files") or [] if isinstance(f, dict) and isinstance(f.get("path"), str)] for p in parsed}
     head_to_number = {str(p.get("headRefName", "")): p["number"] for p in parsed if p.get("headRefName")}
+    stacked_of: dict[int, int | None] = {}
+    for p in parsed:
+        parent = head_to_number.get(str(p.get("baseRefName", ""))) if str(p.get("baseRefName", "")) != default_branch else None
+        stacked_of[p["number"]] = None if parent == p["number"] else parent
+
+    def ancestors(number: int) -> set[int]:
+        seen: set[int] = set()
+        current = stacked_of.get(number)
+        while current is not None and current not in seen:
+            seen.add(current)
+            current = stacked_of.get(current)
+        return seen
+
     rows: list[TriageRow] = []
     for p in parsed:
         number = p["number"]
@@ -185,9 +198,7 @@ def classify(prs: Sequence[Any], *, now: datetime | None = None, default_branch:
             reasons.append(f"no activity for {age} days")
 
         base = str(p.get("baseRefName", ""))
-        stacked_on = head_to_number.get(base) if base != default_branch else None
-        if stacked_on == number:
-            stacked_on = None
+        stacked_on = stacked_of[number]
         if stacked_on is not None:
             flags.append("stacked")
             reasons.append(f"it is stacked on #{stacked_on}")
@@ -198,8 +209,8 @@ def classify(prs: Sequence[Any], *, now: datetime | None = None, default_branch:
         overlaps: list[int] = []
         title = _normalized_title(str(p.get("title", "")))
         for other in parsed:
-            if other["number"] == number:
-                continue
+            if other["number"] == number or other["number"] in ancestors(number) or number in ancestors(other["number"]):
+                continue  # a stack overlaps by construction: a pull request is not a duplicate of the one it is built on
             shared = set(files) & set(files_by_number[other["number"]])
             union = set(files) | set(files_by_number[other["number"]])
             same_files = len(shared) >= DUPLICATE_MIN_SHARED and len(shared) / len(union) >= DUPLICATE_OVERLAP

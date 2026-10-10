@@ -60,7 +60,7 @@
 | `WalkBudgetExceeded` | `RuntimeError` | guard | tool | `wisp/core/workspace_walk.py:39` | 1 | `wisp/core/workspace_walk.py:130` | `wisp/import_graph.py:132` | — |
 | `JobLimitError` | `ToolError` | guard | tool | `wisp/jobs/spawn.py:20` | 2 | `wisp/jobs/spawn.py:41` | — | — |
 | `SourceError` | `Exception` | fault | cli | `wisp/review/source.py:39` | 15 | `wisp/review/source.py:59` | `wisp/review/cli.py:152`, `wisp/review/source.py:202`, `wisp/review/source.py:235` | — |
-| `TriageError` | `Exception` | fault | cli | `wisp/review/triage.py:54` | 5 | `wisp/review/triage.py:255` | `wisp/review/cli.py:212` | — |
+| `TriageError` | `Exception` | fault | cli | `wisp/review/triage.py:54` | 5 | `wisp/review/triage.py:266` | `wisp/review/cli.py:212` | — |
 | `ToolError` | `Exception` | fault | tool | `wisp/tools/errors.py:8` | 87 | `agent/fast_tools.py:47` | `agent/tools/batch_reader.py:386`, `agent/tools/batch_reader.py:629`, `wisp/cli/dispatcher.py:398`, `wisp/jobs/supervisor.py:102`, `wisp/tool_executor.py:279`, `wisp/tool_executor.py:1409`, `wisp/tool_executor.py:1522`, `wisp/tools/bash.py:210`, `wisp/tools/registry.py:1309`, `wisp/tools/registry.py:1451` | — |
 | `PlanError` | `Exception` | fault | plan | `wisp/graph/planner.py:72` | 28 | `wisp/graph/planner.py:87` | `wisp/graph/cli.py:300`, `wisp/graph/cli.py:342`, `wisp/graph/planner.py:314`, `wisp/graph/planner.py:396` | — |
 | `LSPServerError` | `Exception` | fault | tool | `wisp/lsp/client.py:24` | 16 | `wisp/lsp/client.py:78` | `wisp/lsp/client.py:529`, `wisp/lsp/manager.py:174`, `wisp/lsp/manager.py:188` | — |

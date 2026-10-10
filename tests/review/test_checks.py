@@ -53,6 +53,34 @@ class TestSecrets:
     def test_a_clean_file_has_no_findings(self):
         assert run(checks.check_secrets, added_file("a.py", ["def f():", "    return 1"])) == []
 
+    @pytest.mark.parametrize("line", [
+        'token = fake_token("openrouter")', 'API_KEY = os.environ["API_KEY"]', "password = get_password(user)", 'secret = config["secret_value"]',
+        '_TOKEN_SHAPED = re.compile(r"[A-Za-z0-9+/_=.-]{20,}")', "TOKEN = {'a': 1}",
+    ])
+    def test_a_credential_word_assigned_an_expression_is_not_a_leaked_literal(self, line):
+        assert run(checks.check_secrets, added_file("src/app.py", [line])) == []
+
+    @pytest.mark.parametrize("path", ["tests/test_a.py", "src/a.test.ts", "docs/notes.md", "README.md", "AGENTS_LEARNING.md", "docs/guide.rst"])
+    def test_weak_credential_shapes_are_not_reported_in_tests_and_docs(self, path):
+        assert run(checks.check_secrets, added_file(path, ["PASSWORD = 'hunter22xyz'", "token: abc123def456ghi789"])) == []
+
+    @pytest.mark.parametrize("path", ["tests/test_a.py", "docs/notes.md"])
+    def test_a_certain_vendor_token_still_blocks_in_tests_and_docs(self, path):
+        (finding,) = run(checks.check_secrets, added_file(path, [f"example = {fake_token('github')}"]))
+        assert finding.severity is Severity.BLOCK
+
+    def test_a_list_of_long_identifiers_next_to_a_credential_word_is_not_an_entropy_hit(self):
+        line = "    check_secrets, check_conflict_markers, check_config_and_dependencies, check_debug_leftovers,"
+        assert run(checks.check_secrets, added_file("src/registry.py", [line])) == []
+
+    def test_a_high_entropy_literal_in_source_still_warns(self):
+        (finding,) = run(checks.check_secrets, added_file("src/settings.py", ['value = "Zk9Qw3Rt7Yp2Lm8Nb4Vc6Xd1"']))
+        assert finding.severity is Severity.WARN and "entropy" in finding.message
+
+    def test_a_weak_literal_in_source_still_warns(self):
+        (finding,) = run(checks.check_secrets, added_file("src/settings.py", ["PASSWORD = 'hunter22xyz'"]))
+        assert finding.severity is Severity.WARN
+
 
 class TestConflictMarkers:
     def test_a_marker_pair_blocks_at_each_marker(self):
@@ -126,6 +154,15 @@ class TestWeakenedTests:
         text = "diff --git a/tests/test_a.py b/tests/test_b.py\nsimilarity index 100%\nrename from tests/test_a.py\nrename to tests/test_b.py\n"
         assert run(checks.check_weakened_tests, files_of(text)) == []
 
+    @pytest.mark.parametrize("line", [
+        '@pytest.mark.parametrize("line", ["    assert True", "it.skip(\'a\')"])', 'x = "pytest.skip(\'later\')"', "note = 'use xit( to disable'", 'print("it.skip")',
+    ])
+    def test_a_pattern_that_only_appears_inside_a_string_is_data_not_a_weakening(self, line):
+        assert run(checks.check_weakened_tests, added_file("tests/test_a.py", [line])) == []
+
+    def test_the_same_pattern_outside_a_string_is_still_found(self):
+        assert rules_of(run(checks.check_weakened_tests, added_file("a.test.ts", ["it.skip('a', () => {})", "  xit('b', () => {})"]))) == ["test-weakened", "test-weakened"]
+
     def test_non_test_files_are_never_flagged(self):
         assert run(checks.check_weakened_tests, added_file("src/app.py", ["    assert True", "@pytest.mark.skip"])) == []
 
@@ -190,8 +227,12 @@ class TestDebugLeftovers:
     def test_each_leftover_warns(self, line):
         assert rules_of(run(checks.check_debug_leftovers, added_file("a.py" if "debugger" not in line else "a.js", [line]))) == ["debug-leftover"]
 
-    def test_the_word_in_a_comment_or_string_about_it_is_still_a_leftover_candidate_but_a_removal_is_not(self):
+    def test_a_removal_is_not_a_leftover(self):
         assert run(checks.check_debug_leftovers, edited_file("a.py", ["    breakpoint()", "x"], ["x"])) == []
+
+    @pytest.mark.parametrize("line", ['text = "call breakpoint() here"', "msg = 'import pdb'", 'write("def f():\\n    breakpoint()\\n")'])
+    def test_a_hook_that_only_appears_inside_a_string_is_data(self, line):
+        assert run(checks.check_debug_leftovers, added_file("a.py", [line])) == []
 
 
 class TestSize:

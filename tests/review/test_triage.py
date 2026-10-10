@@ -162,6 +162,30 @@ class TestRelationsBetweenPRs:
         b = pr(2, files=[{"path": "src/x.py", "additions": 1, "deletions": 0}, {"path": "src/b.py", "additions": 1, "deletions": 0}])
         assert [r.overlaps for r in T.classify([a, b], now=NOW, default_branch="main")] == [[], []]
 
+    def test_a_stack_overlaps_by_construction_and_is_not_a_duplicate(self):
+        shared = [{"path": f"src/shared{i}.py", "additions": 1, "deletions": 0} for i in range(4)]
+        rows = {r.number: r for r in T.classify([pr(1, title="base", files=shared), pr(2, title="on top", baseRefName="branch-1", files=shared)], now=NOW, default_branch="main")}
+        assert rows[1].overlaps == [] and rows[2].overlaps == [] and rows[2].outcome == "ready_for_review" and "stacked" in rows[2].flags
+
+    def test_the_whole_chain_of_a_stack_is_exempt_not_only_neighbours(self):
+        shared = [{"path": f"src/shared{i}.py", "additions": 1, "deletions": 0} for i in range(4)]
+        prs = [pr(1, title="a", files=shared), pr(2, title="b", baseRefName="branch-1", files=shared), pr(3, title="c", baseRefName="branch-2", files=shared)]
+        assert all(r.overlaps == [] for r in T.classify(prs, now=NOW, default_branch="main"))
+
+    def test_two_stacks_on_the_same_parent_still_overlap_with_each_other(self):
+        shared = [{"path": f"src/shared{i}.py", "additions": 1, "deletions": 0} for i in range(4)]
+        prs = [pr(1, title="parent", files=[{"path": "src/p.py", "additions": 1, "deletions": 0}]), pr(2, title="x", baseRefName="branch-1", files=shared), pr(3, title="y", baseRefName="branch-1", files=shared)]
+        rows = {r.number: r for r in T.classify(prs, now=NOW, default_branch="main")}
+        assert rows[2].overlaps == [3] and rows[3].overlaps == [2] and rows[1].overlaps == []
+
+    def test_a_pr_whose_base_is_its_own_branch_is_not_stacked_on_itself(self):
+        row = one(headRefName="odd", baseRefName="odd")
+        assert row.stacked_on is None and "stacked" not in row.flags
+
+    def test_a_cycle_of_bases_does_not_loop_forever(self):
+        rows = T.classify([pr(1, baseRefName="branch-2"), pr(2, baseRefName="branch-1"), pr(3, baseRefName="branch-3")], now=NOW, default_branch="main")
+        assert len(rows) == 3 and [r.number for r in rows] == [1, 2, 3]
+
     def test_a_pr_whose_base_is_another_prs_branch_is_stacked_on_it(self):
         rows = {r.number: r for r in T.classify([pr(1), pr(2, baseRefName="branch-1")], now=NOW, default_branch="main")}
         assert rows[2].stacked_on == 1 and "stacked" in rows[2].flags and rows[1].stacked_on is None

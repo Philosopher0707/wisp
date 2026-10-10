@@ -72,6 +72,31 @@ def _reviewable(files: Sequence[FileDiff]) -> list[FileDiff]:
     return [f for f in files if not f.binary]
 
 
+_DOC_SUFFIXES = (".md", ".rst", ".txt")
+
+
+def _inside_string(line: str, position: int) -> bool:
+    """Whether `position` falls inside a quoted string on this line. A pattern that only appears in a string is data (a test about the pattern, a message), not code."""
+    quote = ""
+    i = 0
+    while i < position:
+        char = line[i]
+        if quote:
+            if char == "\\":
+                i += 2
+                continue
+            if char == quote:
+                quote = ""
+        elif char in "'\"`":
+            quote = char
+        i += 1
+    return bool(quote)
+
+
+def _found_in_code(pattern: re.Pattern[str], text: str) -> bool:
+    return any(not _inside_string(text, match.start()) for match in pattern.finditer(text))
+
+
 # ── secrets ──────────────────────────────────────────────────────────────────
 
 _TOKEN_SHAPED = re.compile(r"[A-Za-z0-9+/_=.\-]{20,}")
@@ -86,6 +111,20 @@ def _certain_kinds(line: str) -> list[str]:
     return sorted(kinds)
 
 
+def _weak_is_noise(path: str, text: str, findings: Sequence[Any]) -> bool:
+    """Weak shapes (a credential word assigned something, a high-entropy token) are for production code. In tests and docs they are almost always fixtures and prose, and a
+    credential word assigned an expression (`token = make_token()`, `KEY = os.environ[...]`) is code that handles a secret, not a secret. A vendor token is never weak."""
+    if is_test_path(path) or path.lower().endswith(_DOC_SUFFIXES):
+        return True
+    for found in findings:
+        value = text[found.start:found.end]
+        expression = any(c in value for c in "([{") or text[found.end:found.end + 1] in ("(", "[", "{")
+        identifier = found.kind == "entropy" and value.replace("_", "").isalpha()  # a long snake_case name next to a credential word, not a token
+        if not (expression or identifier):
+            return False
+    return True
+
+
 def check_secrets(files: Sequence[FileDiff], ctx: CheckContext) -> list[Finding]:
     found: list[Finding] = []
     for fd in _reviewable(files):
@@ -94,6 +133,8 @@ def check_secrets(files: Sequence[FileDiff], ctx: CheckContext) -> list[Finding]
             if not result.findings:
                 continue
             certain = _certain_kinds(text)
+            if not certain and _weak_is_noise(fd.path, text, result.findings):
+                continue
             kinds = certain or sorted({f.kind for f in result.findings})
             found.append(Finding(
                 rule="secret", severity=Severity.BLOCK if certain else Severity.WARN, file=fd.path, line=number,
@@ -193,7 +234,7 @@ def check_weakened_tests(files: Sequence[FileDiff], ctx: CheckContext) -> list[F
             found.append(Finding("test-removed", Severity.WARN, fd.path, 0, "", "a test file was deleted", "diff status", "Say why the tests are no longer needed, or move them."))
             continue
         for number, text in fd.added_lines():
-            if any(pattern.search(text) for pattern in _WEAKENING):
+            if any(_found_in_code(pattern, text) for pattern in _WEAKENING):
                 found.append(Finding("test-weakened", Severity.WARN, fd.path, number, safe_quote(text), "this added line skips a test or makes an assertion vacuous", "diff pattern",
                                      "A skipped or tautological test hides a failure instead of fixing it."))
         removed = [text for _n, text in fd.removed_lines() if _ASSERTION.search(text)]
@@ -262,7 +303,7 @@ _CODE = (".py", ".js", ".jsx", ".ts", ".tsx", ".mjs")
 def check_debug_leftovers(files: Sequence[FileDiff], ctx: CheckContext) -> list[Finding]:
     return [
         Finding("debug-leftover", Severity.WARN, fd.path, number, safe_quote(text), "a debugger hook was added", "diff pattern", "Remove it before merging.")
-        for fd in _reviewable(files) if fd.path.endswith(_CODE) for number, text in fd.added_lines() if _DEBUG.search(text)
+        for fd in _reviewable(files) if fd.path.endswith(_CODE) for number, text in fd.added_lines() if _found_in_code(_DEBUG, text)
     ]
 
 
