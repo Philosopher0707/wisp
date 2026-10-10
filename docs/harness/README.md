@@ -107,6 +107,18 @@ The generated pages (`register.md`, `CURRENT_FLAGS.md`, `CURRENT_AUTHORITIES.md`
 test requires the stamp to be an ancestor of `HEAD`. A **squash** merge replaces the branch commit and turns `main` CI red until the
 pages are re-pinned (this happened on #85). Prefer merge commits, or re-pin right after a squash.
 
+## Review and triage
+
+`wisp review` (and `/review` in the REPL) reviews a change; `wisp triage` (`/triage`) reads the open pull requests. Design, research and what building them found: [`wisp-review-design.md`](wisp-review-design.md).
+
+| | |
+|---|---|
+| `wisp review [--staged \| --base B [--head H] \| --commit SHA \| --pr N]` | deterministic checks (secrets, conflict markers, files that do not parse, weakened tests, new public code no test mentions, CI and dependency files, debug leftovers, size), the repo's rules in `.wisp/review-rules.toml`, and optional model lenses (`--no-model` skips them; `--lens` picks one) |
+| the verdict | derived by the harness: `blocked`, `incomplete` (anything not reviewed), `attention`, `clean`. A model finding must quote code that is in the diff and can only warn; the model's opinion never changes the verdict |
+| `--run-tests` | runs the tests the change affects, in the local checkout (refused with `--pr`); a failing test blocks |
+| `--fail-on blocked\|incomplete\|attention` | the exit-code threshold (default `blocked`); exit 2 is a usage or source error |
+| `wisp triage [--limit N] [--repo OWNER/NAME] [--json]` | read-only: ready for review, changes requested, CI failing, conflicting, possible duplicate, missing requirements, security review, waiting for CI, draft, human decision. It never merges, closes, comments, labels or approves |
+
 ## Invariant gates
 
 Five deterministic layers sit between the model and the machine: path confinement, command interception, secret scrubbing, a dependency
