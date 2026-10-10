@@ -472,3 +472,51 @@ def test_the_bounds_are_named_and_the_refusal_quotes_them(tmp_path):
     for i in range(3):
         (tmp_path / f"f{i}.txt").write_text("x")
     assert not snap.capture(str(tmp_path)) and snap.refused == "more than 2 files"
+
+
+# ── dedupe against everything seen, not only against what was kept ───────────
+#
+# "Dedupe against everything seen, not just against confirmed results. Otherwise rejected findings come back every round" (the graph-engineering article, step 11).
+# The stagnation witness was the digest of the last KEPT measurement, so a rejected state that came back was a fresh `implementation` failure each time.
+
+
+def test_the_same_rejected_state_twice_is_stagnation_and_the_ladder_changes_strategy(ws):
+    controller, _turn, objective, _path = build(ws, [lambda w: state(w, 5)] * 3, attempts=3)
+    result = run(controller, objective)
+    assert [a.failure_class for a in result.attempts] == ["implementation", "stagnation", "stagnation"]
+    assert [a.rung for a in result.attempts] == ["INITIAL", "REPAIR", "GLOBAL_REPLAN"]
+
+
+def test_two_different_rejected_states_are_not_a_repeat(ws):
+    controller, _turn, objective, _path = build(ws, [lambda w: state(w, 5), lambda w: state(w, 4)], attempts=2)
+    result = run(controller, objective)
+    assert [a.failure_class for a in result.attempts] == ["implementation", "implementation"]
+
+
+def test_what_was_seen_survives_a_resume(ws):
+    controller, _turn, objective, path = build(ws, [lambda w: state(w, 5)], attempts=1)
+    run(controller, objective)
+    controller2, _turn2, objective2, _ = build(ws, [lambda w: state(w, 5)], attempts=2)
+    controller2._journal = path
+    result = run(controller2, objective2, resume=True)
+    assert [a.failure_class for a in result.attempts] == ["implementation", "stagnation"]
+
+
+def test_going_back_to_an_earlier_kept_state_is_a_repeat_too(ws):
+    controller, _turn, objective, _path = build(ws, [lambda w: state(w, 2), lambda w: state(w, 1), lambda w: state(w, 2)], attempts=3)
+    result = run(controller, objective)
+    assert [a.progress for a in result.attempts] == ["meaningful_progress", "meaningful_progress", "no_progress"]
+    assert result.attempts[2].failure_class == "stagnation"
+    assert (ws / "state.txt").read_text() == "1"
+
+
+def test_the_first_attempt_is_never_a_repeat_even_when_it_changes_nothing(ws):
+    controller, _turn, objective, _path = build(ws, [lambda w: None], attempts=1)
+    result = run(controller, objective)
+    assert result.attempts[0].failure_class == "implementation"
+
+
+def test_a_passing_attempt_after_a_rejected_one_still_converges(ws):
+    controller, _turn, objective, _path = build(ws, [lambda w: state(w, 5), lambda w: state(w, 5), lambda w: state(w, 0)], attempts=3)
+    result = run(controller, objective)
+    assert result.goal_state is GoalState.GOAL_MET
