@@ -578,6 +578,40 @@ def test_resume_continues_without_re_running_completed_attempts(ws, tmp_path):
     assert second.converged
 
 
+def test_resume_still_works_when_the_journal_holds_a_derivation_record(ws, tmp_path):
+    """ADR-0048 R3 made the controller write a `derivation` line (kind != attempt) between the baseline and the first attempt. The loader read it as an attempt, hit a
+    KeyError and STOPPED, so every attempt after it was silently dropped: a resumed run started again at attempt 0 and repeated mutations the journal said were done.
+    Found by driving the REPL's `/converge resume` end to end."""
+    journal = tmp_path / "converge.jsonl"
+    derivation = (("verify:cmd0", "stated", "fix the failing tests"),)
+
+    ctl, turn, criteria = _controller(ws, [lambda _w: _ok()] * 5, max_attempts=1, journal_path=journal)
+    first = _run(ctl.converge(Objective(goal="fix", workspace=str(ws), criteria=criteria, max_attempts=1, derivation=derivation)))
+    assert len(first.attempts) == 1
+    kinds = [json.loads(line).get("kind") for line in journal.read_text().splitlines()]
+    assert "derivation" in kinds and kinds.index("derivation") < kinds.index("attempt")  # the shape that broke the loader
+
+    def fix(_ws):
+        _write(ws, "totals.py", "def sum_to(n):\n    return sum(range(1, n + 1))\n")
+        return _ok()
+
+    ctl2, turn2, _ = _controller(ws, [fix], max_attempts=3, journal_path=journal)
+    second = _run(ctl2.converge(Objective(goal="fix", workspace=str(ws), criteria=criteria, max_attempts=3, derivation=derivation), resume=True))
+    assert [a.index for a in second.attempts] == [0, 1]
+    assert len(turn2.calls) == 1  # exactly one NEW turn: attempt 0 was not repeated
+    assert second.converged
+
+
+def test_a_record_kind_the_loader_does_not_know_is_skipped_not_fatal(ws, tmp_path):
+    journal = tmp_path / "converge.jsonl"
+    attempt = {"index": 0, "rung": INITIAL_RUNG, "directive": "", "turn_succeeded": True, "terminal_outcome": "succeeded"}
+    journal.write_text("\n".join(json.dumps(x) for x in (
+        {"kind": "baseline", "measurement": {}}, {"kind": "some_future_record", "x": 1}, {"kind": "attempt", **attempt})) + "\n", encoding="utf-8")
+    ctl, turn, criteria = _controller(ws, [lambda _w: _ok()] * 3, max_attempts=3, journal_path=journal)
+    ctl._load_journal()
+    assert [a.index for a in ctl.attempts] == [0]
+
+
 def test_resume_preserves_the_recovery_strategy(ws, tmp_path):
     """A restart must not lose the rung the interrupted run had chosen.
 

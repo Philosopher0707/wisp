@@ -816,6 +816,11 @@ class ReplRunner:
                     parts = prompt.split(maxsplit=1)
                     self._handle_multiline_command(parts[1] if len(parts) > 1 else "")
                     continue
+                if prompt == "/converge" or prompt.startswith("/converge "):
+                    from wisp.autonomous_repl import handle_command
+
+                    handle_command(self, prompt)
+                    continue
                 if prompt.startswith("/"):
                     # Ensure legacy handlers see a live adapter.
                     _ = self.adapter

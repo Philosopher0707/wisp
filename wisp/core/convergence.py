@@ -1419,8 +1419,12 @@ class ConvergenceController:
         snapshot: "WorkspaceSnapshot | None" = None,
         journal_path: str | Path | None = None,
         baseline: Measurement | None = None,
+        on_record: Callable[["AttemptRecord"], None] | None = None,
     ):
         self._run_turn = run_turn
+        #: Told about each attempt once it is recorded and journaled, so a caller can show progress as it happens. It only
+        #: OBSERVES: it is never consulted, and an exception in it is logged and dropped (a display must not end a run).
+        self._on_record = on_record
         self._probe = probe
         self._ladder = ladder if ladder is not None else RecoveryLadder()
         self._max_attempts = max(1, int(max_attempts))
@@ -1689,6 +1693,11 @@ class ConvergenceController:
             ))
             self.attempts.append(record)
             self._write_journal(record)
+            if self._on_record is not None:
+                try:
+                    self._on_record(record)
+                except Exception:  # noqa: BLE001 — an observer must never end the run
+                    logger.debug("on_record callback failed", exc_info=True)
 
             if authorization_event:
                 return ConvergenceResult(
@@ -1932,9 +1941,15 @@ class ConvergenceController:
                 continue
             try:
                 payload = json.loads(line)
-                if payload.get("kind") == "baseline":
+                kind = payload.get("kind")
+                if kind == "baseline":
                     self._journal_baseline = Measurement.from_dict(
                         payload.get("measurement") or {})
+                    continue
+                if kind not in (None, "attempt"):
+                    # `derivation` (ADR-0048 R3) and any record kind a later version adds are not
+                    # attempts. Reading one as an attempt raised KeyError, and the `break` below then
+                    # dropped EVERY attempt after it: a resumed run started again at attempt 0.
                     continue
                 self.attempts.append(AttemptRecord.from_dict(payload))
             except (json.JSONDecodeError, KeyError, TypeError, ValueError):
