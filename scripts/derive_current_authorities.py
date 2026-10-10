@@ -56,7 +56,7 @@ AUTHORITIES: list[tuple[str, str, str, str, str]] = [
      "arbitration input; still recorded)",
      "`terminal_outcome`, `turn_succeeded` — the goal-state record (`wisp/core/runtime.py:1342`, "
      "`wisp/core/runtime.py:1357`); `terminal_outcome`, `turn_succeeded` — the attempt journal "
-     "line `{\"kind\":\"attempt\"}` (`wisp/core/convergence.py:1323`)"),
+     "line `{\"kind\":\"attempt\"}` (`wisp/core/convergence.py:1328`)"),
     ("1.2 stream state",
      "`guarded_provider_stream` (`wisp/core/provider_stream.py:122`); the two facts are "
      "`got_meaningful` (`wisp/core/provider_stream.py:150`) and `saw_terminal` "
@@ -78,7 +78,7 @@ AUTHORITIES: list[tuple[str, str, str, str, str]] = [
      "it) · **ADR-0042** (the verdict is an **input**, not a second authority)",
      "`verdict` in the verdict envelope (ADR-0013, `wisp/core/acceptance.py:204`) · "
      "`acceptance_verdict` in the goal-state record (`wisp/core/runtime.py:1343`) · `verdict`, "
-     "`unmet`, `evidence_ids` in the attempt journal (`wisp/core/convergence.py:1333-1334`)"),
+     "`unmet`, `evidence_ids` in the attempt journal (`wisp/core/convergence.py:1338-1339`)"),
     ("1.4 progress verdict",
      "`progress.evaluate_progress` (`wisp/core/progress.py:155`); verdicts `NO_PROGRESS` / "
      "`MEANINGFUL_PROGRESS` / `PROGRESS_UNDETERMINABLE` (`wisp/core/progress.py:50-63`)",
@@ -86,10 +86,10 @@ AUTHORITIES: list[tuple[str, str, str, str, str]] = [
      "**ADR-0046** R1–R11 (a second *input* to the recovery decision, not a re-classification of "
      "the failure) → **ADR-0047** R6 (it is the witness that the state changed) and R8 (a "
      "regression, a tampered input, or an unmeasurable attempt cannot unlock it)",
-     "`progress`, `progress_signals` (`wisp/core/convergence.py:1305-1306`, "
-     "`wisp/core/convergence.py:1340-1341`) · `measurement_observations` + `measurement_digest` "
+     "`progress`, `progress_signals` (`wisp/core/convergence.py:1310-1311`, "
+     "`wisp/core/convergence.py:1345-1346`) · `measurement_observations` + `measurement_digest` "
      "— the raw payloads, digested over `WITNESS_FIELDS` only (F63; "
-     "`wisp/core/convergence.py:1192-1205`)"),
+     "`wisp/core/convergence.py:1197-1210`)"),
     ("1.5 goal state",
      "`goal.derive_goal_state` (`wisp/core/goal.py:146`); the contract as data is "
      "`goal.PRECEDENCE` (`wisp/core/goal.py:108-117`), 8 rows",
@@ -115,7 +115,7 @@ AUTHORITIES: list[tuple[str, str, str, str, str]] = [
      "class's legal rungs) → **ADR-0047** R6–R13 (R5's unit is the *strategy*, not the rung)",
      "`RecoveryDecision.seq` and `ladder_history` (`wisp/core/recovery.py:574`, "
      "`wisp/core/recovery.py:589`) · `AttemptRecord.rung`, `.directive`, `.failure_class` "
-     "(`wisp/core/convergence.py:1277-1278`, `wisp/core/convergence.py:1299`) · "
+     "(`wisp/core/convergence.py:1282-1283`, `wisp/core/convergence.py:1304`) · "
      "`BudgetGovernor.snapshot()` — reports `productive_continuations` "
      "(`wisp/core/recovery.py:505`)"),
 ]
@@ -133,7 +133,7 @@ SECTION_2 = """\
 > **A run's state is the ladder's escalation if it surrendered, otherwise the last attempt's derived state.**
 
 Source: **ADR-0047 R13**; `goal.derive_goal_state`'s row 2 consumes `escalated` (`wisp/core/goal.py:195`), and the
-convergence loop reads the last `AttemptRecord.goal_state` (`wisp/core/convergence.py:1281`). This is the *only*
+convergence loop reads the last `AttemptRecord.goal_state` (`wisp/core/convergence.py:1286`). This is the *only*
 place the aggregation is stated; a second statement would be a second authority for one question."""
 
 #: `row -> (condition, source)`. The row set and each row's result come from `goal.PRECEDENCE`;
