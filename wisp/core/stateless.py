@@ -1136,6 +1136,13 @@ class WispAgentCore:
                 return
             messages.extend(new_tool_msgs)
 
+            # R5 (enforce only; `take_enforced` is None in observe): the round's results repeated what the agent already had and nothing changed since,
+            # so say so once, after the tool results, in the harness's own words (never the model's).
+            if reasoning is not None:
+                _r5 = reasoning.take_enforced("tool_result")
+                if _r5 is not None and _r5.note:
+                    messages.append(nudge_message(_r5.note))
+
             # Tool boundary: surface any steering the user typed mid-turn
             # so the next provider round-trip can change course.
             if steering_drain is not None:

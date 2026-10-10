@@ -52,7 +52,7 @@ class TestDefaultEnforces:
         monkeypatch.setattr("wisp.config.load_config", lambda: {})
         _turn(tmp_path, [_tool_round("write_file", {"path": str(tmp_path / "a.txt"), "content": "x"}, "c0"), _content_round("All tests pass."), _content_round("All tests pass.")], "e1")
         modes = cores[0].modes
-        assert (modes.for_rule("R1").value, modes.for_rule("R4").value, modes.for_rule("R2").value) == ("enforce", "enforce", "observe")
+        assert (modes.for_rule("R1").value, modes.for_rule("R4").value, modes.for_rule("R5").value, modes.for_rule("R2").value) == ("enforce", "enforce", "enforce", "observe")
         assert any(r.get("applied") and r["action"] == "withhold_done" for r in cores[0].journal)
 
     def test_the_kill_switch_restores_observe_through_a_real_turn(self, tmp_path, cores, monkeypatch):
@@ -149,3 +149,65 @@ class TestRC12OneCallSitePerSeam:
     @pytest.mark.parametrize("attr", ["observe_tool_result", "observe_refusal", "observe_final", "observe_provider_error"])
     def test_exactly_one(self, attr):
         assert self._calls(attr) == 1
+
+
+class TestR5ThroughARealTurn:
+    """R5 reaches the model through a real engine turn: the provider's next request carries the harness note when (and only when) the rule is enforced and a
+    repeat had nothing change in between."""
+
+    NOTE = "Harness note: this returned the same output as before"
+
+    @pytest.fixture
+    def seen(self, monkeypatch):
+        from tests.reliability.test_verification_evidence_adapter import _Provider
+
+        requests: list[str] = []
+        orig = _Provider.generate_stream_events
+
+        def spy(self, system_prompt, messages, tools=None):
+            requests.append(json.dumps(messages, default=str))
+            yield from orig(self, system_prompt, messages, tools)
+
+        monkeypatch.setattr(_Provider, "generate_stream_events", spy)
+        monkeypatch.setattr("wisp.config.load_config", lambda: {})
+        return requests
+
+    @staticmethod
+    def _rounds(ws, edit_between=False):
+        echo = {"command": "echo same-output"}
+        rounds = [_tool_round("run_bash", echo, "c0")]
+        if edit_between:
+            rounds.append(_tool_round("write_file", {"path": str(ws / "a.txt"), "content": "x"}, "cw"))
+        return rounds + [_tool_round("run_bash", echo, "c1"), _content_round("ok")]
+
+    def test_enforced_the_next_request_carries_the_note_once(self, tmp_path, cores, seen, monkeypatch):
+        monkeypatch.setenv("WISP_REASONING_CORE_RULES", "R5=enforce")
+        _turn(tmp_path, self._rounds(tmp_path), "r5a")
+        assert [self.NOTE in r for r in seen] == [False, False, True]
+        assert any(r.get("rule") == "R5" and r.get("applied") for r in cores[0].journal)
+
+    def test_with_nothing_set_the_note_reaches_the_model(self, tmp_path, cores, seen, monkeypatch):
+        """The owner's 2026-10-10 decision, witnessed through a real turn."""
+        monkeypatch.delenv("WISP_REASONING_CORE_RULES", raising=False)
+        monkeypatch.delenv("WISP_REASONING_CORE", raising=False)
+        _turn(tmp_path, self._rounds(tmp_path), "r5d")
+        assert [self.NOTE in r for r in seen] == [False, False, True]
+
+    def test_observed_it_is_journaled_and_the_model_is_told_nothing(self, tmp_path, cores, seen, monkeypatch):
+        monkeypatch.setenv("WISP_REASONING_CORE_RULES", "")  # an explicit empty list replaces the default: everything observes
+        _turn(tmp_path, self._rounds(tmp_path), "r5b")
+        assert not any(self.NOTE in r for r in seen)
+        assert any(r.get("rule") == "R5" and r["action"] == "nudge" and not r.get("applied") for r in cores[0].journal)
+
+    def test_an_edit_between_two_identical_runs_is_not_a_repeat(self, tmp_path, cores, seen, monkeypatch):
+        monkeypatch.setenv("WISP_REASONING_CORE_RULES", "R5=enforce")
+        _turn(tmp_path, self._rounds(tmp_path, edit_between=True), "r5c")
+        assert not any(self.NOTE in r for r in seen)
+        assert not any(r.get("rule") == "R5" for r in cores[0].journal)
+
+    def test_exactly_one_delivery_call_site_in_the_engine(self):
+        src = pathlib.Path("wisp/core/stateless.py")
+        n = sum(1 for node in ast.walk(ast.parse(src.read_text()))
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "take_enforced"
+                and node.args and isinstance(node.args[0], ast.Constant) and node.args[0].value == "tool_result")
+        assert n == 1
