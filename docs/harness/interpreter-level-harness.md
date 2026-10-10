@@ -1,5 +1,7 @@
 # Interpreter-level harness: ideas, evidence and what must be verified first
 
+> **Note (2026-10-10):** `wisp judge`, mentioned in several rows below, was removed. Read those rows as design history.
+
 Status: **notes, 2026-10-07. Nothing here is built.** Owner decision: **verify #3, #4 and #5 first; only then proceed.** "Interpreter level" means which Python runs Wisp, how Wisp launches itself and everything it spawns, and what environment those children get.
 
 ## The ideas, ranked

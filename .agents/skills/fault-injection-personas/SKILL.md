@@ -31,4 +31,4 @@ Unit tests build the shape the code expects; real failures arrive in another sha
 
 ## Limits to state
 
-Scripted failures show that rules fire on known shapes, not how often real models fail that way: say so, and pair with live runs (`live-model-paired-runs`). Do not make the persona set larger than the failures you have evidence for.
+Scripted failures show that rules fire on known shapes, not how often real models fail that way: say so, and pair with live runs (the `wisp judge` that earlier skills relied on was removed on 2026-10-10; a live run now means driving the real CLI yourself, with a throwaway `HOME`, a key you name and a spend cap). Do not make the persona set larger than the failures you have evidence for.
