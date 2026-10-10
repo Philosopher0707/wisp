@@ -24,6 +24,7 @@ from typing import Any, AsyncIterator, Callable, ClassVar
 
 from wisp.agent_memory import SessionSummary
 from wisp.approval_state import ApprovalSessionState, SessionPolicy
+from wisp.core.compaction_record import attach_record
 from wisp.core.events import normalize_event, nudge_message, steering_message
 
 logger = logging.getLogger(__name__)
@@ -1905,6 +1906,7 @@ class AgentRuntime:
                 start += 1
             return [m for m in messages[start:] if m.get("role") != "system"]
 
+        summary = ""
         if self.compactor is not None:
             try:
                 result = await self.compactor.compact(
@@ -1918,16 +1920,16 @@ class AgentRuntime:
                 result = None
                 fallback = True
 
-            if result is None or fallback:
-                to_summarize = session["messages"][:-keep]
-                kept = _snap_kept(session["messages"], keep)
-                summary = f"[Compacted {len(to_summarize)} messages]"
-            else:
-                kept = _snap_kept(session["messages"], keep)
-        else:
-            to_summarize = session["messages"][:-keep]
             kept = _snap_kept(session["messages"], keep)
-            summary = f"[Compacted {len(to_summarize)} messages]"
+            summarizer_ran = not (result is None or fallback)
+        else:
+            kept = _snap_kept(session["messages"], keep)
+            summary, summarizer_ran = "", False
+
+        # What was dropped is recorded by the harness whether or not a model summarized it (wisp/core/compaction_record.py).
+        kept_ids = {id(m) for m in kept}
+        compacted = [m for m in session["messages"] if id(m) not in kept_ids and m.get("role") != "system"]
+        summary = attach_record(summary, compacted, summarizer_ran)
 
         # Build new messages: existing system messages + summary + kept messages
         session["messages"] = existing_system + [{"role": "system", "content": summary}] + kept
