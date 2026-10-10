@@ -52,7 +52,7 @@ class TestDefaultEnforces:
         monkeypatch.setattr("wisp.config.load_config", lambda: {})
         _turn(tmp_path, [_tool_round("write_file", {"path": str(tmp_path / "a.txt"), "content": "x"}, "c0"), _content_round("All tests pass."), _content_round("All tests pass.")], "e1")
         modes = cores[0].modes
-        assert (modes.for_rule("R1").value, modes.for_rule("R4").value, modes.for_rule("R2").value) == ("enforce", "enforce", "observe")
+        assert (modes.for_rule("R1").value, modes.for_rule("R4").value, modes.for_rule("R5").value, modes.for_rule("R2").value) == ("enforce", "enforce", "enforce", "observe")
         assert any(r.get("applied") and r["action"] == "withhold_done" for r in cores[0].journal)
 
     def test_the_kill_switch_restores_observe_through_a_real_turn(self, tmp_path, cores, monkeypatch):
@@ -186,8 +186,15 @@ class TestR5ThroughARealTurn:
         assert [self.NOTE in r for r in seen] == [False, False, True]
         assert any(r.get("rule") == "R5" and r.get("applied") for r in cores[0].journal)
 
-    def test_observed_it_is_journaled_and_the_model_is_told_nothing(self, tmp_path, cores, seen, monkeypatch):
+    def test_with_nothing_set_the_note_reaches_the_model(self, tmp_path, cores, seen, monkeypatch):
+        """The owner's 2026-10-10 decision, witnessed through a real turn."""
         monkeypatch.delenv("WISP_REASONING_CORE_RULES", raising=False)
+        monkeypatch.delenv("WISP_REASONING_CORE", raising=False)
+        _turn(tmp_path, self._rounds(tmp_path), "r5d")
+        assert [self.NOTE in r for r in seen] == [False, False, True]
+
+    def test_observed_it_is_journaled_and_the_model_is_told_nothing(self, tmp_path, cores, seen, monkeypatch):
+        monkeypatch.setenv("WISP_REASONING_CORE_RULES", "")  # an explicit empty list replaces the default: everything observes
         _turn(tmp_path, self._rounds(tmp_path), "r5b")
         assert not any(self.NOTE in r for r in seen)
         assert any(r.get("rule") == "R5" and r["action"] == "nudge" and not r.get("applied") for r in cores[0].journal)

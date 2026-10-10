@@ -1,4 +1,4 @@
-# R5: "same observation, nothing changed" (design; P1 and P2 built, observe by default)
+# R5: "same observation, nothing changed" (design; P1, P2 and P3 built, enforced by default)
 
 Status: designed 2026-10-07; P1 (decision) and P2 (delivery) built 2026-10-10 on `feat/reasoning-r5`, from `origin/main` 01fd8c7.
 
@@ -40,12 +40,13 @@ The note is generic and never quotes the model: *"Harness note: this returned th
 | P0 | persona `RepeatsTheSameOutput` and two controls (`EditsThenRerunsTheSame`, `PollsAStableStatus`), baseline row | **not built**: an earlier version of this table said it was; it is not in `tests/reasoning/personas.py`. The cases are covered by `tests/reasoning/test_r5.py` instead |
 | P1 | digest + normaliser (pure), `State` counters, `decide_stale` (R5), the runtime hook on the **success** branch of `observe_tool_result`, `R5` accepted in the per-rule setting | built |
 | P2 | delivery: `observe_tool_result` holds the R5 decision for the seam `tool_result`; after a round's results the engine calls `reasoning.take_enforced("tool_result")` once (`core/stateless.py`, one call site, pinned by an AST test) and, if the rule is enforced, appends `nudge_message(note)`. One note per round; an escalation is not replaced by a later nudge | built |
-| P3 | enforce R5 **by default**, on evidence from the journal of real sessions | not decided: the owner's call |
+| P3 | enforce R5 **by default** | done 2026-10-10 by the owner's decision, not on evidence (none exists yet) |
 
-R5 is **not** in `DEFAULT_ENFORCED_RULES` (`R1=enforce,R4=enforce`), so with nothing set it observes: the decision is journaled and the model is told nothing (witnessed through a real turn). To enforce it now, name it explicitly; an explicit setting replaces the default, so list the others too:
+**Enforced by default (owner decision, 2026-10-10):** `DEFAULT_ENFORCED_RULES` is `R1=enforce,R4=enforce,R5=enforce`. This was decided without evidence from real sessions: there is no corpus of repeats and no false-positive rate (see section 6), so the journal (`WISP_REASONING_JOURNAL=<file>`) is how that is found out. To go back to observing R5 while keeping the others, set the list explicitly (an explicit value, even empty, replaces the default):
 
 ```
-WISP_REASONING_CORE_RULES=R1=enforce,R4=enforce,R5=enforce     # WISP_REASONING_JOURNAL=<file> records every decision
+WISP_REASONING_CORE_RULES=R1=enforce,R4=enforce          # R5 observes
+WISP_REASONING_CORE_RULES=                               # everything observes
 ```
 
 `WISP_REASONING_CORE=observe` is still the kill switch for everything. **R2 and R3 are still decision-only**: P2 holds and delivers R5's note only, because delivering R2's escalation means acting on a recovery rung, which is a larger change than a note.

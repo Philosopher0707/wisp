@@ -1037,8 +1037,8 @@ class WispConfig:
         from wisp.core.reasoning.decision import parse_mode as _parse_reasoning_mode
 
         object.__setattr__(self, "reasoning_core", _parse_reasoning_mode(get_setting("reasoning_core", "observe")).value)
-        # Per-rule overrides, `R1=enforce,R4=enforce`: each heuristic is flipped on its own. Setting nothing enforces R1 and R4 (owner decision,
-        # 2026-10-07); ANY explicit `reasoning_core` or `reasoning_core_rules` (even empty) replaces that default, which is the kill switch.
+        # Per-rule overrides, `R1=enforce,R4=enforce`: each heuristic is flipped on its own. Setting nothing enforces R1, R4 and R5 (owner decisions,
+        # 2026-10-07 and 2026-10-10); ANY explicit `reasoning_core` or `reasoning_core_rules` (even empty) replaces that default, which is the kill switch.
         object.__setattr__(self, "reasoning_journal", str(get_setting("reasoning_journal", "") or ""))
         from wisp.core.reasoning.decision import (
             DEFAULT_ENFORCED_RULES,

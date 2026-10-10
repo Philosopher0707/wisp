@@ -111,10 +111,11 @@ class TestDecideStale:
 
 
 class TestTheRuleIsAccepted:
-    def test_r5_is_a_rule_and_is_not_enforced_by_default(self):
+    def test_r5_is_a_rule_and_is_enforced_by_default_by_the_owners_decision(self):
         assert "R5" in RULES
         m = parse_modes("observe", DEFAULT_ENFORCED_RULES)
-        assert m.for_rule("R5") is Mode.OBSERVE
+        assert m.for_rule("R5") is Mode.ENFORCE
+        assert parse_modes("observe", "").for_rule("R5") is Mode.OBSERVE  # an explicit empty list is the kill switch for the default
         assert parse_modes("observe", "R5=enforce").for_rule("R5") is Mode.ENFORCE
         assert parse_modes("off", "R5=enforce").for_rule("R5") is Mode.OFF
 
