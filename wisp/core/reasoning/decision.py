@@ -38,7 +38,7 @@ def parse_mode(value: object) -> Mode:
     return Mode.OBSERVE
 
 
-RULES = ("R1", "R2", "R3", "R4")
+RULES = ("R1", "R2", "R3", "R4", "R5")
 
 
 @dataclass(frozen=True)
@@ -89,6 +89,7 @@ class Action(StrEnum):
 class NudgeKind(StrEnum):
     CHANGE_HYPOTHESIS = "change_hypothesis"
     REFUSED_BY_POLICY = "refused_by_policy"
+    NO_NEW_INFORMATION = "no_new_information"
 
 
 @dataclass(frozen=True)
@@ -131,6 +132,8 @@ class Budgets:
     min_useful_tokens: int = 256
     margin_tokens: int = 64
     repeat_threshold: int = 2
+    stale_repeat_shell: int = 2  # R5: shell and test tools nudge on the 2nd identical output
+    stale_repeat_other: int = 3  # R5: every other tool on the 3rd
 
 
 @dataclass(frozen=True)
@@ -143,6 +146,7 @@ class State:
     failures: tuple[tuple[str, int], ...] = ()
     denials: tuple[tuple[str, int], ...] = ()
     nudged: tuple[str, ...] = ()
+    stale: tuple[tuple[str, int], ...] = ()  # R5: "<mutation epoch>:<output digest>" -> times seen
     ceiling: int | None = None  # learned per-provider affordability ceiling
 
 
@@ -212,6 +216,53 @@ def decide_failure(signature: str, fact_id: str, state: State, budgets: Budgets 
         return Decision("R2", Action.NUDGE, f"the same failure has occurred {count} times", ids, failure_class=FailureClass.REPEATED, nudge=NudgeKind.CHANGE_HYPOTHESIS,
                         note="Harness note: this failed the same way before; change the hypothesis rather than repeating the action."), state
     return Decision("R2", Action.CONTINUE), state
+
+
+# ── R5: the same observation again, with nothing changed in between ──
+_VOLATILE = (
+    (re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?"), "<ts>"),
+    (re.compile(r"\b\d{8}_\d{6}\b"), "<ts>"),
+    (re.compile(r"\b\d+(?:\.\d+)?\s?(?:ms|secs?|seconds?|s)\b"), "<dur>"),
+)
+_DIGEST_INPUT_CAP = 200_000
+_POLLING_TOOLS = frozenset({"subagent_wait", "subagent_list", "subagent_result", "subagent_send", "subagent_cancel"})  # the same "still running" is the right answer there
+_REPEAT_TWICE_TOOLS = frozenset({"run_bash", "exec_sandbox", "run_tests"})
+
+
+def observation_digest(text: object) -> str:
+    """A short digest of what a tool said, with only run-to-run noise removed (durations, timestamps, whitespace). Counts and paths stay: they are information.
+    Empty output is no observation (""), so a command that prints nothing can never look like a loop."""
+    if text is None:
+        return ""
+    if isinstance(text, bytes):
+        text = text.decode("utf-8", "replace")
+    elif not isinstance(text, str):
+        text = str(text)
+    out = text[:_DIGEST_INPUT_CAP].replace("\r", "")
+    for pattern, token in _VOLATILE:
+        out = pattern.sub(token, out)
+    lines = [ln.rstrip() for ln in out.split("\n")]
+    out = re.sub(r"\n{2,}", "\n", "\n".join(lines)).strip()
+    return hashlib.sha256(out.encode("utf-8", "replace")).hexdigest()[:16] if out else ""
+
+
+def decide_stale(tool: str, digest: str, epoch: int, state: State, budgets: Budgets = Budgets()) -> tuple[Decision, State]:
+    """R5. `epoch` is the number of file mutations so far, so an edit between two identical runs makes the second one new. The nudge fires once per
+    (epoch, output), one more identical result escalates one rung (the same one R2 uses), and past that the rule is silent (RC5)."""
+    if not digest or tool in _POLLING_TOOLS:
+        return Decision("R5", Action.CONTINUE), state
+    stale, count = _bump(state.stale, f"{epoch}:{digest}")
+    state = replace(state, stale=stale)
+    threshold = budgets.stale_repeat_shell if tool in _REPEAT_TWICE_TOOLS else budgets.stale_repeat_other
+    if count == threshold:
+        return Decision("R5", Action.NUDGE, f"the same output has come back {count} times with no file change in between", failure_class=FailureClass.REPEATED,
+                        nudge=NudgeKind.NO_NEW_INFORMATION,
+                        note="Harness note: this returned the same output as before and nothing has changed since. Use what you already have to answer, or take a different action."), state
+    if count == threshold + 1:
+        return Decision("R5", Action.ESCALATE, f"the same output has come back {count} times with no file change in between", failure_class=FailureClass.REPEATED,
+                        rung=RecoveryRung.LOCAL_REPLAN,
+                        note="Harness note: the same output has now come back repeatedly with nothing changed; stop repeating it and replan."), state
+    return Decision("R5", Action.CONTINUE), state
 
 
 # ── R3: the same gate refusal again ──
