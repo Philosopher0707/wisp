@@ -55,6 +55,18 @@ def isolated_wisp_env(monkeypatch, tmp_path):
     return monkeypatch
 
 
+@pytest.fixture(autouse=True)
+def _user_guidelines_off(monkeypatch):
+    """Keep the developer's `~/.config/wisp/CLAUDE.md` out of every Turn-0 seed.
+
+    The seed reads that file from the real HOME, so on a machine that has one, any test that
+    expects no seed (or counts the first messages) saw an extra one. Tests of the file itself
+    remove the switch. Live E2E runs keep the ambient file.
+    """
+    if os.environ.get("WISP_E2E_LIVE") != "1":
+        monkeypatch.setenv("WISP_USER_GUIDELINES", "off")
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _isolate_workspace_trust_file():
     """Point the workspace-trust file at a throwaway for the whole session.
