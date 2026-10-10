@@ -17,6 +17,7 @@ from wisp.tools._utils import (
     _validate_int,
     _MAX_CMD_LENGTH,
     _MAX_BASH_OUTPUT,
+    truncate_output,
     _ANSI_RE,
     check_dangerous_command,
 )
@@ -100,7 +101,7 @@ def _format_bash_output(returncode: int, stdout_str: str, stderr_str: str,
     output = _ANSI_RE.sub('', output)
     if len(output) > _MAX_BASH_OUTPUT:
         logger.debug("Bash output truncated (%d chars)", len(output))
-        output = output[:_MAX_BASH_OUTPUT] + "\n... [output truncated]"
+        output = truncate_output(output)
     return output or "(no output)"
 
 
