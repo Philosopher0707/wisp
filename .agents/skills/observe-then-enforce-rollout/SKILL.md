@@ -26,4 +26,4 @@ Observe is not a destination: while a rule only observes, its failure still reac
 
 State what is unmeasured (real-model rates, user annoyance), what is decision-only (R2/R3), and what is not designed. Changing a default is the owner's decision: give the trade-off and a recommendation.
 
-See `fault-injection-personas` (the baseline), `mutation-probe` (the proof), `live-model-paired-runs` (the evidence).
+See `fault-injection-personas` (the baseline), `mutation-probe` (the proof), live runs with a real model (the evidence; the `wisp judge` tool and its skill were removed on 2026-10-10).

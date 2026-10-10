@@ -1119,15 +1119,6 @@ _SUBCOMMAND_HELP: dict[str, str] = {
     "graph": 'Usage: wisp graph <list|show|validate|run|resume|status|cancel|trace|inspect|metrics> [args]\n\nDeterministic graph execution (see wisp graph --help).',
     "agents": 'Usage: wisp agents [list|status]\n\nList agent roles or show running swarm agent status.',
     "bench": 'Usage: wisp bench -m model1,model2 [...]\n\nBenchmark models on deterministic tasks.',
-    "judge": (
-        "Usage: wisp judge <run|improve|judge|list> [options]\n"
-        "\n"
-        "A mechanical judge over wisp's own task results. run: give wisp buggy fixtures in fresh\n"
-        "workspaces and return SOLVED / GAMED / FAILED / NO-OP / INFRA per task, plus whether wisp's\n"
-        "claim was honest. improve: tune a prompt addendum, keeping a change only if the score rises\n"
-        "on the tune tasks and does not drop on the held-out ones. Common options: --model M\n"
-        "--provider P --api-base URL --key-from ENV_NAME --timeout S."
-    ),
     "converge": (
         "Usage: wisp converge \"<objective>\" [--max-attempts N]\n"
         "                    [--permission-mode full] [--resume] [--journal PATH]\n"
@@ -1160,7 +1151,7 @@ _SUBCOMMAND_NAMES = frozenset({
     "completion", "release",
     "git", "plan", "progress", "diagnose",
     "locks", "changes", "acp", "server", "compact", "swarm", "agents", "graph",
-    "bench", "converge", "fleet", "judge",
+    "bench", "converge", "fleet",
 })
 
 
@@ -1501,10 +1492,6 @@ def main():
             from wisp.fleet import run_fleet
             sys.exit(run_fleet(rest))
 
-        def _do_judge():
-            from wisp.judge.cli import run_judge
-            sys.exit(run_judge(rest))
-
         def _do_converge():
             from wisp.autonomous_cli import run_converge
             sys.exit(run_converge(rest, model=flags_model or None,
@@ -1549,7 +1536,6 @@ def main():
             "bench": _do_bench,
             "converge": _do_converge,
             "fleet": _do_fleet,
-            "judge": _do_judge,
         }
         return _run_with_config_error_handling(_SUBCOMMAND_TABLE[first])
 
