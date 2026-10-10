@@ -62,7 +62,7 @@ def parallel_repo_analysis(ctx_files: list[str]) -> dict:
               "reason": f"{b} consumes split.output.slice"} for b in branches]
     edges += [{"from": b, "to": "synthesize",
                "reason": f"synthesize consumes {b}.output.findings",
-               "mapping": {"findings": "output.findings"}} for b in branches]
+               "mapping": {f"findings.{b}": "output.findings"}} for b in branches]
     return {"objective": "parallel repository analysis",
             "execution_shape": "GRAPH",
             "graph": {"id": "coding-parallel-analysis", "entry": "split",
