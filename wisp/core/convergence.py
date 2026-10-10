@@ -933,14 +933,19 @@ _PATH_RE = re.compile(r"[A-Za-z0-9_./-]+\.(?:py|js|ts|tsx|go|rs|java|rb)\b")
 #: objective that says the suite must pass. Before ADR-0047 a timeout masked the
 #: difference; now a `PASS` completes the run, so the criteria are the only gate
 #: and stating them at the right strength is load-bearing.
+#: One character of a clause. A dot ends the clause only when it ends a sentence; a dot that is followed by a word character is part of a name
+#: (`totals.py`, `v1.2`) and does not. Reading every dot as a sentence end made `Fix totals.py so they pass` unstated while `Fix the failing tests`
+#: was stated.
+_CLAUSE_CHAR = r"(?:[^.]|\.(?=\w))"
+
 _WANTS_FIX_RE = re.compile(
     # (1) a repair verb and a suite word — "fix the failing tests"
-    r"\b(fix|repair|resolve|make|get|turn)\b[^.]{0,40}?"
+    r"\b(fix|repair|resolve|make|get|turn)\b" + _CLAUSE_CHAR + r"{0,40}?"
     r"\b(pass|passing|green|fail(?:ing|ure|ures)?|test|tests|suite|ci)\b"
     # (2) a passing verb and a suite word — "so that the tests pass"
-    r"|\b(pass|passes|passing|green)\b[^.]{0,40}?\b(tests?|suite|ci)\b"
+    r"|\b(pass|passes|passing|green)\b" + _CLAUSE_CHAR + r"{0,40}?\b(tests?|suite|ci)\b"
     # (3) the same, in the other order — "the suite passes"
-    r"|\b(tests?|suite|ci)\b[^.]{0,20}?\b(pass|passes|passing|green)\b",
+    r"|\b(tests?|suite|ci)\b" + _CLAUSE_CHAR + r"{0,20}?\b(pass|passes|passing|green)\b",
     re.IGNORECASE,
 )
 

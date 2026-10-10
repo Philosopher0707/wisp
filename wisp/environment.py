@@ -93,9 +93,12 @@ def _detect_verification_commands(ws: Path) -> tuple[str, ...]:
         or (ws / "pyproject.toml").exists()
         or (ws / "setup.cfg").exists()
         or any((ws / "tests").glob("test_*.py"))
+        or any(ws.glob("test_*.py"))
+        or any(ws.glob("*_test.py"))
     )
     if test_markers:
-        commands.append("python -m pytest tests/ -x -q")
+        # Name `tests/` only when it is there: a project with its tests at the root got a command that exits 4 ("file or directory not found").
+        commands.append("python -m pytest tests/ -x -q" if (ws / "tests").is_dir() else "python -m pytest -x -q")
     if (ws / "package.json").exists():
         pkg = None
         try:
