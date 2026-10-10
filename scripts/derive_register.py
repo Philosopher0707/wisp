@@ -88,7 +88,7 @@ ROWS: list[tuple[str, str, str, str, str, str]] = [
     ("TrustViolation", "wisp/core/context_trust.py:95", "RuntimeError", "guard", "context", "—"),
     ("ContextOverflow", "wisp/core/context_trust.py:104", "RuntimeError", "guard",
      "context", "—"),
-    ("CriteriaDeclarationRejected", "wisp/core/convergence.py:673", "Exception", "guard",
+    ("CriteriaDeclarationRejected", "wisp/core/convergence.py:674", "Exception", "guard",
      "turn", "ADR-0050"),
     ("ReplayDivergence", "wisp/core/replay_digest.py:64", "RuntimeError", "guard",
      "persist", "—"),

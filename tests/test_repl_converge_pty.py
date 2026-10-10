@@ -146,3 +146,61 @@ def test_a_prompt_with_no_checkable_end_is_refused_by_the_command_and_left_to_th
         assert "loop:" not in repl.buf[mark:]
     finally:
         repl.close()
+
+
+def test_the_loop_announces_keep_or_revert_and_the_switch_removes_it(project, tmp_path_factory):
+    repl = Repl(project)
+    try:
+        mark = repl.send(OBJECTIVE)
+        repl.expect(r"keep-or-revert: an attempt that does not improve the measurement is undone", 60, since=mark)
+        repl.expect(r"(not proven|needs you)", 240, since=mark)
+        repl.expect("wisp ❯", 60, since=mark)
+    finally:
+        repl.close()
+    other = tmp_path_factory.mktemp("off")
+    for name in ("totals.py", "pytest.ini"):
+        (other / name).write_text((project / name).read_text())
+    (other / "tests").mkdir()
+    (other / "tests" / "test_totals.py").write_text(TEST)
+    off = Repl(other, {"WISP_REPL_CONVERGE_REVERT": "off"})
+    try:
+        mark = off.send(OBJECTIVE)
+        off.expect(r"▶ attempt 1/3", 60, since=mark)
+        off.expect(r"(not proven|needs you)", 240, since=mark)
+        assert "keep-or-revert" not in off.buf[mark:] and "↩" not in off.buf[mark:]
+    finally:
+        off.close()
+
+
+def test_an_attempt_that_changes_files_without_moving_the_measurement_is_undone_in_the_real_repl(project):
+    """The mock model cannot edit, so a writer thread stands in for 'the attempt changed files and the tests still fail'. A concurrent writer is, by design, indistinguishable from the attempt: the loop owns the workspace while it runs."""
+    import threading
+
+    stop = threading.Event()
+
+    def noise():
+        i = 0
+        while not stop.is_set():
+            (project / f"noise-{i % 40}.txt").write_text(f"{i}\n")
+            i += 1
+            time.sleep(0.02)
+
+    writer = threading.Thread(target=noise, daemon=True)
+    repl = Repl(project)  # fork the REPL before any helper thread exists: forkpty in a multi-threaded process can deadlock the child
+    try:
+        writer.start()
+        mark = repl.send(OBJECTIVE)
+        repl.expect(r"↩ reverted: the attempt did not improve the measurement; put back \d+ file\(s\)", 240, since=mark)
+        repl.expect(r"(not proven|needs you)", 240, since=mark)
+        stop.set()
+        repl.expect("wisp ❯", 60, since=mark)
+        out = repl.buf[mark:]
+        assert "the attempt's own version is kept in" in out and ".discarded" in out
+        assert (project / "totals.py").read_text() == BUG
+        kept = list((project / ".wisp" / "converge").glob("*.discarded/attempt-1/noise-*.txt"))
+        assert kept, "the attempt's own files were not kept aside"
+    finally:
+        stop.set()
+        if writer.is_alive():
+            writer.join(timeout=5)
+        repl.close()

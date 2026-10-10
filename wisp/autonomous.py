@@ -259,6 +259,7 @@ async def converge_on_objective(
     criteria: tuple[Any, ...] | None = None,
     specs: tuple[MeasureSpec, ...] | None = None,
     allow_rollback: bool = False,
+    revert_no_progress: bool = False,
     journal_path: str | Path | None = None,
     resume: bool = False,
     root: Any = None,
@@ -278,6 +279,10 @@ async def converge_on_objective(
     value (`auto_edit`, in which `run_bash` is blocked). Acceptance does not
     depend on it — the harness measures, not the agent — but an agent that
     cannot run the project's tests cannot check its own work.
+
+    `revert_no_progress` is keep-or-revert: an attempt whose measurement did not improve is undone (its version of each file is kept beside the
+    journal first), so the next attempt starts from the best state reached. It needs a journal and a workspace small enough to snapshot, and does
+    nothing, saying why, when either is missing.
 
     For a caller that already has a runtime and a person at the keyboard (the
     REPL): `approval_handler` is the prompt for gated tools, `on_event` sees every
@@ -414,6 +419,7 @@ async def converge_on_objective(
             journal_path=journal_path,
             baseline=baseline,
             on_record=on_record,
+            revert_no_progress=revert_no_progress,
         )
         return await controller.converge(objective, resume=resume)
     finally:

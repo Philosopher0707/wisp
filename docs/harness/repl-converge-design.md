@@ -49,7 +49,7 @@ The REPL has the agent turn and the graph, and neither has a verifier the model 
 4. **Bounded.** At most 3 attempts by default (`WISP_REPL_CONVERGE_ATTEMPTS`, clamped 1 to 10); each attempt is an ordinary turn with the existing iteration bound; the baseline and probe have their own timeouts. Ctrl-C stops the loop between or inside an attempt.
 5. **State outside the model.** A JSONL journal under `<workspace>/.wisp/converge/`; `/converge resume` continues without re-running attempts. The REPL conversation receives the prompt and a short, bounded note (state, attempts, what is met and unmet, changed files, journal), so the next prompt knows what happened.
 6. **Honest words.** The line the user reads says `proven` only for `GOAL_MET`. Everything else says what was not shown: `not proven (stagnated after 3 attempts)`, `no checkable acceptance`, `needs you`.
-7. **No silent destruction.** Rollback (Karpathy's "reset") stays off in the REPL: restoring a snapshot would overwrite the user's own concurrent edits. `wisp converge --allow-rollback` remains the explicit tool for that.
+7. **Keep or revert, never silently.** Karpathy's `program.md` keeps an experiment only if the metric improved and otherwise resets to where the experiment started. Here an attempt whose harness-measured progress is `NO_PROGRESS` (nothing moved, or something got worse; a regression is `NO_PROGRESS` too) is undone, and so is an attempt that changed the check's own inputs. Before the workspace is put back, the attempt's version of every file it changed is written beside the journal (`<journal>.discarded/attempt-N/`), the reverted paths are journaled and printed, and the next attempt is told, in a harness-written line, that the last one was reverted and what state it starts from. It is on in the REPL (`WISP_REPL_CONVERGE_REVERT=off` turns it off) and opt-in for `wisp converge --revert`. It fails closed: no journal to keep the discarded work in, a workspace too big for the snapshot (2000 files / 64 MB), a tree that cannot be compared, or no earlier measurement to compare with (`PROGRESS_UNDETERMINABLE` without a moved input) means nothing is touched and the record says why. A passing attempt and an authorization event are never reverted (the first is the proof, the second is for the human to look at). This is separate from the `--allow-rollback` rung, which restores the *baseline* after several failures.
 
 ### 3.2 Flow
 
@@ -65,7 +65,10 @@ REPL prompt
 CONVERGE (wisp/autonomous_repl.py)
   derive criteria (host) -> baseline measure (harness) -> attempt k in a FRESH session
     (attempt prompt = objective + acceptance conditions + harness evidence; conversation context is passed as a bounded reference block)
-  -> harness measures again -> evaluate -> classify -> ladder picks the next rung -> journal row
+  -> harness measures again -> evaluate -> progress (core/progress.py) -> NO_PROGRESS or moved check input?
+       yes: keep the attempt's files aside, put the pre-attempt snapshot back (keep-or-revert)
+  -> classify -> ladder picks the next rung -> journal row (with the reverted paths)
+  -> the next attempt is shown the state it starts from, plus one harness line saying the last attempt was reverted
   -> stop on GOAL_MET | attempts exhausted | escalation | Ctrl-C
   -> print the verdict, put prompt + note into the REPL session
 ```
@@ -82,7 +85,10 @@ Reused unchanged: `ConvergenceController`, `explain_acceptance`, `CommandProbe`,
 | A fresh session loses the conversation | A bounded context block (last six messages, trimmed) is added to each attempt prompt as reference. |
 | Cost surprise | Visible announcement before attempt 1 (verifier, attempts, how to stop); attempt cap; kill switch. |
 | Permission modes that block the agent from running tests | The REPL's own permission mode is passed through; acceptance does not depend on it (the harness measures). |
-| Crash or Ctrl-C mid-loop | Journal; `/converge resume`; no automatic rollback. |
+| Crash or Ctrl-C mid-loop | Journal; `/converge resume` (which compares against the last attempt that was *kept*); Ctrl-C leaves the workspace as the interrupted attempt left it and says so. |
+| A revert would destroy something | The attempt's version of each file is written to `<journal>.discarded/` first; if that cannot be done nothing is reverted. Only files the snapshot covers are touched; `.git`, `.wisp`, `.agent`, `node_modules`, virtualenvs and caches are not entered, and symlinks are neither followed nor written through. |
+| A partial improvement the metric cannot see is reverted | Same property as Karpathy's rule (equal or worse is discarded). A binary check (`exit 0/1`) sees no partial progress; a suite with a failure count does. Stated, not solved. |
+| Another writer changes files while the loop runs | Indistinguishable from the attempt: the loop owns the workspace while it runs, and a revert would put those files back too (their content is in `.discarded/`). |
 | The loop proves "tests pass" but the user wanted more | The verdict says exactly what was measured. It never says the task is "done". |
 
 ## 4. Proof plan (done: `tests/test_repl_converge.py`, `tests/test_repl_converge_pty.py`)
@@ -90,7 +96,8 @@ Reused unchanged: `ConvergenceController`, `explain_acceptance`, `CommandProbe`,
 1. Unit: the routing table (which prompts loop, which do not), the verdict wording, the session note, the journal path and resume pick.
 2. **Integration, end to end, nothing in the loop faked**: a real `AgentRuntime` and engine, real tools, a real pytest probe, the real controller and journal, with a scripted model that (a) fixes the bug on attempt 2 after failing on attempt 1, (b) never fixes it, (c) edits a protected test file to make it pass (the loop must say it did not prove the objective). Asserted: the harness verdict, the number of attempts, the journal, the files, the printed lines, the session note.
 3. **Through the real REPL** (a pty, `python -m wisp repl`, the mock provider): the auto-route announcement, `/converge`, an honest "not proven" when the mock changes nothing, the session note present afterwards, and `WISP_REPL_CONVERGE=off` restoring the single turn.
-4. Mutation probe of the new code.
+4. Keep-or-revert: `tests/test_converge_revert.py` drives the real controller and a real subprocess probe (edit, create and delete are all undone; the attempt's version is kept; a better attempt is kept; a regression is undone; the next attempt is measured against the *restored* state, in-process and after a resume; a passing attempt, an authorization event, a missing journal, an oversized workspace and a missing earlier measurement revert nothing; editing the check is undone; symlinks and wisp's own state directories are never touched), `tests/test_repl_converge.py::TestKeepOrRevert` runs it through the REPL's real runtime and tools, and the pty test shows it in `python -m wisp repl`.
+5. Mutation probe of the new code: 36 distinct mutants across the controller, the snapshot, the REPL layer and the CLI flag. Five survived the first runs and each produced a test or a deletion: a passing attempt and an authorization event were not pinned, a symlink was never actually written through in the test, `"snapshot" in note` matched two different messages, the journal-artifact filter turned out to be dead code (the journal is written after the revert) and was removed, and the `--revert` flag had no test.
 
 ## 5. What the end-to-end tests found (2026-10-10)
 
@@ -103,11 +110,18 @@ Building the proof plan before the code was finished turned up four things that 
 | **The detected check assumes a `tests/` directory.** The project's verification command is `python -m pytest tests/ -x -q` whenever a pytest config exists; a project with tests at the root gets a command that exits 4. | `wisp/environment.py::_detect_verification_commands`. | Not changed; with no usable command the objective is simply not verifiable and nothing is looped. |
 | **The harness runs the first `python` on `PATH`.** On this machine that was another environment without the plugins pytest imports, so the probe could not run and the loop correctly concluded `goal_failed` (it proves nothing rather than guessing). | the first run of the scenario tests. | Tests pin the interpreter. Which interpreter a project's check should use is the open "interpreter-level harness" item. |
 
+| **Karpathy's keep-or-revert was missing.** `program.md` resets to the starting point when the metric does not improve; the loop here left a failed attempt's edits in place and the next attempt built on them. The only revert was the opt-in `ROLLBACK` rung, which restores the *baseline*, only on one rung, and whose own test (`test_rollback_restores_the_workspace_when_enabled`) never runs the controller. | Read of `core/convergence.py`: `Objective.allow_rollback` default `False`; the snapshot is taken once, before attempt 0. | Added per-attempt keep-or-revert (principle 7). |
+| **A revert that lies about a partial failure, and loses the executable bit.** Found by reading the diff, not by a test: if one file could not be written back, the record still said "reverted" and the next attempt was told the workspace was as before; the snapshot kept only bytes, so a deleted `run.sh` came back without `+x` and a `chmod` alone was never seen as a change. | RED tests for both (`test_a_deleted_executable_comes_back_executable`, `test_a_revert_that_fails_part_way_claims_nothing...`). | `revert()` returns the paths that failed; any failure means `reverted=()` and a note that the workspace may be in a mixed state with the attempt's files kept. The snapshot stores permission bits and restores them (this also fixes the `ROLLBACK` rung's `restore()`). |
+| **Turning that on exposed three hazards in the snapshot.** `.agent/` (the `run_bash` log sink writes there while an attempt runs) was not in the skip list, so a revert deleted the agent's own logs; the snapshot walked *into* `node_modules` and `.git` and only filtered afterwards; symlinks were followed, so a revert could write outside the workspace. | RED tests first (`test_wisps_own_state_directories_are_never_part_of_an_attempt`, `test_the_snapshot_never_walks_into_the_directories_it_ignores`, the symlink test); the REPL test harness had also put its store *inside* the workspace, and the first run tried to revert `repl.db-wal`. | Fixed: `.agent` skipped, a pruned `os.walk`, symlinks never listed. The harness store now lives where the composition root puts it (`.wisp/`). |
+
 Also observed, and pinned by a test: a scripted model that "passes" by editing `tests/test_totals.py` to `assert True` is **not** proven. The derivation declares the suite and its configuration as inputs of the check (`command_inputs_unchanged`), so a changed input is untrustworthy, not progress.
 
 ## 6. Not done, stated
 
-- No rollback in the REPL; no cost accounting per loop (the dashboard PR would show it).
+- Keep-or-revert covers files the snapshot sees (at most 2000 files and 64 MB, regular files only, outside the skipped directories). It does not undo effects outside the workspace (a package installed, a service started, a database a test wrote to outside the tree). A live database *inside* the workspace that another process holds open is not protected: restoring its bytes under that process is unsafe, and the loop does not know which files those are.
+- Ctrl-C does not revert; it never has, and the message says so.
+- `PROGRESS_UNDETERMINABLE` without a moved check input (no earlier measurement) is kept, not reverted: "cannot tell" is not "it did not help".
+- No cost accounting per loop (the dashboard PR would show it).
 - Loop C (`core/graph/loop.py`) stays unwired; this design does not use it.
 - A graph run still has a model reviewer; making the graph's verification node a harness probe is a separate change.
 - The auto-route has no measured false-positive rate on real sessions.

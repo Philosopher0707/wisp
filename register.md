@@ -51,7 +51,7 @@
 | `GrowthBudgetExceeded` | `RuntimeError` | guard | plan | `wisp/core/task_graph.py:600` | 2 | `wisp/core/task_graph.py:620` | — | — |
 | `TrustViolation` | `RuntimeError` | guard | context | `wisp/core/context_trust.py:95` | 1 | `wisp/core/context_trust.py:287` | — | — |
 | `ContextOverflow` | `RuntimeError` | guard | context | `wisp/core/context_trust.py:104` | 1 | `wisp/core/context_trust.py:314` | — | — |
-| `CriteriaDeclarationRejected` | `Exception` | guard | turn | `wisp/core/convergence.py:673` | 9 | `wisp/core/convergence.py:782` | `wisp/autonomous.py:336`, `wisp/autonomous_repl.py:64` | ADR-0050 |
+| `CriteriaDeclarationRejected` | `Exception` | guard | turn | `wisp/core/convergence.py:674` | 9 | `wisp/core/convergence.py:783` | `wisp/autonomous.py:341`, `wisp/autonomous_repl.py:70` | ADR-0050 |
 | `ReplayDivergence` | `RuntimeError` | guard | persist | `wisp/core/replay_digest.py:64` | 2 | `wisp/core/replay_digest.py:125` | `wisp/core/runtime.py:1862` | — |
 | `ImportGraphTooLarge` | `RuntimeError` | guard | tool | `wisp/import_graph.py:25` | 1 | `wisp/import_graph.py:133` | `wisp/test_runner.py:305` | — |
 | `WalkBudgetExceeded` | `RuntimeError` | guard | tool | `wisp/core/workspace_walk.py:39` | 1 | `wisp/core/workspace_walk.py:130` | `wisp/import_graph.py:132` | — |

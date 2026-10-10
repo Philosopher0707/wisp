@@ -87,7 +87,8 @@ class Runner:
     def __init__(self, ws, writes):
         self.ws = ws
         config = WispConfig().replace(workspace=str(ws), permission_mode=PermissionMode.ASK_ALL, max_iterations=6)
-        store = UnifiedStore(ws / "repl.db")
+        (ws / ".wisp").mkdir(exist_ok=True)  # where the composition root keeps the store (`<workspace>/.wisp/wisp.db`)
+        store = UnifiedStore(ws / ".wisp" / "repl.db")
         self.provider = AttemptProvider(ws, writes)
         executor = ToolExecutor(config)
         self.approvals: list[str] = []
@@ -383,3 +384,59 @@ class TestWordsAndBounds:
         for state in GoalState:
             lines = AR.verdict_text(state, (), "reason", ("c",))
             assert ("proven" in lines[0] and "not proven" not in lines[0]) is (state is GoalState.GOAL_MET)
+
+
+class TestKeepOrRevert:
+    """Karpathy's rule (autoresearch `program.md`): after each attempt, keep the change if the measurement improved, otherwise put the workspace back."""
+
+    def test_a_wrong_attempt_is_undone_and_the_next_one_starts_from_the_restored_file(self, make_runner, project):
+        runner = make_runner({1: ("totals.py", WRONG), 2: ("totals.py", FIXED)})
+        result = AR.run_repl_converge(runner, OBJECTIVE, attempts=3)
+        assert result.converged and len(result.attempts) == 2
+        assert result.attempts[0].reverted == ("totals.py",) and result.attempts[1].reverted == ()
+        assert "↩ reverted" in runner.printed and "totals.py" in runner.printed
+        kept = AR.latest_journal(str(project)).with_suffix(".discarded") / "attempt-1" / "totals.py"
+        assert kept.read_text() == WRONG  # the attempt's own version is not lost
+        second = [text for n, text in runner.provider.prompts if n == 2][0]
+        assert "was reverted" in second and "Measured evidence for the current state" in second
+        assert (project / "totals.py").read_text() == FIXED
+
+    def test_when_nothing_is_ever_fixed_the_workspace_ends_as_it_began_and_the_conversation_knows(self, make_runner, project):
+        runner = make_runner({1: ("totals.py", WRONG), 2: ("totals.py", WRONG + "# again\n"), 3: ("totals.py", WRONG + "# third\n")})
+        result = AR.run_repl_converge(runner, OBJECTIVE, attempts=3)
+        assert result is not None and not result.converged
+        assert (project / "totals.py").read_text() == BUG
+        assert "proven by the harness" not in runner.printed
+        assert "the last attempt was reverted, so the workspace is as it was before it" in runner.printed
+        assert "reverted" in runner.session["messages"][1]["content"]
+        discarded = AR.latest_journal(str(project)).with_suffix(".discarded")
+        assert len(list(discarded.glob("attempt-*/totals.py"))) == len(result.attempts)
+
+    def test_the_switch_turns_it_off_and_the_wrong_file_stays(self, make_runner, project, monkeypatch):
+        monkeypatch.setenv("WISP_REPL_CONVERGE_REVERT", "off")
+        runner = make_runner({1: ("totals.py", WRONG)})
+        result = AR.run_repl_converge(runner, OBJECTIVE, attempts=1)
+        assert result.attempts[0].reverted == ()
+        assert (project / "totals.py").read_text() == WRONG
+        assert "keep-or-revert" not in runner.printed and "↩" not in runner.printed
+
+    def test_the_loop_says_up_front_that_it_will_undo_attempts_that_do_not_help(self, make_runner):
+        runner = make_runner({1: ("totals.py", FIXED)})
+        AR.run_repl_converge(runner, OBJECTIVE, attempts=1)
+        assert "keep-or-revert: an attempt that does not improve the measurement is undone" in runner.printed
+
+    def test_a_workspace_too_big_to_snapshot_is_left_alone_and_the_loop_says_why(self, make_runner, project):
+        data = project / "data"
+        data.mkdir()
+        for i in range(2001):  # one more than the snapshot's bound
+            (data / f"{i}.txt").write_text("")
+        runner = make_runner({1: ("totals.py", WRONG)})
+        result = AR.run_repl_converge(runner, OBJECTIVE, attempts=1)
+        assert result.attempts[0].reverted == ()
+        assert "not reverted: snapshot refused (more than 2000 files)" in runner.printed
+        assert (project / "totals.py").read_text() == WRONG
+
+    def test_the_switch_reads_off_in_its_usual_spellings(self):
+        for off in ("off", "OFF", "0", "false", "no"):
+            assert not AR.revert_enabled({"WISP_REPL_CONVERGE_REVERT": off})
+        assert AR.revert_enabled({}) and AR.revert_enabled({"WISP_REPL_CONVERGE_REVERT": "on"})

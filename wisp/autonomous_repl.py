@@ -19,7 +19,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Mapping
 
-from wisp.core.convergence import AttemptRecord, CriteriaDeclarationRejected, explain_acceptance
+from wisp.core.convergence import AttemptRecord, CriteriaDeclarationRejected, discarded_dir, explain_acceptance
 from wisp.core.goal import GoalState
 
 DEFAULT_ATTEMPTS = 3
@@ -43,6 +43,12 @@ def routing_enabled(environ: Mapping[str, str] | None = None) -> bool:
     """Ordinary prompts are routed to the loop unless `WISP_REPL_CONVERGE=off` (an operator's kill switch; `/converge` still works)."""
     env = os.environ if environ is None else environ
     return env.get("WISP_REPL_CONVERGE", "auto").strip().lower() not in ("off", "0", "false", "no")
+
+
+def revert_enabled(environ: Mapping[str, str] | None = None) -> bool:
+    """Keep-or-revert is on unless `WISP_REPL_CONVERGE_REVERT=off`: an attempt that did not improve the measurement is undone, its files kept aside."""
+    env = os.environ if environ is None else environ
+    return env.get("WISP_REPL_CONVERGE_REVERT", "on").strip().lower() not in ("off", "0", "false", "no")
 
 
 def attempts_from_env(environ: Mapping[str, str] | None = None) -> int:
@@ -130,6 +136,15 @@ def _journal_lines(journal: Path) -> list[str]:
     return [f"  journal: {journal}", "  /converge resume continues from the last attempt"]
 
 
+def revert_lines(rec: AttemptRecord, journal: Path) -> list[str]:
+    """What the user is told about keep-or-revert for one attempt: what was put back and where the attempt's own version went, or why nothing was."""
+    if rec.reverted:
+        shown = ", ".join(rec.reverted[:4]) + ("…" if len(rec.reverted) > 4 else "")
+        head = f"  ↩ reverted: the attempt did not improve the measurement; put back {len(rec.reverted)} file(s): {shown}"
+        return [head, f"    the attempt's own version is kept in {discarded_dir(journal, rec.index)}"] + ([f"    {rec.revert_note}"] if rec.revert_note else [])
+    return [f"  {rec.revert_note}"] if rec.revert_note else []
+
+
 # ── running ──────────────────────────────────────────────────────────────────
 
 def _workspace(config: Any) -> str:
@@ -164,7 +179,10 @@ def run_repl_converge(runner: Any, objective: str, *, attempts: int | None = Non
     path.parent.mkdir(parents=True, exist_ok=True)
     if not resume:
         _objective_sidecar(path).write_text(objective, encoding="utf-8")
+    revert = revert_enabled()
     _say(runner, f"loop: {assessment.why}; up to {budget} attempts, the harness measures after each (Ctrl-C stops)")
+    if revert:
+        _say(runner, "  keep-or-revert: an attempt that does not improve the measurement is undone; its files are kept aside, not deleted")
     for condition in assessment.conditions[:3]:
         _say(runner, f"  must show: {condition}")
 
@@ -175,6 +193,8 @@ def run_repl_converge(runner: Any, objective: str, *, attempts: int | None = Non
         changed = len(rec.observation.changed_files)
         unmet = ", ".join(rec.unmet[:3]) or "nothing"
         _say(runner, f"  attempt {rec.index + 1} measured: {rec.verdict}; unmet: {unmet}; files changed: {changed}; {round(rec.duration_s)}s")
+        for line in revert_lines(rec, path):
+            _say(runner, line)
 
     renderer = getattr(runner, "renderer", None)
     on_event = (lambda ev: renderer.render_event(runner.out, ev)) if renderer is not None and hasattr(renderer, "render_event") else None
@@ -182,7 +202,7 @@ def run_repl_converge(runner: Any, objective: str, *, attempts: int | None = Non
         objective, workspace, model=getattr(runner.config, "model", None) or None, max_attempts=budget,
         root=SimpleNamespace(runtime=runner.runtime), journal_path=path, resume=resume,
         approval_handler=getattr(runner.transport, "approve", None), on_event=on_event, on_attempt_start=attempt_start, on_record=attempt_done,
-        context=conversation_context(runner.session))
+        context=conversation_context(runner.session), revert_no_progress=revert)
     if renderer is not None:
         renderer.reset()
         renderer.wait_start(runner.out)
@@ -208,7 +228,11 @@ def run_repl_converge(runner: Any, objective: str, *, attempts: int | None = Non
         if renderer is not None:
             renderer.wait_stop(runner.out)
             renderer.flush(runner.out)
-    lines = verdict_text(result.goal_state, tuple(result.attempts), result.reason, assessment.conditions) + (_journal_lines(path) if not result.converged else [])
+    lines = verdict_text(result.goal_state, tuple(result.attempts), result.reason, assessment.conditions)
+    if result.attempts and result.attempts[-1].reverted:
+        lines.append("    the last attempt was reverted, so the workspace is as it was before it")
+    if not result.converged:
+        lines += _journal_lines(path)
     for line in lines:
         _say(runner, line)
     if record:
