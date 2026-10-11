@@ -811,3 +811,7 @@ The owner pressed Ctrl-C during a prompt that the strategy gate had routed to th
 - **Reproduce with a real signal in a real pty**, with the stalled-provider stub #90 used: the new test failed with the owner's traceback (`_run_once` → `select` → KeyboardInterrupt) before any change. A fake exception would not have shown that the shutdown of `asyncio.run` does not hang (it did not: `/exit` still left within 12 s).
 - Test the handler stays armed: two interrupted graph turns, then a normal command, then `/exit`.
 - Not verified: whether work the graph's workers had already started (a shell command) is stopped by the cancel.
+
+## `WISP_REPL_GRAPH=off` keeps multi-part prompts out of the graph (2026-10-11)
+
+Driving the real REPL showed a multi-part prompt ("implement X and refactor Y") scoring 2 or more and starting a graph template whose workers could not write and whose verifier could not accept (see the entries on the subagent approver and on the graph defects), with no way to say "not now" except rewording the prompt. `WISP_REPL_GRAPH=off|0|false|no` (default on) makes `decide_strategy` answer SINGLE_AGENT with the reason "graph routing is off"; an explicit `/graph run` still runs a graph. Same shape as `WISP_REPL_CONVERGE=off`. Tests: `TestTheGraphRouteCanBeTurnedOff` and, through the real REPL in a pty, `tests/test_repl_graph_switch_pty.py` (off: no "graph path" line and the stub model answers; unset: a graph starts). Four mutants (the accepted values, the strip, the guard, the reason text) were killed.

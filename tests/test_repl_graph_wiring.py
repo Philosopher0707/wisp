@@ -323,3 +323,40 @@ class TestThroughARealGraphRun:
         assert len(verdict_lines) == 1
         approved = "verification: ALLOW" in printed
         assert verdict_lines[0].startswith("✓") is approved, printed[-600:]
+
+
+class TestTheGraphRouteCanBeTurnedOff:
+    """A multi-part prompt ("implement X and refactor Y") scores into the graph path, which ends in a REJECT whatever the model did until its workers can write
+    and its verifier can accept. `WISP_REPL_GRAPH=off` keeps such prompts in the ordinary agent loop; `/graph run` still runs a graph on purpose."""
+
+    def routed(self, monkeypatch, value):
+        called = []
+        monkeypatch.setattr(C, "run_coding_template", lambda *a, **k: called.append(1) or final_with("ALLOW"))
+        monkeypatch.setattr(C, "repo_context", lambda *a, **k: C.RepoContext())
+        if value is None:
+            monkeypatch.delenv("WISP_REPL_GRAPH", raising=False)
+        else:
+            monkeypatch.setenv("WISP_REPL_GRAPH", value)
+        handled = C.handle_prompt(FakeRunner(), GRAPH_PROMPT)
+        return handled, bool(called)
+
+    def test_by_default_the_prompt_goes_to_the_graph(self, monkeypatch):
+        assert self.routed(monkeypatch, None) == (True, True)
+
+    @pytest.mark.parametrize("value", ["off", "OFF", "0", "false", "no", " off "])
+    def test_off_sends_it_to_the_agent_loop_and_runs_no_graph(self, monkeypatch, value):
+        assert self.routed(monkeypatch, value) == (False, False)
+
+    @pytest.mark.parametrize("value", ["auto", "on", "1", "", "garbage"])
+    def test_anything_else_leaves_the_route_as_it_was(self, monkeypatch, value):
+        assert self.routed(monkeypatch, value) == (True, True)
+
+    def test_the_decision_names_the_switch(self, monkeypatch):
+        monkeypatch.setenv("WISP_REPL_GRAPH", "off")
+        decision = C.decide_strategy(C.task_context_from_prompt(GRAPH_PROMPT, "."))
+        assert decision.strategy == C.SINGLE_AGENT and "WISP_REPL_GRAPH" in " ".join(decision.reasons)
+
+    def test_an_explicit_graph_request_is_refused_with_the_same_reason(self, monkeypatch):
+        monkeypatch.setenv("WISP_REPL_GRAPH", "off")
+        decision = C.decide_strategy(C.task_context_from_prompt(GRAPH_PROMPT, ".", mode="graph"))
+        assert decision.strategy == C.SINGLE_AGENT and "WISP_REPL_GRAPH" in " ".join(decision.reasons)
