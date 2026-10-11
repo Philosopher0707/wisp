@@ -391,3 +391,37 @@ class TestParseModelTiers:
         assert render_model_tiers(mapping) == "cheap=a,standard=m,strong=b"
         assert self.parse(render_model_tiers(mapping)) == mapping
         assert render_model_tiers({}) == ""
+
+
+class TestAnEmptyModelVariableDoesNotShadowTheSavedModel:
+    """`WISP_MODEL=` (a line left empty in `.env`) used to beat the model saved in config.json, so Wisp served "the first model the provider serves"
+    (alphabetically the first model of the NVIDIA catalog, one the account was not entitled to) and every turn answered 404."""
+
+    def _save(self, monkeypatch, tmp_path, model="saved/model"):
+        import json
+        monkeypatch.setattr("wisp.config.WISP_CONFIG_DIR", tmp_path)
+        (tmp_path / "config.json").write_text(json.dumps({"model": model}))
+
+    def test_an_empty_variable_leaves_the_saved_model_in_force(self, monkeypatch, tmp_path):
+        from wisp.config import WispConfig
+        self._save(monkeypatch, tmp_path)
+        monkeypatch.setenv("WISP_MODEL", "")
+        assert WispConfig().model == "saved/model"
+
+    def test_a_blank_variable_is_empty_too(self, monkeypatch, tmp_path):
+        from wisp.config import WispConfig
+        self._save(monkeypatch, tmp_path)
+        monkeypatch.setenv("WISP_MODEL", "   ")
+        assert WispConfig().model == "saved/model"
+
+    def test_a_set_variable_still_wins_over_the_saved_model(self, monkeypatch, tmp_path):
+        from wisp.config import WispConfig
+        self._save(monkeypatch, tmp_path)
+        monkeypatch.setenv("WISP_MODEL", "env/model")
+        assert WispConfig().model == "env/model"
+
+    def test_nothing_anywhere_is_still_the_unset_model(self, monkeypatch, tmp_path):
+        from wisp.config import DEFAULT_MODEL, WispConfig
+        monkeypatch.setattr("wisp.config.WISP_CONFIG_DIR", tmp_path)
+        monkeypatch.setenv("WISP_MODEL", "")
+        assert WispConfig().model == DEFAULT_MODEL
