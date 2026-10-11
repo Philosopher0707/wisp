@@ -30,6 +30,7 @@ from wisp.core.events import (
     CODE_TURN_TIMEOUT,
     CODE_PROVIDER_STREAM,
     CODE_ITERATION_BUDGET,
+    DENIAL_POLICY_DENIED,
     DENIAL_SCHEMA_INVALID,
     AgentEvent,
     canonical_event,
@@ -518,6 +519,13 @@ class WispAgentCore:
             _VERIFY_TOOLS,
             compose_nudge,
         )
+        from wisp.core.honest_finish import (
+            NO_ANSWER_NOTE,
+            compose_empty_round_nudge,
+            is_empty_answer,
+            uncounted_reason,
+            unverified_note,
+        )
 
         verification_enabled = True
         if self.config is not None:
@@ -549,16 +557,35 @@ class WispAgentCore:
         # Nothing here changes the guard's behaviour; the completion invariant
         # is still the guard's alone.
         self._last_guard = guard
+        # Reasoning core (docs/harness/reasoning-core-design.md): one per turn, called from three seams below. In
+        # `observe` it only records (RC4); it can never fail the turn (RC6).
+        self._set_affordable_ceiling(None)  # a ceiling learned last turn may be stale: the account may have been topped up
+        reasoning = None
+        if self._reasoning_mode().value != "off":
+            from wisp.core.reasoning.runtime import TurnReasoning
+
+            reasoning = TurnReasoning(
+                self._reasoning_modes(), journal_path=str(getattr(self.config, "reasoning_journal", "") or ""))
+        self._last_reasoning = reasoning
+
+        def _note_provider_error(message: str) -> None:
+            # Seam 2, the ONE call site. A provider failure reaches here two ways: as an `error` event in the stream (a real 402 does) and
+            # as an exception out of the stream.
+            if reasoning is not None:
+                reasoning.observe_provider_error(
+                    message, int(getattr(self.config, "max_tokens", 0) or 0))
         # Stagnation interventions spent this turn (ADR-0036). A LOCAL, not a
         # field: it is per-turn control state and never authority — not
         # journaled, not a goal-state input, and a field would make it shared
         # state across concurrent turns.
         stagnation_interventions_used = 0
+        empty_round_nudges_used = 0
         for iteration in range(max_iterations):
             pending_tool_calls: list[dict[str, Any]] = []
             tool_results_events_early: list[dict[str, Any]] = []
             provider_events: list[dict[str, Any]] = []
             partial_content: list[str] = []
+            answer_event_seen = False  # any text answer (content/text/token, not reasoning): the honest-finish gates must never call a streamed answer empty
             has_tool_calls = False
             # G1B: the provider round-trip ended non-complete (error event
             # or mid-stream stall). The error is already yielded live below;
@@ -606,11 +633,15 @@ class WispAgentCore:
                         provider_failed = True
                         detail = normalized.get("message") or normalized.get("detail") or ""
                         provider_fail_note = str(detail)[:160] or "non-complete"
+                        _note_provider_error(str(detail))
 
                     # Accumulate partial content for error recovery
                     if normalized.get("type") == "content":
                         partial_content.append(normalized.get("text", ""))
                         streamed_any_content = True
+                    if (normalized.get("type") in ("content", "text", "token") and normalized.get("phase") != "thinking"
+                            and str(normalized.get("text") or normalized.get("content") or "").strip()):
+                        answer_event_seen = True
 
                     # Security + extension checks for tool calls
                     if normalized.get("type") in ("tool_call", "tool_calls"):
@@ -719,6 +750,7 @@ class WispAgentCore:
                     continue  # Retry this iteration
 
                 logger.exception("Provider stream failed")
+                _note_provider_error(str(exc))
                 if not is_transient:
                     _err_ev = error_event(
                         f"Provider stream failed: {exc}", recoverable=False,
@@ -752,6 +784,15 @@ class WispAgentCore:
 
             # ── If no tool calls, the model produced final content ──
             if not has_tool_calls:
+                if provider_failed and reasoning is not None:
+                    # R4 (enforce only; `take_enforced` is None in observe): one smaller retry when the provider named what the account can
+                    # afford, otherwise an honest stop below that names the limit.
+                    _r4 = reasoning.take_enforced("provider_error")
+                    if _r4 is not None and _r4.action.value == "retry_request" and iteration + 1 < max_iterations:
+                        self._set_affordable_ceiling(_r4.max_tokens)
+                        yield _flatten_event(system(_r4.note, level="warning"))
+                        continue
+                    provider_fail_note = f"{_r4.note} {provider_fail_note}" if _r4 is not None else provider_fail_note
                 if provider_failed:
                     # G1B: the round-trip ended non-complete (error event
                     # or stall already yielded live). done=True would be a
@@ -781,6 +822,8 @@ class WispAgentCore:
                 # complete. Reject the finish, inject the harness reminder,
                 # and give it another provider round; bounded so it can
                 # always finish (floor exhaustion surrenders honestly).
+                if reasoning is not None:
+                    reasoning.observe_final("".join(partial_content))
                 rejection = guard.rejection()
                 if rejection is not None:
                     if rejection == SHORT_REPEAT_NUDGE:
@@ -794,6 +837,8 @@ class WispAgentCore:
                                 "the most recent verification command FAILED "
                                 "(non-zero exit status)"
                             )
+                        elif guard.last_uncounted is not None:
+                            reason = uncounted_reason(*guard.last_uncounted)
                         else:
                             reason = (
                                 "no verification command (tests/linter) has been "
@@ -891,6 +936,14 @@ class WispAgentCore:
                     announces_next_step, compose_continue_nudge)
 
                 round_text = "".join(partial_content)
+                # A round that ends with no answer at all (reasoning only) gets ONE nudge, then the turn ends with a plain statement below.
+                if (is_empty_answer(round_text) and not answer_event_seen and empty_round_nudges_used < 1
+                        and iteration + 1 < max_iterations):
+                    empty_round_nudges_used += 1
+                    nudge = compose_empty_round_nudge()
+                    messages.append(nudge_message(nudge))
+                    yield _flatten_event(system(nudge, level="warning"))
+                    continue
                 if (announces_next_step(round_text)
                         and stagnation_interventions_used
                         < _MAX_STAGNATION_INTERVENTIONS
@@ -901,6 +954,30 @@ class WispAgentCore:
                     messages.append(nudge_message(nudge))
                     yield _flatten_event(system(nudge, level="warning"))
                     continue
+                r1_flagged_the_answer = False
+                # Reasoning core, R1 (enforce only; None in observe). It sits AFTER every other completion gate so the verification floor
+                # keeps its exact behaviour and a turn is never nudged twice: it asks only about a success claim the ledger cannot back.
+                if reasoning is not None:
+                    _r1 = reasoning.take_enforced("final")
+                    if _r1 is not None:
+                        if _r1.action.value == "withhold_done" and iteration + 1 < max_iterations:
+                            from wisp.core.reasoning.decision import withhold_nudge
+
+                            messages.append({"role": "assistant", "content": round_text})
+                            messages.append(nudge_message(withhold_nudge(_r1.note)))
+                            yield _flatten_event(system(_r1.note, level="warning"))
+                            continue
+                        # Withheld once already (or no round left): the answer stands, flagged, and the turn ends unverified.
+                        yield _flatten_event(content_event(f"\n\n{_r1.note}"))
+                        r1_flagged_the_answer = True
+                # A turn that changed code and ends without a verification run that exited 0 says so itself: the only other statement of it
+                # was the nudge to the model, which a model that answers with reasoning only never relays.
+                if (guard.enabled and guard.wrote_code and not guard.resolved() and not r1_flagged_the_answer
+                        and "unverified" not in round_text.lower()):
+                    yield _flatten_event(content_event("\n\n" + unverified_note(
+                        failed=guard.verify_ok_after_edit is False, uncounted=guard.last_uncounted)))
+                if is_empty_answer(round_text) and not answer_event_seen:
+                    yield _flatten_event(content_event("\n\n" + NO_ANSWER_NOTE))
                 # RESOLVED (verified, not surrendered) → distill the trail
                 # into a permanent auto skill, best-effort, never blocking.
                 if guard.resolved():
@@ -961,6 +1038,9 @@ class WispAgentCore:
                                 withhold_if_injected,
                             )
                             result_event = withhold_if_injected(result_event)
+                            if self._invariant_gate_mode().value != "off":
+                                from wisp.core.tool_result_guard import scrub_secrets
+                                result_event = scrub_secrets(result_event)
                             tool_results_events.append(result_event)
                         yield result_event
                         # Verification-floor tracking: fold every tool outcome
@@ -978,6 +1058,10 @@ class WispAgentCore:
                             # read as a verified success.
                             t_out = _tool_result_output(
                                 result_event.get("result", ""))
+                            if reasoning is not None:
+                                reasoning.observe_tool_result(
+                                    result_event, t_out,
+                                    _call_args_by_id.get(result_event.get("tool_call_id", ""), {}))
                             if t_out is None:
                                 if t_name in _VERIFY_TOOLS:
                                     # A refused, blocked or failed verification
@@ -999,9 +1083,12 @@ class WispAgentCore:
                                 t_out = str(t_out)
                             t_args = _call_args_by_id.get(
                                 result_event.get("tool_call_id", ""), {})
-                            guard.note_tool_result(
-                                t_name, t_out,
-                                _digest_args(t_args) if isinstance(t_args, dict) else {})
+                            g_args = _digest_args(t_args) if isinstance(t_args, dict) else {}
+                            t_cmd = t_args.get("command") if isinstance(t_args, dict) else None
+                            if isinstance(t_cmd, str) and self._invariant_gate_mode().value != "off":
+                                from wisp.core.verification import COMMAND_ARG
+                                g_args[COMMAND_ARG] = t_cmd
+                            guard.note_tool_result(t_name, t_out, g_args)
 
             # Append assistant + tool messages to continue the conversation
             assistant_msg: dict[str, Any] = {"role": "assistant", "content": "".join(partial_content)}
@@ -2551,6 +2638,19 @@ class WispAgentCore:
                 tc_event["_denial"] = "SCHEMA_INVALID"
             return
 
+        # Invariant gates (paths, commands, dependency lock): deterministic and not overridable by approval, so they run BEFORE
+        # a human is asked. A refusal rides the existing POLICY_DENIED status, with its own `_src` so it is audited once.
+        invariant = self._invariant_gate_decision(
+            name, tc_event.get("arguments", {}), session)
+        if invariant is not None and invariant.violations:
+            if invariant.allowed:
+                logger.warning("invariant gate (observe only) would refuse %s: %s", name, invariant.render())
+            else:
+                tc_event["_blocked"] = invariant.render()
+                tc_event["_denial"] = DENIAL_POLICY_DENIED
+                tc_event["_src"] = "invariant_gate"
+                return
+
         gate = self._get_approval_gate()
         gdec = await gate.check_decision(
             tc_event, session, approval_handler=approval_handler)
@@ -2571,6 +2671,45 @@ class WispAgentCore:
                 logger.exception(
                     "Extension intercept failed — treating as deny: %s", e)
                 tc_event["_blocked"] = f"extension intercept failed: {e}"
+
+    def _set_affordable_ceiling(self, tokens: int | None) -> None:
+        provider = getattr(self, "provider", None)
+        if provider is not None:
+            try:
+                setattr(provider, "affordable_ceiling", tokens)  # noqa: B010 — the attribute is an optional extension of the Provider protocol
+            except Exception:  # noqa: BLE001 — a provider that refuses the attribute simply keeps its static cap
+                logger.debug("provider refused affordable_ceiling", exc_info=True)
+
+    def _reasoning_mode(self) -> Any:
+        from wisp.core.reasoning.decision import parse_mode
+
+        return parse_mode(getattr(self.config, "reasoning_core", "observe"))
+
+    def _reasoning_modes(self) -> Any:
+        from wisp.core.reasoning.decision import parse_modes
+
+        return parse_modes(getattr(self.config, "reasoning_core", "observe"), getattr(self.config, "reasoning_core_rules", ""))
+
+    def _invariant_gate_mode(self) -> Any:
+        from wisp.core.gates import parse_mode
+
+        return parse_mode(getattr(self.config, "invariant_gates", "enforce"))
+
+    def _invariant_gate_decision(self, name: str, args: Any, session: dict[str, Any]) -> Any:
+        """The deterministic gates' verdict on one tool call, or None when they are switched off."""
+        from wisp.core.gates import GateContext, GateMode, check_tool_call, parse_lock
+
+        mode = self._invariant_gate_mode()
+        if mode is GateMode.OFF:
+            return None
+        ctx = GateContext(
+            workspace=str(session.get("workspace") or "."),
+            home=os.path.expanduser("~"),
+            mode=mode,
+            deps_locked=parse_lock(getattr(self.config, "dependency_lock", "locked")),
+            extra_write_roots=tuple(getattr(self.config, "gate_write_roots", ()) or ()),
+        )
+        return check_tool_call(name, args, ctx, mutating=risk_for_tool(name) != ToolRisk.READ)
 
     def _get_approval_gate(self) -> ApprovalGate:
         """Lazily create the approval gate from current security policy."""
@@ -2688,6 +2827,10 @@ class WispAgentCore:
                 str(name), dict(tc.get("arguments", {}) or {}))
         except Exception:
             pass
+        # Reasoning core, seam 1b: every refusal goes through this helper, so it is the one place the ledger learns of a call that never ran.
+        reasoning = getattr(self, "_last_reasoning", None)
+        if reasoning is not None:
+            reasoning.observe_refusal(flat, tc.get("arguments", {}))
         return flat
 
     def _make_action(self, event: dict[str, Any]) -> Any:

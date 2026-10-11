@@ -171,3 +171,7 @@
 .steering-inject-input:focus {
   border-color: var(--accent-purple);
 }
+
+/* With the workbench dock open the composer is narrow: labels stay on one line and the long model name truncates instead of wrapping. */
+.toolbar-dropdown-btn { white-space: nowrap; }
+.toolbar-dropdown-btn > span:first-child { max-width: 180px; overflow: hidden; text-overflow: ellipsis; }

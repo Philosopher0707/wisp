@@ -329,7 +329,8 @@ def _plan(args: list[str], workspace: str, store, model: str, provider: str,
     if model:
         config = config.replace(model=model)
     if provider:
-        config = config.replace(provider=provider)
+        from wisp.provider_select import with_provider
+        config = with_provider(config, provider)
     try:
         prov = get_provider(config)
     except Exception as exc:

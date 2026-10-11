@@ -48,6 +48,32 @@ export interface GitStatus {
   dirty?: boolean;
 }
 
+export interface GitDiffFile {
+  path: string;
+  status: 'modified' | 'added' | 'deleted' | 'renamed' | 'untracked';
+  diff: string;
+  clipped: boolean;
+  binary: boolean;
+}
+
+export interface GitDiff {
+  git: boolean;
+  files: GitDiffFile[];
+  truncated: boolean;
+}
+
+export interface ProviderInfo {
+  name: string;
+  label: string;
+  requires_key: boolean;
+  models: string[];
+}
+
+export interface ProviderCatalog {
+  active: { provider: string; model: string };
+  providers: ProviderInfo[];
+}
+
 export interface PluginInfo {
   name: string;
   version: string;
@@ -149,9 +175,14 @@ interface ApiClient {
   fetchSession: (id: string) => Promise<Message[]>;
   deleteSession: (id: string) => Promise<boolean>;
   renameSession: (id: string, title: string) => Promise<boolean>;
+  importSession: (id: string) => Promise<boolean>;
   fetchModels: () => Promise<string[]>;
   fetchFiles: (path?: string) => Promise<FileItems | null>;
   fetchGitStatus: () => Promise<GitStatus | null>;
+  fetchGitDiff: () => Promise<GitDiff>;
+  setWorkspace: (path: string) => Promise<string>;
+  fetchProviders: () => Promise<ProviderCatalog>;
+  selectProvider: (provider: string, model: string) => Promise<void>;
   forkSession: (messages: Message[], title?: string) => Promise<string | null>;
   healthCheck: () => Promise<boolean>;
   // Plugins
@@ -295,8 +326,9 @@ export function useApi(serverUrl: string, apiKey: string): ApiClient {
       const data = await apiFetch(
         `/api/sessions/${encodeURIComponent(id)}${authParams}`,
         { method: 'DELETE' },
-      ) as { ok?: boolean };
-      return data.ok === true;
+      ) as { ok?: boolean; deleted?: boolean };
+      // The server answers {"deleted": true}; this used to test only `ok`, so every delete looked like a failure.
+      return data.deleted === true || data.ok === true;
     } catch {
       return false;
     }
@@ -309,6 +341,15 @@ export function useApi(serverUrl: string, apiKey: string): ApiClient {
         { method: 'PATCH', body: { title } },
       ) as { ok?: boolean };
       return data.ok === true;
+    } catch {
+      return false;
+    }
+  }, [apiFetch, authParams]);
+
+  const importSession = useCallback(async (id: string): Promise<boolean> => {
+    try {
+      await apiFetch(`/api/sessions/${encodeURIComponent(id)}/import${authParams}`, { method: 'POST' });
+      return true;
     } catch {
       return false;
     }
@@ -338,6 +379,24 @@ export function useApi(serverUrl: string, apiKey: string): ApiClient {
     } catch {
       return null;
     }
+  }, [apiFetch, authParams]);
+
+  /** Switch the backend's workspace. Throws with the server's reason (e.g. outside the allowed folders) so the UI can show it. */
+  const setWorkspace = useCallback(async (path: string): Promise<string> => {
+    const data = await apiFetch(`/api/workspace${authParams}`, { method: 'POST', body: { path } }) as { path: string };
+    return data.path;
+  }, [apiFetch, authParams]);
+
+  const fetchGitDiff = useCallback(async (): Promise<GitDiff> => {
+    return await apiFetch(`/api/git/diff${authParams}`) as GitDiff;
+  }, [apiFetch, authParams]);
+
+  const fetchProviders = useCallback(async (): Promise<ProviderCatalog> => {
+    return await apiFetch(`/api/models${authParams}`) as ProviderCatalog;
+  }, [apiFetch, authParams]);
+
+  const selectProvider = useCallback(async (provider: string, model: string): Promise<void> => {
+    await apiFetch(`/api/models/select${authParams}`, { method: 'POST', body: { provider, model } });
   }, [apiFetch, authParams]);
 
   const forkSession = useCallback(async (messages: Message[], title?: string): Promise<string | null> => {
@@ -623,8 +682,8 @@ export function useApi(serverUrl: string, apiKey: string): ApiClient {
 
   return useMemo(
     () => ({
-      fetchSessions, fetchSession, deleteSession, renameSession, fetchModels, fetchFiles,
-      fetchGitStatus, forkSession, healthCheck,
+      fetchSessions, fetchSession, deleteSession, renameSession, importSession, fetchModels, fetchFiles,
+      fetchGitStatus, fetchGitDiff, setWorkspace, fetchProviders, selectProvider, forkSession, healthCheck,
       fetchCheckpoints, restoreCheckpoint, dropCheckpoint, getCheckpointDiff,
       fetchPlugins, installPlugin, uninstallPlugin, togglePlugin, searchMarketplace,
       fetchMCPServers, addMCPServer, removeMCPServer, testMCPServer,
@@ -632,8 +691,8 @@ export function useApi(serverUrl: string, apiKey: string): ApiClient {
       fetchContext, updateContext, fetchCapabilities,
     }),
     [
-      fetchSessions, fetchSession, deleteSession, renameSession, fetchModels, fetchFiles,
-      fetchGitStatus, forkSession, healthCheck,
+      fetchSessions, fetchSession, deleteSession, renameSession, importSession, fetchModels, fetchFiles,
+      fetchGitStatus, fetchGitDiff, setWorkspace, fetchProviders, selectProvider, forkSession, healthCheck,
       fetchCheckpoints, restoreCheckpoint, dropCheckpoint, getCheckpointDiff,
       fetchPlugins, installPlugin, uninstallPlugin, togglePlugin, searchMarketplace,
       fetchMCPServers, addMCPServer, removeMCPServer, testMCPServer,

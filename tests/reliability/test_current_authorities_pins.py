@@ -569,7 +569,7 @@ class TestThePageIsReproducibleFromItsGenerator:
         mod = _generator()
         good = mod.render()
         assert mod._pin_problems(good) == [], "floor: the rendered page must pin cleanly"
-        stale = good.replace("`wisp/core/provider_stream.py:117`",
+        stale = good.replace("`wisp/core/provider_stream.py:122`",
                              "`wisp/core/provider_stream.py:1`", 1)
         assert stale != good, "the probe did not change the page — the pin moved"
         assert mod._pin_problems(stale), (

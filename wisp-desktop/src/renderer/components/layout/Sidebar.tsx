@@ -1,10 +1,11 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { useAppState } from '../../state/context.js';
 import { useApi } from '../../hooks/useApi.js';
-import { Trash2, Pin, ChevronLeft, ChevronRight, Search, X, Square, CheckSquare, ClipboardList } from '../../icons/index.js';
+import { Trash2, Pin, PanelLeft, Search, X, Square, CheckSquare, ClipboardList } from '../../icons/index.js';
 import { SidebarNav } from '../sidebar/SidebarNav.js';
 import { PinnedSection } from '../sidebar/PinnedSection.js';
 import { ProjectsSection } from '../sidebar/ProjectsSection.js';
+import { ProviderSwitcher } from '../sidebar/ProviderSwitcher.js';
 import { SidebarFooter } from '../sidebar/SidebarFooter.js';
 import './Sidebar.css';
 
@@ -34,6 +35,11 @@ export const Sidebar: React.FC = () => {
     dispatch({ type: 'SET_MESSAGES', messages: [] });
 
     try {
+      // A session from another Wisp store is copied into the app's own first, so continuing it writes to the copy.
+      const listed = state.sessions.find((x) => x.id === id);
+      if (listed && listed.source && listed.source !== 'app') {
+        if (!(await api.importSession(id))) throw new Error('import failed');
+      }
       const messages = await api.fetchSession(id);
       dispatch({ type: 'SET_SESSION_ID', id });
       dispatch({ type: 'SET_MESSAGES', messages });
@@ -96,9 +102,12 @@ export const Sidebar: React.FC = () => {
   const deleteSelected = async () => {
     if (selectedIds.size === 0) return;
     setDeleting(true);
-    const results = await Promise.allSettled(
-      [...selectedIds].map((id) => api.deleteSession(id)),
-    );
+    // Sessions that still live in another Wisp store are read-only here; only the app's own can be deleted.
+    const own = [...selectedIds].filter((id) => {
+      const src = state.sessions.find((x) => x.id === id)?.source;
+      return !src || src === 'app';
+    });
+    await Promise.allSettled(own.map((id) => api.deleteSession(id)));
     setDeleting(false);
     setSelectedIds(new Set());
     if (selectedIds.has(state.sessionId || '')) {
@@ -110,15 +119,27 @@ export const Sidebar: React.FC = () => {
   const collapsed = state.sidebarCollapsed;
 
   const filteredSessions = useMemo(() => {
-    if (!filterText) return state.sessions;
+    // Sessions with no messages are noise (a window opened and closed); keep one only while it is the open session.
+    const visible = state.sessions.filter((s) => s.msg_count > 0 || s.id === state.sessionId);
+    if (!filterText) return visible;
     const q = filterText.toLowerCase();
-    return state.sessions.filter(
+    return visible.filter(
       (s) => (s.title || s.id).toLowerCase().includes(q),
     );
-  }, [state.sessions, filterText]);
+  }, [state.sessions, state.sessionId, filterText]);
 
   return (
-    <aside className={`sidebar${collapsed ? ' sidebar--collapsed' : ''}`}>
+    <aside className={`sidebar${collapsed ? ' sidebar--collapsed' : ''}`} aria-label="Sessions">
+      <div className="sidebar-head">
+        <button
+          className="sidebar-collapse-btn"
+          onClick={() => dispatch({ type: 'TOGGLE_SIDEBAR' })}
+          title="Hide sidebar"
+          aria-label="Hide sidebar"
+        >
+          <PanelLeft size={16} />
+        </button>
+      </div>
       <div className="sidebar-top">
         <SidebarNav />
         {!collapsed && (
@@ -212,10 +233,16 @@ export const Sidebar: React.FC = () => {
                       </span>
                     )}
                   </span>
+                  {s.source && s.source !== 'app' && (
+                    <span className="chat-list-source" title={`Stored in the ${s.source} Wisp database. Opening copies it into the app; the original is untouched.`}>
+                      {s.source}
+                    </span>
+                  )}
                   <span className="chat-list-item-time">{s.msg_count} msgs</span>
                   <button
                     className="chat-list-delete-btn"
-                    title="Delete session"
+                    title={s.source && s.source !== 'app' ? 'Open it once to copy it into the app before deleting' : 'Delete session'}
+                    disabled={Boolean(s.source && s.source !== 'app')}
                     onClick={(e) => handleDeleteSession(e, s.id)}
                   >
                     <Trash2 size={13} />
@@ -234,6 +261,7 @@ export const Sidebar: React.FC = () => {
         {!collapsed && <ProjectsSection />}
       </div>
       <div className="sidebar-bottom-group">
+        <ProviderSwitcher />
         {!collapsed && (
           <button
             className={`sidebar-checkpoints-btn ${state.checkpointPanelOpen ? 'sidebar-checkpoints-btn--active' : ''}`}
@@ -247,13 +275,6 @@ export const Sidebar: React.FC = () => {
             )}
           </button>
         )}
-        <button
-          className="sidebar-collapse-btn"
-          onClick={() => dispatch({ type: 'TOGGLE_SIDEBAR' })}
-          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-        >
-          {collapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
-        </button>
         <SidebarFooter />
         {/* Subagent badge */}
         {!collapsed && state.subagentTasks.filter((t) => t.status === 'running').length > 0 && (

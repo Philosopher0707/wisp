@@ -94,6 +94,7 @@ ROWS: list[tuple[str, str, str, str, str, str]] = [
      "persist", "—"),
     ("ImportGraphTooLarge", "wisp/import_graph.py:25", "RuntimeError", "guard", "tool", "—"),
     ("WalkBudgetExceeded", "wisp/core/workspace_walk.py:39", "RuntimeError", "guard", "tool", "—"),
+    ("JobLimitError", "wisp/jobs/spawn.py:20", "ToolError", "guard", "tool", "—"),
 
     # ── Faults: an error the caller must handle. The bulk. ─────────────────────────────
     ("ToolError", "wisp/tools/errors.py:8", "Exception", "fault", "tool", "—"),

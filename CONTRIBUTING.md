@@ -20,6 +20,21 @@ mypy wisp/core/stateless.py --strict
 ruff check wisp/
 ```
 
+### Desktop app (`wisp-desktop/`)
+
+```bash
+cd wisp-desktop
+npm install
+npm run typecheck && npm test        # vitest: launch policy, diff parser, browser URL policy, terminal policy (real pty), prefs, API shapes
+npm run package                      # re-bundles the Python backend first; a bare electron-builder does not
+node scripts/verify-packaged.mjs     # run it on the .app you built, not on out/
+```
+
+- Backend changes need `npm run bundle` again, or the packaged app silently keeps the old routes.
+- CI uses Node 20 (npm 10). If `npm ci` says the lockfile is out of sync, regenerate it with `npx -y npm@10 install --package-lock-only`.
+- Tests that launch the app must pass `--user-data-dir=<tmp>`: Electron ignores `$HOME` for its data folder and would otherwise write into the real one.
+- The auth header is built in one place (`useApi`); `authHeaderAuthority.test.ts` ratchets raw `Authorization` use down, and it fails when a known duplicate disappears (delete the entry; that is the design).
+
 ## Architecture Overview
 
 ```

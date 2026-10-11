@@ -3,16 +3,16 @@
   min-width: var(--sidebar-width);
   height: 100%;
   background: var(--bg-sidebar);
+  border-right: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
   overflow: hidden;
   transition: width var(--transition-normal), min-width var(--transition-normal);
 }
 
+/* Collapsed means hidden: the macOS window buttons live in the sidebar's top strip, so a narrow icon rail would overlap them. */
 .sidebar--collapsed {
-  width: var(--sidebar-collapsed-width);
-  min-width: var(--sidebar-collapsed-width);
+  display: none;
 }
 
 .sidebar-top {
@@ -21,7 +21,7 @@
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
-  padding-top: var(--space-2);
+  padding-top: 0;
 }
 
 .sidebar-session-filter {
@@ -89,13 +89,26 @@
   border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 
+/* Top strip: the macOS window buttons occupy the left; the hide button sits at the right. Dragging the window works here. */
+.sidebar-head {
+  height: var(--topbar-height);
+  min-height: var(--topbar-height);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 var(--space-2) 0 var(--traffic-light-offset);
+  -webkit-app-region: drag;
+}
+
 .sidebar-collapse-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 100%;
-  height: 32px;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
   color: var(--text-muted);
+  -webkit-app-region: no-drag;
   transition: color var(--transition-fast), background var(--transition-fast);
 }
 
@@ -104,9 +117,6 @@
   background: rgba(255, 255, 255, 0.04);
 }
 
-.sidebar--collapsed .sidebar-collapse-btn {
-  height: 36px;
-}
 
 /* ── Checkpoints Button ── */
 
@@ -289,3 +299,16 @@
 .chat-list-item-check:hover {
   color: var(--accent-purple);
 }
+
+.chat-list-source {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  background: var(--bg-badge);
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 16px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.chat-list-delete-btn:disabled { display: none; }

@@ -724,22 +724,29 @@ async def _check_boot_context() -> CheckResult:
     details: dict[str, Any] = {}
     try:
         from wisp.config import safe_getcwd
-        from wisp.core.context.boot import BootContextAssembler
+        from wisp.core.context.boot import (
+            USER_GUIDELINES_LABEL,
+            BootContextAssembler,
+            user_guidelines_path,
+        )
 
         ws = safe_getcwd()
-        source, text = BootContextAssembler(ws).discover()
+        asm = BootContextAssembler(ws)
+        source, text = asm.discover()
+        user = ("off" if user_guidelines_path() is None
+                else "found" if asm.discover_user() else "none")
         details = {
             "source": source,
             "status": "found" if source else "none",
             "bytes": len(text.encode("utf-8", "replace")),
             "est_tokens": max(0, len(text) // 4),
+            "user_guidelines": user,
         }
         latency = (time.monotonic() - t0) * 1000
-        if source:
-            return CheckResult(name, commit, CheckStatus.OK,
-                               f"guidelines: {source}", latency, details)
-        return CheckResult(name, commit, CheckStatus.OK,
-                           "no guidelines file", latency, details)
+        message = f"guidelines: {source}" if source else "no guidelines file"
+        if user == "found":
+            message += f"; user: {USER_GUIDELINES_LABEL}"
+        return CheckResult(name, commit, CheckStatus.OK, message, latency, details)
     except Exception as e:
         latency = (time.monotonic() - t0) * 1000
         logger.debug("boot_context check failed: %s", e, exc_info=True)

@@ -52,7 +52,8 @@ def _sanitize(name: str, max_len: int = 40) -> str:
     return s or "cmd"
 
 
-def _write_artifacts(cmd: str, stdout: str, stderr: str, exit_code: int, duration_ms: int) -> tuple[Path, Path]:
+def _write_artifacts(cmd: str, stdout: str, stderr: str, exit_code: int, duration_ms: int,
+                     pipeline_note: str = "") -> tuple[Path, Path]:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     ts = time.strftime("%Y%m%d_%H%M%S")
     slug = _sanitize(cmd.split()[0] if cmd.strip() else "cmd")
@@ -61,9 +62,11 @@ def _write_artifacts(cmd: str, stdout: str, stderr: str, exit_code: int, duratio
     run_path = LOG_DIR / f"run_{slug}_{slug_full}_{ts}.log"
     last_path = LOG_DIR / "last_command.log"
 
+    note_line = f"# {pipeline_note}\n" if pipeline_note else ""
     header = (
         f"# cmd: {cmd}\n"
         f"# exit: {exit_code}  duration_ms: {duration_ms}  ts: {ts}\n"
+        f"{note_line}"
         f"# cwd: {Path.cwd()}\n"
         f"# ── stdout ──\n"
     )
@@ -183,6 +186,7 @@ def _sink(
     timed_out: bool,
     timeout_s: float,
     max_preview_lines: Optional[int] = None,
+    pipeline_note: str = "",
 ) -> RunResult:
     """Write a finished command's full output to disk, then build the bounded preview."""
     if timed_out:
@@ -193,7 +197,7 @@ def _sink(
     full = stdout + (f"\n--- stderr ---\n{stderr}" if stderr else "")
     if timed_out:
         full = f"[timeout {timeout_s}s]\n" + full
-    run_path, last_path = _write_artifacts(cmd, stdout, stderr, exit_code, duration_ms)
+    run_path, last_path = _write_artifacts(cmd, stdout, stderr, exit_code, duration_ms, pipeline_note)
 
     # ── UI preview (bounded) — collapse after sink
     payload = collapse(full, tool="run_bash", max_lines=max_preview_lines, full_text=full, artifact_path=run_path)
@@ -255,8 +259,9 @@ def install_sink() -> None:
                 # router, UNCONFINED warning). Starting the process here
                 # instead ran every agent command on the host.
                 run = await _bash.run_bash_confined(command, workspace, timeout)
+                note = _bash.pipeline_note(run.pipeline_failures)
                 res = _sink(command, run.stdout, run.stderr, run.returncode,
-                            run.duration_ms, run.timed_out, float(timeout))
+                            run.duration_ms, run.timed_out, float(timeout), pipeline_note=note)
                 if run.timed_out:
                     raise _bash.timeout_error(command, int(timeout))
                 # Return preview text for LLM history, but disk holds full
@@ -266,6 +271,9 @@ def install_sink() -> None:
                 # Append exit code sentinel for downstream verifier
                 if res.exit_code != 0 and "[exit" not in preview[:30]:
                     preview = f"[exit code: {res.exit_code}]\n" + preview
+                if note:
+                    # A failed earlier stage behind a successful last one: say so before the output, as exit codes are.
+                    preview = f"{note}\n" + preview
                 return preview
 
             _wrapped._sink_patched = True  # type: ignore

@@ -280,6 +280,123 @@ class TestStaticPrefixEquality:
         assert first == second
 
 
+class TestUserGuidelines:
+    """`~/.config/wisp/CLAUDE.md` reaches the CLI/REPL seed, not only the web route.
+
+    The web route (`WispConfig.load_context_files`) always read it; the seed never did, so a
+    user's global instructions never reached a terminal session. The suite switches the file off
+    by default (conftest) so a developer's real file cannot leak into other tests.
+    """
+
+    @pytest.fixture()
+    def home(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        (home / ".config" / "wisp").mkdir(parents=True)
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.delenv("WISP_USER_GUIDELINES", raising=False)
+        return home
+
+    @pytest.fixture()
+    def no_memory(self, monkeypatch):
+        import wisp.memory as mem_mod
+
+        monkeypatch.setattr(mem_mod, "load_memory",
+                            lambda: {"global_facts": [], "workspace_facts": {}})
+
+    @staticmethod
+    def _user_file(home):
+        return home / ".config" / "wisp" / "CLAUDE.md"
+
+    def test_user_file_comes_before_project_guidelines(self, ws, home) -> None:
+        self._user_file(home).write_text("Global rule: cite evidence.")
+        (ws / "AGENTS.md").write_text("Project rule: run the pin tests.")
+        text = BootContextAssembler(ws).assemble().text
+        user_at = text.index("## User guidelines (~/.config/wisp/CLAUDE.md)\nGlobal rule: cite evidence.")
+        project_at = text.index("## Project guidelines (AGENTS.md)\nProject rule: run the pin tests.")
+        assert user_at < project_at
+
+    def test_user_file_alone_makes_a_seed(self, ws, home, no_memory) -> None:
+        self._user_file(home).write_text("Global rule: cite evidence.")
+        seed = BootContextAssembler(ws, repomap_chars=0).seed_message()
+        assert seed is not None and "Global rule: cite evidence." in seed["content"]
+
+    def test_absent_file_changes_nothing(self, ws, home, no_memory) -> None:
+        assert BootContextAssembler(ws, repomap_chars=0).seed_message() is None
+        (ws / "AGENTS.md").write_text("Project rule.")
+        assert "User guidelines" not in BootContextAssembler(ws).assemble().text
+
+    def test_off_switch_keeps_the_file_out(self, ws, home, monkeypatch, no_memory) -> None:
+        self._user_file(home).write_text("Global rule: cite evidence.")
+        monkeypatch.setenv("WISP_USER_GUIDELINES", "off")
+        assert BootContextAssembler(ws, repomap_chars=0).seed_message() is None
+
+    def test_each_file_has_its_own_budget(self, ws, home) -> None:
+        self._user_file(home).write_text("# Big\n\n" + ("user words. " * 2000))
+        (ws / "AGENTS.md").write_text("# Big\n\n" + ("project words. " * 2000))
+        text = BootContextAssembler(ws).assemble().text
+        user = text.split("## User guidelines (~/.config/wisp/CLAUDE.md)\n", 1)[1].split("\n\n## ", 1)[0]
+        assert user.endswith(TRUNCATION_NOTE) and len(user) <= BUDGET_CHARS + len(TRUNCATION_NOTE)
+        assert "## Project guidelines (AGENTS.md)\n# Big" in text  # not evicted by the user file
+
+    def test_symlink_is_followed_and_a_broken_one_skipped(self, ws, home, tmp_path, no_memory) -> None:
+        target = tmp_path / "shared-workflow.md"
+        target.write_text("Shared workflow rule.")
+        self._user_file(home).symlink_to(target)
+        assert "Shared workflow rule." in BootContextAssembler(ws).assemble().text
+        target.unlink()
+        assert BootContextAssembler(ws, repomap_chars=0).seed_message() is None
+
+    def test_reaches_the_provider_through_a_real_turn(self, ws, home) -> None:
+        import asyncio
+
+        from wisp.config import WispConfig
+        from wisp.core.engine import WispAgentCore
+        from wisp.providers.mock import MockProvider
+
+        self._user_file(home).write_text("Global rule: cite evidence.")
+        seen: list = []
+
+        class Recording(MockProvider):
+            def generate_stream_events(self, system_prompt, messages,
+                                       tools=None, checkpoint_every=50):
+                seen.append((system_prompt, list(messages)))
+                yield from super().generate_stream_events(
+                    system_prompt, messages, tools, checkpoint_every)
+
+        core = WispAgentCore(config=WispConfig(), provider=Recording(responses=["ok"]))
+
+        async def drive():
+            async for _ in core.turn({"id": "s-user", "workspace": str(ws), "messages": []}, "go"):
+                pass
+
+        asyncio.run(drive())
+        system_prompt, messages = seen[0]
+        assert "Global rule: cite evidence." in messages[0]["content"]
+        assert messages[1] == {"role": "user", "content": "go"}
+        assert "Global rule: cite evidence." not in system_prompt  # the KV-cache split holds
+
+    def test_the_web_route_reads_the_same_file(self, ws, home) -> None:
+        from wisp.config import WispConfig
+
+        self._user_file(home).write_text("Global rule: cite evidence.")
+        assert "Global rule: cite evidence." in WispConfig().replace(workspace=str(ws)).load_context_files()
+        assert "Global rule: cite evidence." in BootContextAssembler(ws).assemble().text
+
+    def test_doctor_names_the_user_file(self, ws, home, monkeypatch) -> None:
+        import asyncio
+
+        from wisp.core.doctor import _check_boot_context
+
+        monkeypatch.chdir(ws)
+        assert asyncio.run(_check_boot_context()).details["user_guidelines"] == "none"
+        self._user_file(home).write_text("Global rule.")
+        result = asyncio.run(_check_boot_context())
+        assert result.ok and result.details["user_guidelines"] == "found"
+        assert "~/.config/wisp/CLAUDE.md" in result.message
+        monkeypatch.setenv("WISP_USER_GUIDELINES", "off")
+        assert asyncio.run(_check_boot_context()).details["user_guidelines"] == "off"
+
+
 class TestDoctorBoot:
     def test_boot_check_reports_found(self, ws, monkeypatch) -> None:
         import asyncio

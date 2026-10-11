@@ -3,7 +3,7 @@ import { useAppState } from '../../state/context.js';
 import { useKeybindings } from '../../hooks/useKeybindings.js';
 import { Sidebar } from './Sidebar.js';
 import { MainContent } from './MainContent.js';
-import { FileExplorer } from '../files/FileExplorer.js';
+import { Dock } from '../dock/Dock.js';
 import { ApprovalPrompt } from '../ApprovalPrompt.js';
 import { SearchModal } from '../SearchModal.js';
 import { PluginsPanel } from '../PluginsPanel.js';
@@ -16,7 +16,7 @@ import { InlineEdit } from '../chat/InlineEdit.js';
 import { ArenaPanel } from '../ArenaPanel.js';
 import './AppShell.css';
 
-const MIN_SIDEBAR = 180;
+const MIN_SIDEBAR = 220;
 const MAX_SIDEBAR = 480;
 
 function getSidebarWidth(): number {
@@ -25,7 +25,7 @@ function getSidebarWidth(): number {
     const n = parseInt(stored, 10);
     if (n >= MIN_SIDEBAR && n <= MAX_SIDEBAR) return n;
   }
-  return 240;
+  return 260;
 }
 
 export const AppShell: React.FC = () => {
@@ -66,9 +66,9 @@ export const AppShell: React.FC = () => {
   return (
     <div className="app-shell" style={{ '--sidebar-width': `${sidebarWidth}px` } as React.CSSProperties}>
       <Sidebar />
-      <div className="sidebar-resize-handle" onMouseDown={onMouseDown} />
+      {!state.sidebarCollapsed && <div className="sidebar-resize-handle" onMouseDown={onMouseDown} />}
       <MainContent />
-      {state.rightPanelOpen && <FileExplorer />}
+      {state.rightPanelOpen && <Dock />}
       {state.checkpointPanelOpen && <CheckpointPanel />}
       {state.approvalPending && <ApprovalPrompt />}
       {state.uiOverlay === 'search' && <SearchModal />}
