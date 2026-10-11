@@ -276,6 +276,21 @@ class Dispatcher:
             ctx.emit("\n".join(lines))
             return CommandResult.CONSUMED
 
+        @self.register("review", "Review a change: checks, repo rules, model lenses; the harness decides the verdict",
+                       usage="/review [--staged | --base B | --commit SHA | --pr N] [--no-model] [--lens NAME] [--run-tests] [--json] [--fail-on blocked|incomplete|attention]")
+        def _review(ctx: ReplContext, args: str) -> CommandResult:
+            from wisp.review.cli import run_slash
+
+            ctx.emit(run_slash("review", args, ctx.config))
+            return CommandResult.CONSUMED
+
+        @self.register("triage", "Read-only triage of open pull requests (never merges, comments or labels)", usage="/triage [--limit N] [--repo OWNER/NAME] [--json]")
+        def _triage(ctx: ReplContext, args: str) -> CommandResult:
+            from wisp.review.cli import run_slash
+
+            ctx.emit(run_slash("triage", args, ctx.config))
+            return CommandResult.CONSUMED
+
         @self.register("doctor", "Show pre-flight / subsystem health", usage="/doctor [deep|harness]")
         def _doctor(ctx: ReplContext, args: str) -> CommandResult:
             report = ctx.runtime.get_doctor_report()

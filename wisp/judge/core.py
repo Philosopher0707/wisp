@@ -13,6 +13,11 @@ parses wisp's own claim, and returns ONE verdict:
   BROKEN   the task itself is bad (the visible check passes before any work)
 
 `claim_honest` is separate: True when wisp's `ok` flag matches (verdict == SOLVED).
+
+A score must not depend on the machine it ran on. `RunConfig.isolate` (on for the CLI) gives the child wisp
+a private HOME and the least-privilege environment of `wisp.tools._utils_env.minimal_process_env`: no memory,
+config, skills or `.env` from the caller's HOME, no ambient `WISP_*` settings, no credentials. What the run needs
+is named: `--model`, `--provider`, `--api-base`, `--key-from`, `--env NAME=VALUE`.
 """
 
 from __future__ import annotations
@@ -20,13 +25,18 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
+import site
 import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from wisp.tools._utils_env import minimal_process_env
 
 HIDDEN_NAME = "_hidden_check.py"
 # wisp's own bookkeeping, not agent edits.
@@ -172,25 +182,64 @@ def judge(task: Task, before: dict[str, bytes], ws: Path, *, claim: bool | None,
                    out_of_scope, tampered, seconds)
 
 
-def child_env(api_base: str = "", key_from: str = "") -> dict[str, str]:
-    """Per-run provider override for the child wisp. The key is read into the child only; never printed.
+def _key_from(name: str) -> str:
+    """The value of an environment variable or of a line of ~/.config/wisp/.env (the caller's, not the child's)."""
+    key = os.environ.get(name, "")
+    envfile = Path.home() / ".config/wisp/.env"
+    if not key and envfile.exists():
+        for line in envfile.read_text().splitlines():
+            if line.startswith(name + "="):
+                key = line.split("=", 1)[1].strip().strip("\"'")
+                break
+    if not key:
+        raise ValueError(f"{name} is not set in the environment or {envfile}")
+    return key
 
-    `key_from` names an environment variable or a line of ~/.config/wisp/.env.
+
+def child_env(api_base: str = "", key_from: str = "", *, home: Path | None = None,
+              extra: Mapping[str, str] | None = None, isolate: bool = False) -> dict[str, str]:
+    """The environment of the child wisp. The key is read into the child only; never printed.
+
+    `key_from` names an environment variable or a line of ~/.config/wisp/.env. `extra` is layered on top.
+
+    `isolate=False` copies the caller's environment, as this always did: a library caller that sets the
+    environment itself keeps working. `isolate=True` builds it from the least-privilege set instead (PATH,
+    locale, tmp) with `home` as HOME, so nothing the caller's machine holds reaches the child. A private HOME
+    moves `~/.local`, so the real user base is pinned: it is where packages live, not where credentials do.
     """
-    env = dict(os.environ)
+    if isolate:
+        if home is None:
+            raise ValueError("an isolated environment needs a home directory for the child")
+        base = {"HOME": str(home), "PYTHONUSERBASE": os.environ.get("PYTHONUSERBASE") or site.getuserbase()}
+        if os.environ.get("PYTHONPATH"):  # which checkout is under test
+            base["PYTHONPATH"] = os.environ["PYTHONPATH"]
+        env = minimal_process_env(base)
+    else:
+        env = dict(os.environ)
     if api_base:
         env["WISP_API_BASE"] = api_base
     if key_from:
-        key = os.environ.get(key_from, "")
-        envfile = Path.home() / ".config/wisp/.env"
-        if not key and envfile.exists():
-            for line in envfile.read_text().splitlines():
-                if line.startswith(key_from + "="):
-                    key = line.split("=", 1)[1].strip().strip("\"'")
-                    break
-        if not key:
-            raise ValueError(f"{key_from} is not set in the environment or {envfile}")
-        env["WISP_API_KEY"] = key
+        env["WISP_API_KEY"] = _key_from(key_from)
+    if extra:
+        env.update(extra)
+    return env
+
+
+_ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# Where the child's files go belongs to the isolation, not to a flag.
+_ISOLATION_OWNED = re.compile(r"HOME|XDG_[A-Z_]+")
+
+
+def parse_env_pairs(pairs: Sequence[str], isolate: bool) -> dict[str, str]:
+    """`--env NAME=VALUE` flags. A value is never echoed: it may be a credential."""
+    env: dict[str, str] = {}
+    for pair in pairs:
+        name, sep, value = pair.partition("=")
+        if not sep or not _ENV_NAME.fullmatch(name):
+            raise ValueError("--env expects NAME=VALUE, with a name of letters, digits and underscores")
+        if isolate and _ISOLATION_OWNED.fullmatch(name):
+            raise ValueError(f"--env {name}: isolation decides where the child's files go; use --inherit-env to keep your own environment")
+        env[name] = value
     return env
 
 
@@ -211,11 +260,16 @@ class RunConfig:
     key_from: str = ""
     timeout: int = 900
     keep: bool = False
+    isolate: bool = False  # the CLI turns it on; see the module docstring
+    env: dict[str, str] = field(default_factory=dict)  # explicit settings for the child, layered on top
 
 
 def run_one(task: Task, cfg: RunConfig, addendum: str = "") -> Verdict:
     ws = Path(tempfile.mkdtemp(prefix=f"wispjudge-{task.id}-"))
+    home: Path | None = None
     try:
+        if cfg.isolate:
+            home = Path(tempfile.mkdtemp(prefix=f"wispjudge-home-{task.id}-"))
         for rel, body in task.files.items():
             (ws / rel).parent.mkdir(parents=True, exist_ok=True)
             (ws / rel).write_text(body, encoding="utf-8")
@@ -228,7 +282,7 @@ def run_one(task: Task, cfg: RunConfig, addendum: str = "") -> Verdict:
         try:
             proc = subprocess.run(wisp_command(prompt, ws, cfg.model, cfg.provider), cwd=ws,
                                   capture_output=True, text=True, timeout=cfg.timeout,
-                                  env=child_env(cfg.api_base, cfg.key_from))
+                                  env=child_env(cfg.api_base, cfg.key_from, home=home, extra=cfg.env, isolate=cfg.isolate))
         except subprocess.TimeoutExpired:
             return judge(task, before, ws, claim=None, infra_note=f"timeout after {cfg.timeout}s")
         secs = round(time.monotonic() - t0, 1)
@@ -245,10 +299,13 @@ def run_one(task: Task, cfg: RunConfig, addendum: str = "") -> Verdict:
         v.message = parse_message(proc.stdout)
         return v
     finally:
-        if cfg.keep:
-            print(f"  (kept {ws})", file=sys.stderr)
-        else:
-            shutil.rmtree(ws, ignore_errors=True)
+        for kept in (ws, home):
+            if kept is None:
+                continue
+            if cfg.keep:
+                print(f"  (kept {kept})", file=sys.stderr)
+            else:
+                shutil.rmtree(kept, ignore_errors=True)
 
 
 def summarize(results: list[Verdict]) -> dict:
@@ -281,8 +338,14 @@ def add_run_flags(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--key-from", default="",
                     help="name of an env var or ~/.config/wisp/.env entry to use as the child's WISP_API_KEY")
     ap.add_argument("--timeout", type=int, default=900, help="per-task seconds")
-    ap.add_argument("--keep", action="store_true", help="keep the temporary workspaces")
+    ap.add_argument("--keep", action="store_true", help="keep the temporary workspaces and homes")
+    ap.add_argument("--env", action="append", default=[], metavar="NAME=VALUE",
+                    help="a setting for the child wisp (repeatable); the only way ambient WISP_* settings reach an isolated run")
+    ap.add_argument("--inherit-env", action="store_true",
+                    help="give the child your own HOME and environment instead of a private one: the score then depends on this machine")
 
 
 def run_config(args: argparse.Namespace) -> RunConfig:
-    return RunConfig(args.model, args.provider, args.api_base, args.key_from, args.timeout, args.keep)
+    isolate = not getattr(args, "inherit_env", False)
+    return RunConfig(args.model, args.provider, args.api_base, args.key_from, args.timeout, args.keep,
+                     isolate, parse_env_pairs(getattr(args, "env", None) or [], isolate))

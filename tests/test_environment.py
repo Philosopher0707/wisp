@@ -122,3 +122,40 @@ class TestTheEnvironmentBlockSaysWhereItApplies:
     def test_it_says_the_executing_tools_are_sandboxed(self, tmp_path):
         block = self._block(tmp_path)
         assert "run_bash" in block and "sandbox" in block.lower()
+
+
+class TestVerificationCommandsFollowWhereTheTestsAre:
+    """The detected pytest command named `tests/` whenever any pytest marker existed, so a project with its tests at the root got a command that exits 4 (no such directory)."""
+
+    def test_tests_at_the_root_get_a_command_that_finds_them(self, tmp_path: Path):
+        (tmp_path / "pytest.ini").write_text("[pytest]\n")
+        (tmp_path / "test_totals.py").write_text("def test_a():\n    assert True\n")
+        snap = collect_environment(str(tmp_path))
+        assert "python -m pytest -x -q" in snap.verification_commands
+        assert not any("tests/" in c for c in snap.verification_commands)
+
+    def test_a_tests_directory_is_still_named(self, tmp_path: Path):
+        (tmp_path / "pytest.ini").write_text("[pytest]\n")
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_x.py").write_text("")
+        snap = collect_environment(str(tmp_path))
+        assert "python -m pytest tests/ -x -q" in snap.verification_commands
+        assert "python -m pytest -x -q" not in snap.verification_commands
+
+    def test_the_detected_command_really_runs_the_root_level_tests(self, tmp_path: Path):
+        import subprocess
+        import sys
+
+        (tmp_path / "pytest.ini").write_text("[pytest]\n")
+        (tmp_path / "test_totals.py").write_text("def test_a():\n    assert True\n")
+        command = next(c for c in collect_environment(str(tmp_path)).verification_commands if "pytest" in c)
+        proc = subprocess.run([sys.executable, *command.split()[1:]], cwd=tmp_path, capture_output=True, text=True)
+        assert proc.returncode == 0 and "1 passed" in proc.stdout
+
+    def test_a_lone_test_file_at_the_root_is_enough_to_suggest_pytest(self, tmp_path: Path):
+        (tmp_path / "test_totals.py").write_text("def test_a():\n    assert True\n")
+        assert "python -m pytest -x -q" in collect_environment(str(tmp_path)).verification_commands
+
+    def test_a_lone_underscore_test_file_at_the_root_is_enough_too(self, tmp_path: Path):
+        (tmp_path / "totals_test.py").write_text("def test_a():\n    assert True\n")
+        assert "python -m pytest -x -q" in collect_environment(str(tmp_path)).verification_commands
