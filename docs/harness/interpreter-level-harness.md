@@ -77,7 +77,7 @@ Script: `verify5.py` in throwaway directories with a throwaway `HOME`, 100 seeds
 | Do bytecode and cache files pollute workspace diffs? | default pytest run created `.pytest_cache`; `git status --untracked-files=all` saw **0** untracked (pytest ignores its own cache); `judge.snapshot` saw **no** extra files; with `PYTHONDONTWRITEBYTECODE=1 -p no:cacheprovider` no files were created at all | **No measurable effect.** No `__pycache__` appeared even in the default run, probably because this environment already sets a bytecode flag: not investigated. Wisp's own `/api/git/diff` uses git and so shares the result; other file-walking diffs were not tested. |
 | Do `-P` and `-X faulthandler` change any result? | `tests/reasoning`: **451 passed** plain and with `-P -X faulthandler`, 29.7 s vs 28.9 s | No. Harmless. |
 
-Revised policy for idea 5: always `-P` (justified by the verified import-hijack, not by test results), `-X faulthandler` is harmless and useful for the exit diagnostics (idea 6), **do not** force `PYTHONHASHSEED` (record it instead), `PYTHONDONTWRITEBYTECODE` is not needed for diffs.
+Revised policy for idea 5: always `-P` **for Wisp's own children** (justified by the verified import-hijack, not by test results; it must not be applied to a project's tests: `python -P -m pytest` fails with `ModuleNotFoundError` for a project that imports its own top-level module, verified 2026-10-11, see `interpreter-launcher-design.md`), `-X faulthandler` is harmless and useful for the exit diagnostics (idea 6), **do not** force `PYTHONHASHSEED` (record it instead), `PYTHONDONTWRITEBYTECODE` is not needed for diffs.
 
 ### A second occurrence of idea 2, found while running these
 
@@ -85,7 +85,7 @@ The first run of `verify5.py` failed with `ModuleNotFoundError: No module named 
 
 ## What is open
 
-**Gate cleared (2026-10-07): #3 confirmed, #4 confirmed, #5 mostly refuted.** Still open: the leftover-children part of #4 (a backgrounded `run_bash` child, hooks, MCP servers; not run). Next is the design of #1 (one launcher) and #2 (provenance) with these findings: the launcher must give `run_tests` the same credential-free environment and interpreter resolution as `run_bash`, always passes `-P`, does not force a hash seed, and the process registry (#4) must include sandbox containers.
+**Gate cleared (2026-10-07): #3 confirmed, #4 confirmed, #5 mostly refuted.** Still open: the leftover-children part of #4 (a backgrounded `run_bash` child, hooks, MCP servers; not run). Next is the design of #1 (one launcher) and #2 (provenance) with these findings (written 2026-10-11: `interpreter-launcher-design.md`): the launcher must give `run_tests` the same credential-free environment and interpreter resolution as `run_bash`, always passes `-P`, does not force a hash seed, and the process registry (#4) must include sandbox containers.
 
 ## The four open concerns, verified (2026-10-07)
 

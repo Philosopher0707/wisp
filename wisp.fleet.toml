@@ -31,7 +31,7 @@ role = "runtime"
 
 [[repo]]
 name = "libraryr"
-path = "~/active/workspace/libraryr"
+path = "~/active/workspace/library"
 role = "runtime"
 
 [[repo]]
