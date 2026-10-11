@@ -19,7 +19,21 @@ from typing import Any
 from wisp.core.events import OutcomeClass, classify_result
 from wisp.core.gates.verify import classify
 from wisp.core.reasoning.claims import audit
-from wisp.core.reasoning.decision import Action, Budgets, Decision, Mode, Modes, State, decide_denial, decide_failure, decide_final, failure_signature, plan_request
+from wisp.core.reasoning.decision import (
+    Action,
+    Budgets,
+    Decision,
+    Mode,
+    Modes,
+    State,
+    decide_denial,
+    decide_failure,
+    decide_final,
+    decide_stale,
+    failure_signature,
+    observation_digest,
+    plan_request,
+)
 from wisp.core.reasoning.ledger import Ledger, ObservedEvent
 from wisp.core.reasoning.shellwrites import shell_write_paths
 from wisp.core.verification import _verify_result_is_success
@@ -125,7 +139,14 @@ class TurnReasoning:
                     return None
                 d, self.state = decide_failure(failure_signature(name, text or str(result)), fact.id, self.state, self.budgets)
             else:
-                return None
+                if self.modes.for_rule("R5") is Mode.OFF:
+                    return None
+                d, self.state = decide_stale(name, observation_digest(text), self.ledger.mutation_count, self.state, self.budgets)
+                if d.action is Action.CONTINUE:
+                    return None  # a success that is not a repeat has always returned nothing
+                held = self._pending.get("tool_result")
+                if held is None or held.action is not Action.ESCALATE:  # one note per round; the stronger one wins
+                    self._pending["tool_result"] = d
             if d.action is not Action.CONTINUE:
                 self._record("tool_result", d)
             return d

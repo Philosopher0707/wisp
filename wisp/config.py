@@ -60,6 +60,12 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
         "description": "Model id (empty = first model the provider serves)",
         "env_var": "WISP_MODEL",
     },
+    "graph_model_tiers": {
+        "type": str,
+        "default": "",
+        "description": "Models for the graph node tiers, as cheap=MODEL,standard=MODEL,strong=MODEL (models of the session's provider). A tier left out uses the session model, so empty changes nothing. A graph can pick a tier, never a model.",
+        "env_var": "WISP_GRAPH_MODEL_TIERS",
+    },
     "temperature": {
         "type": float,
         "default": 0.2,
@@ -908,6 +914,7 @@ class WispConfig:
     max_subagent_branching: int
     write_tools: list[str]
     subagent_models: list[str]
+    graph_model_tiers: str
     _subagent_depth: int
     _subagent_branch_count: int
 
@@ -1037,8 +1044,8 @@ class WispConfig:
         from wisp.core.reasoning.decision import parse_mode as _parse_reasoning_mode
 
         object.__setattr__(self, "reasoning_core", _parse_reasoning_mode(get_setting("reasoning_core", "observe")).value)
-        # Per-rule overrides, `R1=enforce,R4=enforce`: each heuristic is flipped on its own. Setting nothing enforces R1 and R4 (owner decision,
-        # 2026-10-07); ANY explicit `reasoning_core` or `reasoning_core_rules` (even empty) replaces that default, which is the kill switch.
+        # Per-rule overrides, `R1=enforce,R4=enforce`: each heuristic is flipped on its own. Setting nothing enforces R1, R4 and R5 (owner decisions,
+        # 2026-10-07 and 2026-10-10); ANY explicit `reasoning_core` or `reasoning_core_rules` (even empty) replaces that default, which is the kill switch.
         object.__setattr__(self, "reasoning_journal", str(get_setting("reasoning_journal", "") or ""))
         from wisp.core.reasoning.decision import (
             DEFAULT_ENFORCED_RULES,
@@ -1144,6 +1151,11 @@ class WispConfig:
             object.__setattr__(self, "subagent_models",
                 ["llama3.2", "llama3.1", "qwen2.5", "phi4", "gemma2"]
             )
+        # Graph node tiers: the operator's map from `cheap | standard | strong` to a model of the session's provider. Canonicalised here, so a typo is dropped
+        # once, at load, and the runner never sees it. Empty (the default) leaves every graph node on the session model.
+        from wisp.graph.tiers import parse_model_tiers, render_model_tiers
+
+        object.__setattr__(self, "graph_model_tiers", render_model_tiers(parse_model_tiers(get_setting("graph_model_tiers", ""))))
         # Context files
         raw_context_files = get_setting(
             "context_files",
