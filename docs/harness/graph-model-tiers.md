@@ -8,7 +8,12 @@ A graph node says how much model it deserves: `ModelPolicy.model_class`, one of 
 
 ## Setting it later
 
-Either of these, whichever is easier; the environment wins over the file:
+Any of these, whichever is easier. The environment wins over the file, and Wisp reads the setting when it starts, so relaunch after changing it:
+
+```
+wisp config --set "graph_model_tiers=cheap=<a small model>,strong=<your best model>"
+wisp config --validate
+```
 
 ```
 export WISP_GRAPH_MODEL_TIERS="cheap=<a small model>,strong=<your best model>"
@@ -18,7 +23,7 @@ export WISP_GRAPH_MODEL_TIERS="cheap=<a small model>,strong=<your best model>"
 { "graph_model_tiers": "cheap=<a small model>,strong=<your best model>" }
 ```
 
-(in `~/.config/wisp/config.json`). Rules:
+(the last is `~/.config/wisp/config.json`, which `wisp config --set` writes). Rules:
 
 - Pairs separated by commas; the tier is `cheap`, `standard` or `strong` (any case); a tier left out means the session model.
 - A model is a model **of the session's provider**. A tier is another model name for the same provider, not another provider: no second endpoint or key is involved.
@@ -28,7 +33,7 @@ export WISP_GRAPH_MODEL_TIERS="cheap=<a small model>,strong=<your best model>"
 
 ## Which nodes are tagged
 
-Only the unambiguous cases; the write path is never tagged, so the map cannot change what writes code.
+Only the unambiguous cases. The write path is never tagged, so setting `cheap` or `strong` cannot change what writes code; setting `standard` moves every untagged node, the write path included, which is why it is the operator's explicit choice.
 
 | template | `cheap` (independent read-only workers) | `strong` (the node that decides from them) | untouched |
 |---|---|---|---|

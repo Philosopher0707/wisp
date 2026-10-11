@@ -225,6 +225,28 @@ class TestGraphModelTiersSetting:
         monkeypatch.delenv("WISP_GRAPH_MODEL_TIERS", raising=False)
         assert WispConfig().graph_model_tiers == "cheap=file-model"
 
+    def test_the_config_command_can_set_and_validate_it_for_a_later_session(self, tmp_path):
+        """The way it will be set later: the real `wisp config --set` in a throwaway HOME, then a fresh process reads it."""
+        import json
+        import os
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        repo = str(Path(__file__).resolve().parents[1])
+        env = {**os.environ, "HOME": str(tmp_path), "PYTHONPATH": repo + os.pathsep + os.environ.get("PYTHONPATH", "")}
+        env.pop("WISP_GRAPH_MODEL_TIERS", None)
+
+        def python(*args):
+            return subprocess.run([sys.executable, *args], capture_output=True, text=True, timeout=120, env=env, cwd=tmp_path)
+
+        assert python("-m", "wisp", "config", "--set", "graph_model_tiers=strong=big-model, cheap=tiny-model").returncode == 0
+        written = json.loads((tmp_path / ".config" / "wisp" / "config.json").read_text())
+        assert written["graph_model_tiers"] == "strong=big-model, cheap=tiny-model"
+        assert "valid" in python("-m", "wisp", "config", "--validate").stdout
+        read = python("-c", "from wisp.config import WispConfig; print(WispConfig().graph_model_tiers)")
+        assert read.stdout.strip().splitlines()[-1] == "cheap=tiny-model,strong=big-model"
+
     def test_the_environment_beats_the_file(self, isolated_wisp_env, monkeypatch, tmp_path):
         import wisp.config as cfg_mod
         from wisp.config import WispConfig

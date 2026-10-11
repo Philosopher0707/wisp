@@ -18,7 +18,7 @@ def _agent(nid: str, responsibility: str, tools: list[str],
            output: str = "", tier: str = "") -> dict[str, Any]:
     """*tier* (`cheap | strong`) is how much model the node deserves; the operator's `graph_model_tiers` says which model that is. Only independent read-only
     workers are tagged `cheap` and only the node that decides from them `strong`; the write path is never tagged, so the tier map cannot change what
-    writes code."""
+    writes code unless the operator sets `standard`, the tier of every untagged node."""
     node: dict[str, Any] = {"type": "agent", "responsibility": responsibility,
                             "allowed_tools": tools,
                             "output_schema": {"type": "object"} if output else {},
