@@ -229,3 +229,33 @@ def test_a_cancel_from_the_person_is_passed_on_as_a_verdict_not_swallowed():
 
     with pytest.raises(ApprovalCancelled):
         asyncio.run(ApprovalBroker(host).for_child("x")({"name": "edit_file", "arguments": {}}))
+
+
+def test_the_cli_transport_stops_the_spinner_its_approval_started_for_a_subagent():
+    """Unit seam of the pty test `test_nothing_keeps_drawing_after_a_child_was_approved`."""
+    from wisp.transport.cli import CLITransport
+
+    class Spinner:
+        stopped = 0
+
+        def stop(self):
+            Spinner.stopped += 1
+
+    transport = CLITransport.__new__(CLITransport)
+    transport._spinner = Spinner()
+
+    async def approved(tool_call):
+        return True
+
+    transport.approve = approved  # type: ignore[method-assign]
+    assert asyncio.run(transport.approve_for_subagent({"name": "edit_file"})) is True
+    assert Spinner.stopped == 1
+
+    async def cancelled(tool_call):
+        from wisp.exceptions import ApprovalCancelled
+        raise ApprovalCancelled("edit_file")
+
+    transport.approve = cancelled  # type: ignore[method-assign]
+    with pytest.raises(Exception):
+        asyncio.run(transport.approve_for_subagent({"name": "edit_file"}))
+    assert Spinner.stopped == 2  # also when the person cancels

@@ -150,6 +150,8 @@ def _session(tmp_path, answer: bytes | None, argv: list[str] | None = None, done
             if done in screen or "graph run failed" in screen or "Traceback" in screen:
                 break
         screen += _clean(_drain(fd, 1.0))
+        quiet = _clean(_drain(fd, 3.0))  # after the run has ended: nothing should still be drawing
+        _session.after_the_run = quiet
         return screen, (ws / "app.py").read_text()
     finally:
         try:
@@ -189,3 +191,12 @@ def test_slash_graph_run_inside_the_repl_asks_through_the_repls_own_orchestrator
     """`/graph run` must reuse the REPL's wired workers (and the approver already given to them), not build a second root."""
     screen, app = _session(tmp_path, b"y", done="wall ", line=b"/graph run one-fix.yaml {}\n")
     assert "return 2" in app, (app, screen[-1500:])
+
+
+def test_nothing_keeps_drawing_after_a_child_was_approved(tmp_path):
+    """The prompt starts a spinner for the tool it just approved and the transport stops it when that tool's result is rendered. A child's result is not rendered by
+    the transport (the graph prints its own progress lines), so the spinner used to keep repainting the terminal for as long as the REPL sat at its prompt."""
+    screen, app = _session(tmp_path, b"y")
+    assert "return 2" in app, screen[-1500:]
+    after = _session.after_the_run
+    assert not any(ch in after for ch in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"), after[-300:]

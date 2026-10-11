@@ -101,7 +101,7 @@ def _workers(orchestrator: Any, workspace: str, model: str, provider: str) -> It
             from wisp.transport.cli import CLITransport
             transport = CLITransport(root.runtime, config, background_agents=getattr(root, "background_agents", None),
                                      hook_manager=getattr(root, "_tool_hook_manager", None))
-            root.subagent_orchestrator.set_approval_handler(transport.approve)
+            root.subagent_orchestrator.set_approval_handler(transport.approve_for_subagent)
         worker_host: Any = root.subagent_orchestrator
     except Exception as exc:  # noqa: BLE001 - a graph of function nodes still runs; say what the agent nodes lose
         print(f"! workers could not be wired ({type(exc).__name__}: {redact(str(exc))[:200]}); agent nodes will only be able to read", file=sys.stderr)
