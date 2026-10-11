@@ -14,8 +14,10 @@ passes ToolExecutor.authorize().
 
 from __future__ import annotations
 
+import logging
 import math
 import os
+from collections.abc import Mapping
 from typing import Any
 
 from wisp.graph.security import scrub_text as redact
@@ -23,17 +25,32 @@ from wisp.graph.types import GraphNode, NodeResult, NodeStatus
 
 MAX_TASK_CHARS = 8000
 
+logger = logging.getLogger(__name__)
+
 
 class SubagentNodeRunner:
-    """Callable runner backed by a SubagentOrchestrator (or compatible)."""
+    """Callable runner backed by a SubagentOrchestrator (or compatible).
 
-    def __init__(self, orchestrator: Any, workspace: str = ".") -> None:
+    *model_tiers* is the operator's map from a node's tier (`cheap | standard | strong`) to a model of the session's provider (`wisp.graph.tiers`). It is
+    the only way a model reaches a subagent from here: a model a graph names, and anything in a node's inputs, is never read.
+    """
+
+    def __init__(self, orchestrator: Any, workspace: str = ".", model_tiers: Mapping[str, str] | None = None) -> None:
         self._orch = orchestrator
         self._workspace = workspace
+        self._tiers = dict(model_tiers or {})
+
+    @property
+    def model_tiers(self) -> dict[str, str]:
+        return dict(self._tiers)
+
+    def _session_model(self) -> str:
+        return str(getattr(getattr(self._orch, "config", None), "model", "") or "")
 
     async def __call__(self, node: GraphNode, inputs: dict[str, Any]) -> NodeResult:
         from wisp.multi_agent.task import SubagentContract
         contract = node.effective_contract()
+        model = self._tiers.get(contract.model_policy.model_class) or None
         task_text = str(inputs.get("task", node.config.get("prompt", node.contract.description
                                    if node.contract else node.id)))[:MAX_TASK_CHARS]
         try:
@@ -64,6 +81,7 @@ class SubagentNodeRunner:
             timeout_seconds=float(timeout),
             workspace=workspace,
             worktree_isolated=bool(node.config.get("isolated", False)),
+            model=model,
             output_format="json" if contract.output_schema else "text",
             output_schema=contract.output_schema or None,
             max_retries=max(min(contract.retry_policy.max_attempts - 1, 10), 0))
@@ -74,7 +92,7 @@ class SubagentNodeRunner:
         if isinstance(patch, str) and patch and len(patch) < 4_000_000:
             output = {**output, "worktree_patch": patch}
         return NodeResult(node.id, status, output=output,
-                          model=str(getattr(result, "model", ""))[:256],
+                          model=str(getattr(result, "model", "") or getattr(result, "model_used", "") or model or self._session_model())[:256],
                           provider=str(getattr(result, "provider", ""))[:128],
                           input_tokens=_nonneg(getattr(result, "input_tokens", 0)),
                           output_tokens=_nonneg(getattr(result, "output_tokens", 0)),
@@ -106,6 +124,23 @@ def _nonneg_f(v: Any) -> float:
     return max(0.0, float(v))
 
 
+def _configured_tiers(config: Any) -> dict[str, str]:
+    """The operator's tier map: from *config* when it carries one, else from the environment and the config file. A map that cannot be read is empty
+    (every node on the session model), never a reason to stop the graph."""
+    from wisp.graph.tiers import parse_model_tiers
+
+    try:
+        raw = getattr(config, "graph_model_tiers", None)
+        if raw is None:
+            from wisp.config import get_setting
+
+            raw = get_setting("graph_model_tiers", "")
+        return parse_model_tiers(raw)
+    except Exception:
+        logger.warning("graph_model_tiers could not be read; every graph node uses the session model", exc_info=True)
+        return {}
+
+
 def default_executor(workspace: str = ".", max_concurrency: int = 8,
                      store: Any = None, emit: Any = None, config: Any = None) -> Any:
     """Stock executor: SubagentOrchestrator runner + reference functions.
@@ -123,7 +158,7 @@ def default_executor(workspace: str = ".", max_concurrency: int = 8,
         from wisp.multi_agent import SubagentOrchestrator
         ex._runner = SubagentNodeRunner(
             SubagentOrchestrator(config=config) if config is not None
-            else SubagentOrchestrator(), workspace)
+            else SubagentOrchestrator(), workspace, model_tiers=_configured_tiers(config))
     except Exception:
         pass
     for name, fn in default_functions().items():

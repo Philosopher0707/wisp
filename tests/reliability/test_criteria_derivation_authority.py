@@ -291,6 +291,8 @@ class TestModeBFalsePromotion:
     @pytest.mark.parametrize("objective", [
         "Make the linter pass on this repository by fixing the unused imports.",
         "Add a --verbose flag to the CLI. CI will pass without any test changes.",
+        # Widened by reading across a dot in a file name: same class as the two above (the grammar has no negation or subject awareness).
+        "make utils.py faster, the tests are fine",
     ])
     def test_other_measured_false_positives(self, objective):
         from wisp.core.convergence import _WANTS_FIX_RE
@@ -774,3 +776,50 @@ class TestTheProductionWiring:
         # wiring used the strict mode by reading what it built.
         lines = [json.loads(x) for x in journal.read_text().splitlines() if x.strip()]
         assert any(x.get("kind") == "derivation" for x in lines)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# A dot inside a file name is not the end of the sentence
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class TestADotInsideAFileNameDoesNotEndTheClause:
+    """`[^.]{0,40}?` read every dot as a sentence end, so `Fix totals.py so they pass` was not a stated requirement while `Fix the failing tests` was.
+
+    Found by driving the REPL's objective loop end to end (`docs/harness/repl-converge-design.md`, section 5): the user named the file and the loop did not start.
+    A dot that is followed by a word character is part of a name (`totals.py`, `v1.2`); a dot followed by a space or the end of the text still ends the clause.
+    """
+
+    @pytest.mark.parametrize("objective", [
+        "Fix totals.py so they pass",  # these four can only match by reading across the dot in the file name
+        "make utils.py pass",
+        "get totals.py green",
+        "turn app/models.py green",
+        "Keep it passing in totals.py, the suite is the check",  # only the second pattern (pass ... suite) can match this one
+        "the suite for totals.py passes",  # only the third (suite ... pass)
+        "Fix totals.py so the tests pass",  # these two matched before and must keep matching
+        "The bug is in totals.py, make the failing tests pass.",
+    ])
+    def test_a_named_file_between_the_verb_and_the_suite_word_is_still_a_stated_requirement(self, objective):
+        from wisp.core.convergence import _WANTS_FIX_RE
+
+        assert _WANTS_FIX_RE.search(objective), objective
+
+    @pytest.mark.parametrize("objective", [
+        "Fix the typo in README.md. The suite is slow.",
+        "Rename totals.py to sums.py. Tests are someone else's problem.",
+        "Add a function shout(name) to strings_util.py that returns the name uppercased.",
+        "Explain how totals.py works",
+        "Fix the typo in README.md.\nThe tests take a minute.",
+        'Please "fix the typo in README.md." Tests are slow.',  # a closing quote right after the dot still ends the sentence
+    ])
+    def test_a_sentence_end_still_ends_the_clause(self, objective):
+        from wisp.core.convergence import _WANTS_FIX_RE
+
+        assert not _WANTS_FIX_RE.search(objective), objective
+
+    def test_the_derivation_classifies_a_named_file_prompt_as_stated(self, tmp_path):
+        ws = _workspace(tmp_path / "w")
+        derivation = explain_acceptance("Fix totals.py so they pass", str(ws), baseline=_measure(ws, _red_payload()))
+        assert derivation.reason_for("verify:cmd0") == DerivationReason.STATED.value
+        assert derivation.span_for("verify:cmd0").startswith("Fix totals.py")

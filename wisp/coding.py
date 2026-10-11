@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import os
 from dataclasses import dataclass, field
 from typing import Any
@@ -25,7 +26,19 @@ GRAPH_HINTS = ("refactor", "migrate", "implement", "audit", "rewrite",
                "across", "module", "end-to-end", "regression", "vulnerability",
                "feature", "epic", "parallel", "login", "auth", "api",
                "database", "service", "integrat")
+# Each hint is matched as a WORD (or a word stem), never as a substring: `author` is not `auth`, `capital` is not `api`, `rapid` is not `api`,
+# `modular` is not `module`. The names are the public `GRAPH_HINTS`; a test keeps the two in step.
+_HINT_PATTERNS = {name: re.compile(pattern) for name, pattern in (
+    ("refactor", r"\brefactor\w*"), ("migrate", r"\bmigrat\w*"), ("implement", r"\bimplement\w*"), ("audit", r"\baudit\w*"),
+    ("rewrite", r"\brewrit\w*"), ("redesign", r"\bredesign\w*"), ("multi-module", r"\bmulti-module\b"), ("multi-file", r"\bmulti-file\b"),
+    ("multiple files", r"\bmultiple files\b"), ("across", r"\bacross\b"), ("module", r"\bmodules?\b"), ("end-to-end", r"\bend-to-end\b"),
+    ("regression", r"\bregressions?\b"), ("vulnerability", r"\bvulnerabilit\w*"), ("feature", r"\bfeatures?\b"), ("epic", r"\bepics?\b"),
+    ("parallel", r"\bparallel\b"), ("login", r"\blogins?\b"), ("auth", r"\bauth(?:entic\w*|oriz\w*)?\b"), ("api", r"\bapis?\b"),
+    ("database", r"\bdatabases?\b"), ("service", r"\bservices?\b"), ("integrat", r"\bintegrat\w*"))}
 GRAPH_THRESHOLD = 2
+RECORD_PROMPT_CHARS = 4000
+RECORD_SUMMARY_CHARS = 600
+RECORD_FILES = 12
 MAX_FACT_FILES = 20
 
 
@@ -133,7 +146,7 @@ def decide_strategy(ctx: TaskContext, policy: Any = None) -> StrategyDecision:
     # First file is free (single-file tasks stay single-agent); additional
     # files each add evidence of multi-scope work.
     score = max(0, min(len(ctx.facts), 3) - 1) * 2
-    hits = sorted({h for h in GRAPH_HINTS if h in lowered})
+    hits = sorted(name for name, rx in _HINT_PATTERNS.items() if rx.search(lowered))
     score += min(len(hits), 3)
     if len(ctx.objective) > 600:
         score += 1
@@ -230,7 +243,31 @@ def run_coding_template(template: str, ctx: TaskContext,
     result = asyncio.run(ex.run(graph, run_inputs))
     result["template"], result["transports"] = template, meta.get(
         "artifact_transport", {}).get("transports", {})
+    result["sinks"] = sorted(n.id for n in graph.nodes if not any(e.from_node == n.id for e in graph.edges))
     return result
+
+
+#: Where a run's product used to be looked for, by name. The sinks the run result names come first; these remain for results that carry none.
+_LEGACY_TAILS = ("final", "final2", "review")
+# The conversation keeps RECORD_SUMMARY_CHARS of the summary and the terminal shows 1500, so what the finished nodes found must come early and be short: the reason
+# the run stopped is cut to PARTIAL_PROBLEM_CHARS to make room, and each finished node to PARTIAL_CHARS (the trace has the rest).
+PARTIAL_NODES = 6
+PARTIAL_CHARS = 150
+PARTIAL_PROBLEM_CHARS = 200
+
+
+def _produced(result: Any, oneline: bool = False) -> str:
+    """What a finished node reported: its summary, else its text, else its findings."""
+    out = result.get("output") if isinstance(result, dict) else None
+    if not isinstance(out, dict):
+        return ""
+    for key in ("summary", "text", "findings"):
+        value = out.get(key)
+        if isinstance(value, (list, tuple)):
+            value = "; ".join(str(v) for v in value[:5])
+        if isinstance(value, str) and value.strip():
+            return " ".join(value.split()) if oneline else value
+    return ""
 
 
 def summarize_graph(template: str, run_id: str, final: dict) -> ExecutionResult:
@@ -248,26 +285,38 @@ def summarize_graph(template: str, run_id: str, final: dict) -> ExecutionResult:
                 if isinstance(f, str) and f not in changed:
                     changed.append(f)
         artifacts.extend(a for a in r.get("artifacts", []) if isinstance(a, str))
-    tail = results.get("final") or results.get("final2") or results.get("review") or {}
+    sinks = [n for n in final.get("sinks") or [] if isinstance(n, str)]
     summary = ""
-    if isinstance(tail, dict) and isinstance(tail.get("output"), dict):
-        summary = str(tail["output"].get("summary", tail["output"].get("text", "")))[:2000]
+    for nid in [*sinks, *_LEGACY_TAILS]:
+        summary = _produced(results.get(nid))[:2000]
+        if summary:
+            break
     if not summary:
-        # Surface failed-node messages (e.g. conflict reports) instead of silence.
+        # Surface failed-node messages (e.g. conflict reports) instead of silence, and, when the run stopped, what the nodes that did finish
+        # produced: one branch's 429 must not throw away what three others found.
         problems = []
         for nid, r in results.items():
             if isinstance(r, dict) and r.get("status") not in ("success", "skipped"):
                 msg = str(r.get("message", "") or "")[:300]
                 if msg:
                     problems.append(f"{nid}: {msg}")
-        summary = "; ".join(problems[:4])[:2000]
+        summary = "; ".join(problems[:4])
+        produced = [f"{nid}: {_produced(r, oneline=True)[:PARTIAL_CHARS]}" for nid, r in results.items()
+                    if isinstance(r, dict) and r.get("status") == "success" and _produced(r)]
+        if produced and not ok:
+            listed = "; ".join(produced[:PARTIAL_NODES]) + (f" (+{len(produced) - PARTIAL_NODES} more)" if len(produced) > PARTIAL_NODES else "")
+            summary = (summary[:PARTIAL_PROBLEM_CHARS] + " | " if summary else "") + "finished before it stopped: " + listed
+        summary = summary[:2000]
     verification = "unverified"
     for r in results.values():
         if isinstance(r, dict) and isinstance(r.get("output"), dict) \
                 and "decision" in r["output"]:
             verification = str(r["output"]["decision"])
+    # The graph's own status says every node ran, not that the work was accepted: a change the reviewer REJECTED or ESCALATED is not a success, and
+    # a change nobody reviewed is not either (a run that changed nothing is not blamed for having no review).
+    accepted = verification == "ALLOW" or (verification == "unverified" and not changed)
     return ExecutionResult(
-        strategy=GRAPH, success=ok, summary=summary or f"graph {final.get('status')}",
+        strategy=GRAPH, success=ok and accepted, summary=summary or f"graph {final.get('status')}",
         changed_files=tuple(changed[:64]), verification=verification,
         artifacts=tuple(list(dict.fromkeys(artifacts))[:64]),
         evidence=(f"graph:{run_id}",),
@@ -342,6 +391,10 @@ def handle_prompt(runner: Any, prompt: str) -> bool:
             else getattr(config, "workspace", ".") or "."
         out = getattr(runner, "out", None)
         ctx = task_context_from_prompt(prompt, workspace, config)
+        if _loop_worthy(runner, ctx):
+            from wisp.autonomous_repl import run_repl_converge
+            run_repl_converge(runner, ctx.objective)
+            return True
         decision = decide_strategy(ctx)
         if decision.strategy != GRAPH:
             return False
@@ -353,6 +406,24 @@ def handle_prompt(runner: Any, prompt: str) -> bool:
         except Exception:
             pass
         return False
+
+
+def _loop_worthy(runner: Any, ctx: TaskContext) -> bool:
+    """Route to the objective-level loop only when the host can verify the objective: the user stated a checkable end, or named a symbol to define.
+
+    Never for a question, for an explicit single-agent or graph request, when the operator turned it off, when the runner cannot run a loop, or in a
+    directory that is not a project (the derivation reads the workspace).
+    """
+    from wisp.autonomous_repl import assess, routing_enabled
+    from wisp.core.workspace_walk import is_home_directory
+
+    if ctx.mode != "auto" or _is_question(ctx.objective) or not routing_enabled():
+        return False
+    if getattr(runner, "loop", None) is None or getattr(runner, "runtime", None) is None:
+        return False
+    if not ctx.workspace or ctx.workspace == "/" or is_home_directory(ctx.workspace):
+        return False
+    return assess(ctx.objective, ctx.workspace).verifiable
 
 
 def _run_graph_turn(runner: Any, ctx: TaskContext, decision: StrategyDecision,
@@ -376,6 +447,7 @@ def _run_graph_turn(runner: Any, ctx: TaskContext, decision: StrategyDecision,
             lines.append(line)
             _emit_line(out, f"  {line}")
 
+    prompt = ctx.objective
     try:
         cfg = getattr(runner, "config", None)
         from wisp.config import WispConfig
@@ -383,15 +455,47 @@ def _run_graph_turn(runner: Any, ctx: TaskContext, decision: StrategyDecision,
         final = run_coding_template(template, ctx, emit=emit, config=live_config)
     except Exception as exc:
         _emit_line(out, f"graph run failed: {exc}")
+        record_turn(runner, prompt, f"[graph run: {template}] ✗ graph run failed: {str(exc)[:RECORD_SUMMARY_CHARS]}")
         return True
     result = summarize_graph(template, final.get("run_id", ""), final)
     _emit_line(out, f"{'✓' if result.success else '✗'} {result.summary[:1500]}")
     if result.changed_files:
         _emit_line(out, f"  changed: {', '.join(result.changed_files[:16])}")
-    if result.verification and result.verification != "unverified":
-        _emit_line(out, f"  verification: {result.verification}")
+    _emit_line(out, f"  verification: {result.verification}{_verification_caveat(result)}")
     _emit_line(out, f"  trace: /graph trace {result.execution_id}")
+    record_turn(runner, prompt, graph_note(template, result))
     return True
+
+
+def _verification_caveat(result: ExecutionResult) -> str:
+    if result.verification in ("REJECT", "ESCALATE"):
+        return " (not verified: the change was not accepted)"
+    if result.verification == "unverified" and result.changed_files:
+        return " (changes were not reviewed)"
+    return ""
+
+
+def graph_note(template: str, result: ExecutionResult) -> str:
+    """What the conversation keeps of a graph run: bounded, durable references, and the verdict in plain words."""
+    lines = [f"[graph run: {template}] {'✓' if result.success else '✗'} {result.summary[:RECORD_SUMMARY_CHARS]}"]
+    files = result.changed_files
+    if files:
+        more = f" (+{len(files) - RECORD_FILES} more)" if len(files) > RECORD_FILES else ""
+        lines.append(f"changed: {', '.join(files[:RECORD_FILES])}{more}")
+    lines.append(f"verification: {result.verification}{_verification_caveat(result)}")
+    lines.append(f"trace: /graph trace {result.execution_id}")
+    return "\n".join(lines)
+
+
+def record_turn(runner: Any, prompt: str, note: str) -> None:
+    """Put the graph turn into the session the agent loop reads, so the next prompt knows it happened. The session is a plain dict; it is saved by the
+    REPL as for any other turn (this module never touches the database)."""
+    session = getattr(runner, "session", None)
+    if not isinstance(session, dict):
+        return
+    messages = session.setdefault("messages", [])
+    messages.append({"role": "user", "content": prompt[:RECORD_PROMPT_CHARS]})
+    messages.append({"role": "assistant", "content": note})
 
 
 def _emit_line(out: Any, text: str) -> None:

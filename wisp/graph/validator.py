@@ -11,7 +11,7 @@ import math
 import re
 from collections import defaultdict, deque
 
-from wisp.graph.types import Graph, JoinPolicy, NodeType
+from wisp.graph.types import EdgeMapping, Graph, JoinPolicy, NodeType
 
 # Absolute ceilings — enforced regardless of policy (DoS guard).
 MAX_NODES_ABSOLUTE = 1024
@@ -31,6 +31,7 @@ def validate_graph(graph: Graph) -> list[str]:
     if errors:
         return errors  # contract checks need a sane topology
     errors.extend(_validate_contracts(graph))
+    errors.extend(_validate_fan_in(graph))
     errors.extend(_validate_governance(graph))
     errors.extend(_validate_resources(graph))
     errors.extend(_validate_security(graph))
@@ -212,6 +213,37 @@ def _validate_contracts(graph: Graph) -> list[str]:
                 errors.append(f"node '{n.id}': invalid tool name {tool!r}")
         _ = nodes
     return errors
+
+
+def _validate_fan_in(graph: Graph) -> list[str]:
+    """Two edges that can both fire into one node must not write the same input.
+
+    The executor assigns each incoming edge's mapped values into one dict in edge order, so a second edge that maps to the same destination (or to a path
+    under it, or above it) silently replaces the first and the node sees only the last branch. Conditional edges are exempt: they belong to lanes of which
+    only one is taken.
+    """
+    errors: list[str] = []
+    by_target: dict[str, list[EdgeMapping]] = {}
+    for e in graph.edges:
+        if not e.condition:
+            by_target.setdefault(e.to_node, []).append(e)
+    for target, edges in by_target.items():
+        for i, a in enumerate(edges):
+            for b in edges[i + 1:]:
+                for dst_a in a.mapping:
+                    for dst_b in b.mapping:
+                        if _paths_overlap(dst_a, dst_b):
+                            errors.append(
+                                f"node '{target}': edges from '{a.from_node}' and '{b.from_node}' both write input "
+                                f"'{dst_a}'" + (f" ('{dst_b}' overlaps it)" if dst_a != dst_b else "")
+                                + "; the later one would silently replace the earlier, so map each source to its own key")
+    return errors
+
+
+def _paths_overlap(a: str, b: str) -> bool:
+    pa, pb = a.split("."), b.split(".")
+    shorter = min(len(pa), len(pb))
+    return pa[:shorter] == pb[:shorter]
 
 
 # ── Governance (narrow-only; enforcement lives in auth/ToolExecutor) ──
