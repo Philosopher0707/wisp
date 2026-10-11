@@ -1529,7 +1529,7 @@ class ConvergenceController:
             c.description for c in criteria if c.required)
         # A resumed run continues the ORIGINAL budget; it does not restart it.
         start = len(self.attempts)
-        # The stagnation witness and the evidence the NEXT attempt is shown
+        # The measurements already seen and the evidence the NEXT attempt is shown
         # are both restored from the journal on resume. They are durable facts
         # — the digest is recorded per attempt and the lines are recorded per
         # measurement — so a resumed run detects the SAME stagnation the
@@ -1537,11 +1537,14 @@ class ConvergenceController:
         # resumed run that lost them would silently choose a different rung,
         # which is the divergence a resume exists to prevent.
         previous_lines: tuple[str, ...] = ()
-        stagnation_witness = ""
         last_measurement: Measurement | None = None
         #: The lines describing the state the workspace is IN. They differ from the last attempt's lines exactly when that attempt was
         #: reverted: the workspace is back where it was before the attempt, so the next attempt is shown that state, not the discarded one.
         kept_lines: tuple[str, ...] = self._baseline.lines if self._baseline is not None else ()
+        #: Every measurement an attempt has produced, kept or not: a measurement that matches any of them is a repeat ("dedupe against everything seen,
+        #: not only against what was confirmed"; comparing with the last kept one let a rejected state come back as a fresh failure every time). The
+        #: baseline is deliberately not in it: a first attempt that changes nothing has not repeated anything.
+        seen_digests: set[str] = {r.measurement_digest for r in self.attempts}
         #: The measurement the NEXT attempt's progress is compared against.
         #: The baseline for attempt 0 — so a first attempt that times out
         #: mid-work is judged against the repository as it was, not against
@@ -1552,7 +1555,6 @@ class ConvergenceController:
             kept_record = next((r for r in reversed(self.attempts) if not r.reverted), None)
             if kept_record is not None:
                 kept_lines = kept_record.measurement_lines
-                stagnation_witness = kept_record.measurement_digest
                 previous_measurement = kept_record.measurement
             previous_lines = ((_revert_evidence(last_record),) + kept_lines) if last_record.reverted else kept_lines
 
@@ -1612,7 +1614,7 @@ class ConvergenceController:
             repeated = (
                 bool(verdict.unmet_criteria)
                 and bool(measurement.observations)
-                and measurement.digest == stagnation_witness
+                and measurement.digest in seen_digests
             )
 
             outcome = terminal_outcome_from_evidence(
@@ -1725,6 +1727,7 @@ class ConvergenceController:
                 escalated=self._ladder.escalated,
             ))
             self.attempts.append(record)
+            seen_digests.add(measurement.digest)
             self._write_journal(record)
             if self._on_record is not None:
                 try:
@@ -1754,7 +1757,6 @@ class ConvergenceController:
             else:
                 previous_lines = kept_lines = measurement.lines
                 previous_measurement = measurement
-                stagnation_witness = measurement.digest
             self._last_rung = ""
             self._last_progress = ""
             self._last_progress_signals = ()
