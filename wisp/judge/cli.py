@@ -60,8 +60,8 @@ def run_judge(argv: list[str]) -> int:
         print(json.dumps(asdict(v), indent=2))
         return 0 if v.verdict == "SOLVED" else 1
 
-    cfg = core.run_config(args)
     try:
+        cfg = core.run_config(args)
         core.child_env(cfg.api_base, cfg.key_from)  # fail early on a missing key
     except ValueError as exc:
         print(str(exc), file=sys.stderr)

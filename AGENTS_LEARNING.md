@@ -485,6 +485,17 @@ Still open: ~30% of the prompt is appended after budgeting; `config.skill_dirs` 
 - **Verify a subcommand through the checkout under test:** a subprocess `python -m wisp judge ...` ran the older installed wisp, which has no `judge` and sent "judge run ..." to the model as a prompt (a mock reply, exit 0, a green-looking wrong result). The end-to-end test sets `PYTHONPATH` to its own checkout.
 
 
+## wisp judge: state left in HOME changed a verdict; a score must not depend on the machine (2026-10-11)
+
+Search words: judge, INFRA, Traceback, HOME, .env, WISP_MODEL, isolate, inherit-env, hermetic, minimal_process_env, order-dependent failure, test_real_wisp_with_mock_provider_is_judged_noop, PYTHONUSERBASE.
+
+- **Symptom:** `test_judge_cli::test_real_wisp_with_mock_provider_is_judged_noop` passes alone and fails late in a full run (`INFRA ... run error markers: Traceback`), on clean `main` as well. The removal PR (#113) suspected the judge: its child inherited the real HOME.
+- **Cause, reproduced before it was fixed:** the HOME that survives a whole suite run held `~/.config/wisp/.env` with `WISP_MODEL=qwen2.5-coder`. `wisp judge run` loads that `.env` into its own `os.environ` at boot, `child_env` copied `os.environ`, and the child went to a model nobody asked for (Ollama: a 404 or a refused connection); the judge read the Traceback in stderr as INFRA. A HOME holding only that line reproduces it. A copy of the owner's real `~/.config/wisp` (secrets left out) did **not**: the polluter was the suite's, not the machine's.
+- **Why a private HOME alone would not have fixed it:** the parent had already put the `.env` into its environment, and the child inherits the environment. Running the child by hand in the polluted HOME passed; only the CLI path failed, which is what pointed at the parent's boot. So the child's environment is built from the least-privilege set (`wisp.tools._utils_env.minimal_process_env`, the existing authority for this decision) plus what the run names: `--model`, `--provider`, `--api-base`, `--key-from`, `--env NAME=VALUE`; HOME is a fresh directory removed with the run (`--keep` keeps it).
+- **A private HOME moves `~/.local`,** so `PYTHONUSERBASE` is pinned to the real user base (packages live there, credentials do not). The net eval harness met the same trap on 2026-10-02; the test asserts it.
+- **Scope, stated:** the CLI isolates by default and `--inherit-env` opts out (the score then depends on this machine). `RunConfig.isolate` is **False** for library callers, because the dashboard bench (#107) sets the environment itself through `os.environ`: flipping the default would drop its settings silently. It should move to `RunConfig(isolate=True, env=...)`. The judge's `run_check` (pytest over files the agent wrote) still runs with the caller's environment.
+- **Evidence:** RED first (18 new tests failed, among them the real CLI with the polluted HOME: INFRA, Traceback); 37 mutants of the change, all killed (two survived the first probe: a malformed `--env` message that echoed the value, and a workspace that was no longer removed); the previously failing test passes against the retained suite HOME; the architecture guards and `tests/reliability` pass.
+
 ## background jobs: supervisor process, process-tree kill, tier semantics (2026-10-07)
 
 Search words: background job, run_in_background, supervisor, orphan, process group, pgid, SIGTERM, PTY, DockerSandbox, container leak, zombie, ps environment, macOS SIP, reaper.
