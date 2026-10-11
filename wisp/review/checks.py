@@ -132,7 +132,7 @@ def _weak_is_noise(path: str, text: str, findings: Sequence[Any]) -> bool:
     for found in findings:
         value = text[found.start:found.end]
         expression = any(c in value for c in "([{") or text[found.end:found.end + 1] in ("(", "[", "{")
-        identifier = found.kind == "entropy" and value.replace("_", "").isalpha()
+        identifier = found.kind == "entropy" and value.replace("_", "").replace("-", "").isalpha()
         short_key = _SHORT_SK.fullmatch(value) is not None
         if not (expression or identifier or short_key):
             return False

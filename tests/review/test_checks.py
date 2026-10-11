@@ -103,6 +103,18 @@ class TestSecrets:
     def test_a_credential_named_variable_assigned_an_environment_read_is_not_a_leak(self):
         assert run(checks.check_secrets, added_file("src/app.py", ['OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]', "ANTHROPIC_API_KEY = get_key()"])) == []
 
+    def test_a_list_of_long_kebab_case_names_next_to_a_credential_word_is_not_an_entropy_hit(self):
+        line = '    "aws-access-key", "github-token", "github-fine-grained-token", "slack-token", "private-key-block", "openrouter-key",'
+        assert run(checks.check_secrets, added_file("src/kinds.py", [line])) == []
+
+    def test_a_hyphenated_token_with_digits_beside_a_credential_word_still_warns(self):
+        (finding,) = run(checks.check_secrets, added_file("src/settings.py", ['api_secret = "Zk9-Qw3-Rt7-Yp2-Lm8-Nb4-Vc6-Xd1"']))
+        assert finding.severity is Severity.WARN and "entropy" in finding.message
+
+    def test_a_loose_sk_key_of_letters_only_is_a_shape_not_a_name_and_still_warns(self):
+        (finding,) = run(checks.check_secrets, added_file("src/app.py", ['key = "sk-abcdefghijklmnopqrstuvwxyzabcdefghij"']))
+        assert finding.severity is Severity.WARN and "sk-token" in finding.message
+
     def test_a_high_entropy_literal_in_source_still_warns(self):
         (finding,) = run(checks.check_secrets, added_file("src/settings.py", ['value = "Zk9Qw3Rt7Yp2Lm8Nb4Vc6Xd1"']))
         assert finding.severity is Severity.WARN and "entropy" in finding.message
