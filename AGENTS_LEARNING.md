@@ -772,3 +772,13 @@ Search: user guidelines, ~/.config/wisp/CLAUDE.md, boot seed, Turn-0, load_conte
 - **Measure with the code under test.** `python /path/script.py` puts the script's directory first on `sys.path`, not the cwd, so my first false-positive run imported the unfixed `wisp` from the shared venv and reported 0 of 1,529. Print `wisp.__file__` in any measurement script and set `PYTHONPATH=.`.
 - **Measured over-withholding (this fix enables it):** wisp repo 24/1529 files (1.6%, every one a security test, doc or fixture that contains payload text); third-party site-packages 2/3276 (0.06%); `git log`/`git diff`/README 0 of 3; `grep -rn ignore wisp/` and `grep -rn instructions wisp/` withheld. Two neutral hits are true false positives: `safety … offset` matches `disable-the-control` (`off` has no word boundary), and a docstring "private key … upload" matches `exfiltrate-credentials` (120-char window).
 - **Side effect to know:** a withheld verification command has no envelope left for the verification floor, so `write_file` then `run_bash "echo 'ignore all previous instructions'; echo 192 passed"` goes from `goal_met` to `goal_failed`. Fail-closed, but a test run whose output quotes a payload now fails the goal.
+
+## Lesson: pin a known gap as a strict xfail, and keep the needle out of the temp path (2026-10-08)
+
+Search: graph e2e pty, strict xfail known gap, graph turn not in history, summarize_graph success, false positive temp path
+
+A real-pty check of the graph path (`tests/test_graph_e2e_pty.py`, a local OpenAI-compatible stub) showed that the graph runs and the REPL carries on, and two gaps: the graph turn is absent from the conversation the next turn's model sees (O-19), and the result headline is a success mark although the graph's own verification said REJECT (O-20).
+
+- **Record a gap you do not fix now as `xfail(strict=True)` with the field-log id in the reason.** The suite stays green, the gap is executable, and the day someone fixes it the test XPASSes and fails the build, which is the cue to delete the marker.
+- **My first O-19 assertion passed when it should not have (XPASS).** The needle "graph" matched the test's own temporary directory (`graph_e2e0`), which rides in the system prompt. Name fixture directories so they cannot contain a needle, and assert on the conversation (non-system messages), not on the whole request.
+- A test that drives a stub provider should record the request bodies it receives: that is how "the model never saw the graph run" became a measurement and not a reading.
