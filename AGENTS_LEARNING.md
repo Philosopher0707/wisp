@@ -782,3 +782,14 @@ A real-pty check of the graph path (`tests/test_graph_e2e_pty.py`, a local OpenA
 - **Record a gap you do not fix now as `xfail(strict=True)` with the field-log id in the reason.** The suite stays green, the gap is executable, and the day someone fixes it the test XPASSes and fails the build, which is the cue to delete the marker.
 - **My first O-19 assertion passed when it should not have (XPASS).** The needle "graph" matched the test's own temporary directory (`graph_e2e0`), which rides in the system prompt. Name fixture directories so they cannot contain a needle, and assert on the conversation (non-system messages), not on the whole request.
 - A test that drives a stub provider should record the request bodies it receives: that is how "the model never saw the graph run" became a measurement and not a reading.
+
+## Lesson: a second code path needs the first path's signal fix (2026-10-07)
+
+Search: ctrl-c graph path, KeyboardInterrupt, _on_sigint, _turn_task, run_coding_template, asyncio.run, pty test, field log O-3
+
+The owner pressed Ctrl-C during a prompt that the strategy gate had routed to the graph path ("graph path (complex): complexity score 2") and the REPL died with a traceback. PR #90 had fixed the same class for the engine path: `_on_sigint` cancels cleanly only when a `_turn_task` exists, otherwise it raises KeyboardInterrupt from inside the signal handler. The graph path (`coding.handle_prompt` → `run_coding_template` → `asyncio.run`) runs under its own loop, never sets `_turn_task`, and its callers catch `Exception`, which does not include KeyboardInterrupt.
+
+- **When a signal fix is made for one path, list every path that blocks the REPL thread** (here: `run_turn` and `_run_graph_turn`; `run_coding_template` has exactly one caller). Grep `asyncio.run(` and `run_until_complete(` in the REPL's reach.
+- **Reproduce with a real signal in a real pty**, with the stalled-provider stub #90 used: the new test failed with the owner's traceback (`_run_once` → `select` → KeyboardInterrupt) before any change. A fake exception would not have shown that the shutdown of `asyncio.run` does not hang (it did not: `/exit` still left within 12 s).
+- Test the handler stays armed: two interrupted graph turns, then a normal command, then `/exit`.
+- Not verified: whether work the graph's workers had already started (a shell command) is stopped by the cancel.
