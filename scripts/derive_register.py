@@ -101,7 +101,7 @@ ROWS: list[tuple[str, str, str, str, str, str]] = [
 
     # ── Faults: an error the caller must handle. The bulk. ─────────────────────────────
     ("SourceError", "wisp/review/source.py:39", "Exception", "fault", "cli", "—"),
-    ("TriageError", "wisp/review/triage.py:54", "Exception", "fault", "cli", "—"),
+    ("TriageError", "wisp/review/triage.py:58", "Exception", "fault", "cli", "—"),
     ("ToolError", "wisp/tools/errors.py:8", "Exception", "fault", "tool", "—"),
     ("PlanError", "wisp/graph/planner.py:72", "Exception", "fault", "plan", "—"),
     ("LSPServerError", "wisp/lsp/client.py:24", "Exception", "fault", "tool", "—"),
