@@ -123,7 +123,7 @@ Four seams in `WispAgentCore._turn_inner`, each one call, each wrapped so RC6 ho
 3. **At the `done` gate**: the composed decision (R1, R5).
 4. **Turn end**: the decision journal record.
 
-Two settings: `reasoning_core` = `off | observe | enforce`, whose own default is **`observe`**, and `reasoning_core_rules` (`R1=enforce,R4=observe`), a per-rule override so each heuristic is flipped on its own (a typo for a rule is `observe`; `off` as the default wins). **With neither setting present, R1 and R4 are enforced and R2 and R3 observe** (`DEFAULT_ENFORCED_RULES`, owner decision of 2026-10-07); setting either one, even to an empty string, replaces that list, so `WISP_REASONING_CORE=observe` or `off` is the kill switch. It does **not** flip the six OFF flags (ADR-0002: one flag per concern; the matrix
+Two settings: `reasoning_core` = `off | observe | enforce`, whose own default is **`observe`**, and `reasoning_core_rules` (`R1=enforce,R4=observe`), a per-rule override so each heuristic is flipped on its own (a typo for a rule is `observe`; `off` as the default wins). **With neither setting present, R1, R4 and R5 are enforced and R2 and R3 observe** (`DEFAULT_ENFORCED_RULES`, owner decision of 2026-10-07); setting either one, even to an empty string, replaces that list, so `WISP_REASONING_CORE=observe` or `off` is the kill switch. It does **not** flip the six OFF flags (ADR-0002: one flag per concern; the matrix
 in `CURRENT_FLAGS.md` stays authoritative). §8 proposes an optional profile that sets them together, as a separate decision.
 
 ## 7. How it uses what exists

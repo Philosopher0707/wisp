@@ -35,7 +35,7 @@
 | `ApprovalTimeout` | `Exception` | verdict | approval | `wisp/exceptions.py:33` | 1 | `wisp/transport/cli.py:910` | `wisp/core/approval_gate.py:127`, `wisp/tool_executor.py:895` | — |
 | `_TransientOpenError` | `Exception` | recoverable | provider | `wisp/core/provider_stream.py:40` | 1 | `wisp/core/provider_stream.py:174` | `wisp/core/provider_stream.py:278` | — |
 | `FirstTokenTimeout` | `asyncio.TimeoutError` | recoverable | subagent | `wisp/multi_agent/_runner.py:168` | 1 | `wisp/multi_agent/_runner.py:662` | `wisp/multi_agent/_runner.py:433`, `wisp/multi_agent/_runner.py:736`, `wisp/multi_agent/_runner.py:903` | — |
-| `CircuitOpenError` | `Exception` | recoverable | provider | `wisp/infra/circuit_breaker.py:175` | 2 | `wisp/infra/circuit_breaker.py:93` | `wisp/core/stateless.py:1356` | — |
+| `CircuitOpenError` | `Exception` | recoverable | provider | `wisp/infra/circuit_breaker.py:175` | 2 | `wisp/infra/circuit_breaker.py:93` | `wisp/core/stateless.py:1363` | — |
 | `CircuitBreakerOpenError` | `Exception` | recoverable | subagent | `wisp/multi_agent/_circuit_breaker.py:102` | 1 | `wisp/multi_agent/_circuit_breaker.py:44` | — | — |
 | `OllamaError` | `Exception` | recoverable | provider | `wisp/ollama_client.py:46` | 10 | `wisp/ollama_client.py:273` | `wisp/ollama_client.py:288`, `wisp/ollama_client.py:427` | — |
 | `OllamaConfigurationError` | `OllamaError` | recoverable | provider | `wisp/ollama_client.py:72` | 2 | `wisp/ollama_client.py:347` | — | ADR-0038 |
@@ -52,11 +52,11 @@
 | `TrustViolation` | `RuntimeError` | guard | context | `wisp/core/context_trust.py:95` | 1 | `wisp/core/context_trust.py:287` | — | — |
 | `ContextOverflow` | `RuntimeError` | guard | context | `wisp/core/context_trust.py:104` | 1 | `wisp/core/context_trust.py:314` | — | — |
 | `CriteriaDeclarationRejected` | `Exception` | guard | turn | `wisp/core/convergence.py:673` | 9 | `wisp/core/convergence.py:782` | `wisp/autonomous.py:325` | ADR-0050 |
-| `ReplayDivergence` | `RuntimeError` | guard | persist | `wisp/core/replay_digest.py:64` | 2 | `wisp/core/replay_digest.py:125` | `wisp/core/runtime.py:1862` | — |
-| `ImportGraphTooLarge` | `RuntimeError` | guard | tool | `wisp/import_graph.py:25` | 1 | `wisp/import_graph.py:133` | `wisp/test_runner.py:305` | — |
+| `ReplayDivergence` | `RuntimeError` | guard | persist | `wisp/core/replay_digest.py:64` | 2 | `wisp/core/replay_digest.py:125` | `wisp/core/runtime.py:1863` | — |
+| `ImportGraphTooLarge` | `RuntimeError` | guard | tool | `wisp/import_graph.py:25` | 1 | `wisp/import_graph.py:133` | `wisp/test_runner.py:351` | — |
 | `WalkBudgetExceeded` | `RuntimeError` | guard | tool | `wisp/core/workspace_walk.py:39` | 1 | `wisp/core/workspace_walk.py:130` | `wisp/import_graph.py:132` | — |
 | `JobLimitError` | `ToolError` | guard | tool | `wisp/jobs/spawn.py:20` | 2 | `wisp/jobs/spawn.py:41` | — | — |
-| `ToolError` | `Exception` | fault | tool | `wisp/tools/errors.py:8` | 87 | `agent/fast_tools.py:47` | `agent/tools/batch_reader.py:386`, `agent/tools/batch_reader.py:629`, `wisp/cli/dispatcher.py:383`, `wisp/jobs/supervisor.py:102`, `wisp/tool_executor.py:279`, `wisp/tool_executor.py:1409`, `wisp/tool_executor.py:1522`, `wisp/tools/bash.py:210`, `wisp/tools/registry.py:1309`, `wisp/tools/registry.py:1451` | — |
+| `ToolError` | `Exception` | fault | tool | `wisp/tools/errors.py:8` | 87 | `agent/fast_tools.py:47` | `agent/tools/batch_reader.py:386`, `agent/tools/batch_reader.py:629`, `wisp/cli/dispatcher.py:383`, `wisp/jobs/supervisor.py:102`, `wisp/tool_executor.py:279`, `wisp/tool_executor.py:1409`, `wisp/tool_executor.py:1522`, `wisp/tools/bash.py:211`, `wisp/tools/registry.py:1309`, `wisp/tools/registry.py:1451` | — |
 | `PlanError` | `Exception` | fault | plan | `wisp/graph/planner.py:72` | 28 | `wisp/graph/planner.py:87` | `wisp/graph/cli.py:300`, `wisp/graph/cli.py:342`, `wisp/graph/planner.py:314`, `wisp/graph/planner.py:396` | — |
 | `LSPServerError` | `Exception` | fault | tool | `wisp/lsp/client.py:24` | 16 | `wisp/lsp/client.py:78` | `wisp/lsp/client.py:529`, `wisp/lsp/manager.py:174`, `wisp/lsp/manager.py:188` | — |
 | `SearchReplaceError` | `ValueError` | fault | tool | `wisp/core/mutator/search_replace.py:38` | 3 | `wisp/core/mutator/search_replace.py:59` | — | — |

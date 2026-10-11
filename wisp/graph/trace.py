@@ -34,7 +34,9 @@ def render_ascii(trace: dict[str, Any]) -> str:
     for nid in sorted(results, key=str):
         r = results[nid] if isinstance(results[nid], dict) else {}
         mark = "✓" if r.get("status") == "success" else "✗"
+        model = r.get("model")
         lines.append(f"{mark} {_safe(nid)}  {_num(r.get('duration_s', 0)):.1f}s"
+                     + (f"  ({_safe(model, 64)})" if isinstance(model, str) and model else "")
                      + (f"  [{_safe(r.get('error_code'))}]" if r.get("error_code") else ""))
     tokens = trace.get("tokens", {}) if isinstance(trace.get("tokens"), dict) else {}
     lines.append(f"wall {_num(trace.get('wall_s', 0))}s  "
