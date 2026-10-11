@@ -5,8 +5,8 @@ Field log (docs/harness/field-observations-2026-10-07.md): O-2/O-3 (routing, Ctr
 * the graph path runs (`implement -> test -> review`, with correction cycles) and ends with a result line and a trace id;
 * the REPL carries on: the next prompt reaches the provider and is answered;
 * graph nodes are subagents that run `WispAgentCore.turn` (`multi_agent/_runner.py`), i.e. the same engine, floor and reasoning core as a normal turn;
-* TWO GAPS, pinned as strict xfails so the day they are fixed the test says so: (O-19) the graph turn leaves no trace in the conversation the model sees on the
-  next turn; (O-20) the headline result line is a success mark even when the graph's own verification says REJECT after its correction cycles are exhausted.
+* two gaps seen on 2026-10-08 were pinned here as strict xfails and are now fixed, so they are ordinary tests: (O-19) the graph turn is in the conversation the
+  model sees on the next turn; (O-20) the headline result line carries the failure mark when the graph's own verification says REJECT.
 """
 
 from __future__ import annotations
@@ -172,7 +172,7 @@ class TestTheGraphRuns:
         assert run.posts_during_graph >= 3  # at least one provider round per node
 
     def test_a_rejected_review_sends_the_work_back_a_bounded_number_of_times(self, run):
-        assert 1 <= run.graph_text.count("↻ implement retrying") <= 4 and "correction cycle exhausted" in run.graph_text
+        assert 1 <= run.graph_text.count("↻ implement retrying") <= 4 and "verification: REJECT" in run.graph_text
 
 
 class TestTheAgentCarriesOn:
@@ -183,17 +183,14 @@ class TestTheAgentCarriesOn:
     def test_the_repl_still_exits_cleanly(self, run):
         assert run.exited
 
-
-class TestKnownGaps:
-    """Strict xfails: each records a gap seen on 2026-10-08. When one is fixed the test XPASSes and fails the build, which is the cue to remove the marker."""
-
-    @pytest.mark.xfail(strict=True, reason="O-19: a graph turn is not added to the conversation, so the next turn's model cannot know it happened")
     def test_the_next_turn_can_see_that_a_graph_run_happened_and_what_it_concluded(self, run):
-        conversation = [m for m in run.follow_up_messages if m.get("role") != "system"]  # today: the boot-context note and the follow-up question only
+        """O-19, fixed by `record_turn`: the graph turn is in the conversation the next prompt reaches the provider with."""
+        conversation = [m for m in run.follow_up_messages if m.get("role") != "system"]
         assert "auth module" in json.dumps(conversation).lower() or len(conversation) >= 3
 
-    @pytest.mark.xfail(strict=True, reason="O-20: the headline is a success mark although the graph's own verification says REJECT after the correction cycles")
     def test_the_headline_is_not_a_success_mark_when_verification_rejected(self, run):
+        """O-20, fixed: the line under `graph complete` carries the failure mark when the graph's own verification says REJECT."""
+        lines = run.graph_text.splitlines()
+        headline = lines[next(i for i, ln in enumerate(lines) if "graph complete" in ln) + 1]
         assert "verification: REJECT" in run.graph_text
-        headline = next(ln for ln in run.graph_text.splitlines() if "correction cycle exhausted" in ln)
-        assert "✓" not in headline
+        assert headline.lstrip().startswith("✗") and "✓" not in headline
