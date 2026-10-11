@@ -22,7 +22,7 @@
 > `—` therefore means *no catch inside these roots*, which is **not** the same claim as
 > *unhandled* — see §(c).
 >
-> Generated 2026-09-30 at `87e3933` · **51 classes** · **286 raise sites** · **53 catch sites** · **7 with no test naming them**.
+> Generated 2026-09-30 at `f2368d1` · **51 classes** · **286 raise sites** · **53 catch sites** · **7 with no test naming them**.
 
 ---
 
@@ -53,10 +53,10 @@
 | `ContextOverflow` | `RuntimeError` | guard | context | `wisp/core/context_trust.py:104` | 1 | `wisp/core/context_trust.py:314` | — | — |
 | `CriteriaDeclarationRejected` | `Exception` | guard | turn | `wisp/core/convergence.py:673` | 9 | `wisp/core/convergence.py:782` | `wisp/autonomous.py:325` | ADR-0050 |
 | `ReplayDivergence` | `RuntimeError` | guard | persist | `wisp/core/replay_digest.py:64` | 2 | `wisp/core/replay_digest.py:125` | `wisp/core/runtime.py:1862` | — |
-| `ImportGraphTooLarge` | `RuntimeError` | guard | tool | `wisp/import_graph.py:25` | 1 | `wisp/import_graph.py:133` | `wisp/test_runner.py:305` | — |
+| `ImportGraphTooLarge` | `RuntimeError` | guard | tool | `wisp/import_graph.py:25` | 1 | `wisp/import_graph.py:133` | `wisp/test_runner.py:351` | — |
 | `WalkBudgetExceeded` | `RuntimeError` | guard | tool | `wisp/core/workspace_walk.py:39` | 1 | `wisp/core/workspace_walk.py:130` | `wisp/import_graph.py:132` | — |
 | `JobLimitError` | `ToolError` | guard | tool | `wisp/jobs/spawn.py:20` | 2 | `wisp/jobs/spawn.py:41` | — | — |
-| `ToolError` | `Exception` | fault | tool | `wisp/tools/errors.py:8` | 87 | `agent/fast_tools.py:47` | `agent/tools/batch_reader.py:386`, `agent/tools/batch_reader.py:629`, `wisp/cli/dispatcher.py:383`, `wisp/jobs/supervisor.py:102`, `wisp/tool_executor.py:279`, `wisp/tool_executor.py:1409`, `wisp/tool_executor.py:1522`, `wisp/tools/bash.py:210`, `wisp/tools/registry.py:1309`, `wisp/tools/registry.py:1451` | — |
+| `ToolError` | `Exception` | fault | tool | `wisp/tools/errors.py:8` | 87 | `agent/fast_tools.py:47` | `agent/tools/batch_reader.py:386`, `agent/tools/batch_reader.py:629`, `wisp/cli/dispatcher.py:383`, `wisp/jobs/supervisor.py:102`, `wisp/tool_executor.py:279`, `wisp/tool_executor.py:1409`, `wisp/tool_executor.py:1522`, `wisp/tools/bash.py:211`, `wisp/tools/registry.py:1309`, `wisp/tools/registry.py:1451` | — |
 | `PlanError` | `Exception` | fault | plan | `wisp/graph/planner.py:72` | 28 | `wisp/graph/planner.py:87` | `wisp/graph/cli.py:300`, `wisp/graph/cli.py:342`, `wisp/graph/planner.py:314`, `wisp/graph/planner.py:396` | — |
 | `LSPServerError` | `Exception` | fault | tool | `wisp/lsp/client.py:24` | 16 | `wisp/lsp/client.py:78` | `wisp/lsp/client.py:529`, `wisp/lsp/manager.py:174`, `wisp/lsp/manager.py:188` | — |
 | `SearchReplaceError` | `ValueError` | fault | tool | `wisp/core/mutator/search_replace.py:38` | 3 | `wisp/core/mutator/search_replace.py:59` | — | — |

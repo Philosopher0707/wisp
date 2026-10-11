@@ -58,6 +58,18 @@ def _pty_preexec() -> None:
             pass
 
 
+def _head_and_tail(chunks: list[bytes], size: int, tail: bytes) -> bytes:
+    """What was captured of a stream of `size` bytes: its start (`chunks`, recorded up to a cap) and its last bytes (`tail`), joined without a repeat
+    when they overlap and with a plain gap line when they do not. Everything between is dropped by the caller's truncation, not here."""
+    head = b"".join(chunks)
+    if size <= len(head):
+        return head
+    tail_start = size - len(tail)
+    if tail_start <= len(head):
+        return head + tail[len(head) - tail_start:]
+    return head + b"\n[middle of the output was not captured]\n" + tail
+
+
 def _clean_pty_output(raw: bytes) -> str:
     """Decode pty bytes to model text: UTF-8, no ANSI, LF newlines."""
     from wisp.tools._utils import _ANSI_RE
@@ -92,7 +104,7 @@ class PtySandbox(SandboxProvider):
         return await _asyncio.to_thread(self._run_sync, command, cwd, timeout)
 
     def _run_sync(self, command: str, cwd: str, timeout: int) -> tuple[int, str, str]:
-        from wisp.tools._utils import _MAX_BASH_OUTPUT, check_dangerous_command
+        from wisp.tools._utils import _MAX_BASH_OUTPUT, check_dangerous_command, truncate_output
         from wisp.tools._utils_env import credential_free_env
 
         danger = check_dangerous_command(command)
@@ -118,6 +130,7 @@ class PtySandbox(SandboxProvider):
             os.close(slave)
             slave = -1
             chunks: list[bytes] = []
+            tail = bytearray()  # the last bytes of the whole stream: a test run's verdict is printed last
             size = 0
             deadline = time.monotonic() + timeout
             # ponytail: fixed 64 KiB cap per read; streams longer output
@@ -130,7 +143,7 @@ class PtySandbox(SandboxProvider):
                     except (ProcessLookupError, PermissionError):
                         pass
                     proc.wait(timeout=5)
-                    return (-1, _clean_pty_output(b"".join(chunks)),
+                    return (-1, truncate_output(_clean_pty_output(_head_and_tail(chunks, size, bytes(tail)))),
                             f"Command timed out after {timeout}s")
                 exited = proc.poll() is not None
                 ready, _, _ = select.select([master], [], [], min(remaining, 0.2))
@@ -149,14 +162,15 @@ class PtySandbox(SandboxProvider):
                     if size <= _MAX_BASH_OUTPUT + 65536:
                         chunks.append(data)
                     size += len(data)
+                    tail += data
+                    if len(tail) > _MAX_BASH_OUTPUT:
+                        del tail[:-_MAX_BASH_OUTPUT]
                 elif exited:
                     # No more output and the child is gone — drain once more.
                     ready2, _, _ = select.select([master], [], [], 0.05)
                     if not ready2:
                         break
-            out = _clean_pty_output(b"".join(chunks))
-            if len(out) > _MAX_BASH_OUTPUT:
-                out = out[:_MAX_BASH_OUTPUT] + "\n... [output truncated]"
+            out = truncate_output(_clean_pty_output(_head_and_tail(chunks, size, bytes(tail))))
             # EOF on the pty does not reap the child: without this wait
             # `returncode` is still None and a failing command reads as exit 0.
             try:
