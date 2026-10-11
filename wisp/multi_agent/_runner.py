@@ -986,10 +986,21 @@ class SubagentRunner:
                         or "default"))
         return child_principal(parent, contract, capabilities=effective_tools)
 
+    def _served_model(self) -> str:
+        """The model the parent turn serves when its setting is empty ("the first model the provider serves"): `_create_core` resolves it for the parent
+        only, so a child that inherited the empty string made the provider answer 400 "model field is required". Same authority, same answer; "" when it
+        cannot be resolved, which is the behaviour before this."""
+        try:
+            from wisp.provider_catalog import resolve_selection
+            return str(resolve_selection(self.parent_config).suggested or "")
+        except Exception:
+            logger.debug("could not resolve the parent's unset model for a child", exc_info=True)
+            return ""
+
     def _build_child_config(self, contract: SubagentContract, workspace: str) -> WispConfig:
         """Clone the parent config with optional per-subagent overrides."""
         child = self.parent_config.replace(
-            model=contract.model or self.parent_config.model,
+            model=contract.model or self.parent_config.model or self._served_model(),
             workspace=workspace,
             auto_approve=contract.auto_approve,
             max_context_tokens=contract.max_tokens or self.parent_config.max_context_tokens,

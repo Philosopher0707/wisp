@@ -923,7 +923,10 @@ class WispConfig:
         object.__setattr__(self, "ollama_url", get_setting("ollama_url", DEFAULT_OLLAMA_URL))
         object.__setattr__(self, "api_key", get_setting("api_key", ""))
         object.__setattr__(self, "api_base", get_setting("api_base", ""))
-        object.__setattr__(self, "model", get_setting("model", DEFAULT_MODEL))
+        model = get_setting("model", DEFAULT_MODEL)
+        if not str(model or "").strip():  # a `WISP_MODEL=` line left empty must not hide the model saved in config.json
+            model = load_config().get("model") or DEFAULT_MODEL
+        object.__setattr__(self, "model", model)
         object.__setattr__(self, "temperature", float(get_setting("temperature", "0.2")))
         raw_max_tokens = get_setting("max_tokens", 131072)
         object.__setattr__(self, "max_tokens",
