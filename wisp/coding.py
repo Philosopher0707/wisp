@@ -358,6 +358,10 @@ def handle_prompt(runner: Any, prompt: str) -> bool:
             else getattr(config, "workspace", ".") or "."
         out = getattr(runner, "out", None)
         ctx = task_context_from_prompt(prompt, workspace, config)
+        if _loop_worthy(runner, ctx):
+            from wisp.autonomous_repl import run_repl_converge
+            run_repl_converge(runner, ctx.objective)
+            return True
         decision = decide_strategy(ctx)
         if decision.strategy != GRAPH:
             return False
@@ -369,6 +373,24 @@ def handle_prompt(runner: Any, prompt: str) -> bool:
         except Exception:
             pass
         return False
+
+
+def _loop_worthy(runner: Any, ctx: TaskContext) -> bool:
+    """Route to the objective-level loop only when the host can verify the objective: the user stated a checkable end, or named a symbol to define.
+
+    Never for a question, for an explicit single-agent or graph request, when the operator turned it off, when the runner cannot run a loop, or in a
+    directory that is not a project (the derivation reads the workspace).
+    """
+    from wisp.autonomous_repl import assess, routing_enabled
+    from wisp.core.workspace_walk import is_home_directory
+
+    if ctx.mode != "auto" or _is_question(ctx.objective) or not routing_enabled():
+        return False
+    if getattr(runner, "loop", None) is None or getattr(runner, "runtime", None) is None:
+        return False
+    if not ctx.workspace or ctx.workspace == "/" or is_home_directory(ctx.workspace):
+        return False
+    return assess(ctx.objective, ctx.workspace).verifiable
 
 
 def _run_graph_turn(runner: Any, ctx: TaskContext, decision: StrategyDecision,
@@ -400,7 +422,7 @@ def _run_graph_turn(runner: Any, ctx: TaskContext, decision: StrategyDecision,
         final = run_coding_template(template, ctx, emit=emit, config=live_config)
     except Exception as exc:
         _emit_line(out, f"graph run failed: {exc}")
-        _record_turn(runner, prompt, f"[graph run: {template}] ✗ graph run failed: {str(exc)[:RECORD_SUMMARY_CHARS]}")
+        record_turn(runner, prompt, f"[graph run: {template}] ✗ graph run failed: {str(exc)[:RECORD_SUMMARY_CHARS]}")
         return True
     result = summarize_graph(template, final.get("run_id", ""), final)
     _emit_line(out, f"{'✓' if result.success else '✗'} {result.summary[:1500]}")
@@ -408,7 +430,7 @@ def _run_graph_turn(runner: Any, ctx: TaskContext, decision: StrategyDecision,
         _emit_line(out, f"  changed: {', '.join(result.changed_files[:16])}")
     _emit_line(out, f"  verification: {result.verification}{_verification_caveat(result)}")
     _emit_line(out, f"  trace: /graph trace {result.execution_id}")
-    _record_turn(runner, prompt, graph_note(template, result))
+    record_turn(runner, prompt, graph_note(template, result))
     return True
 
 
@@ -432,7 +454,7 @@ def graph_note(template: str, result: ExecutionResult) -> str:
     return "\n".join(lines)
 
 
-def _record_turn(runner: Any, prompt: str, note: str) -> None:
+def record_turn(runner: Any, prompt: str, note: str) -> None:
     """Put the graph turn into the session the agent loop reads, so the next prompt knows it happened. The session is a plain dict; it is saved by the
     REPL as for any other turn (this module never touches the database)."""
     session = getattr(runner, "session", None)
