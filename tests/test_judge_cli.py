@@ -7,6 +7,8 @@ import sys
 from contextlib import redirect_stdout
 from pathlib import Path
 
+import pytest
+
 from wisp.judge import cli
 
 
@@ -53,20 +55,47 @@ def test_missing_key_fails_early_without_running_anything(monkeypatch, tmp_path)
     assert cli.run_judge(["run", "--key-from", "DEFINITELY_UNSET_KEY"]) == 2
 
 
-def test_real_wisp_with_mock_provider_is_judged_noop(tmp_path):
-    """End to end through the real CLI: the mock edits nothing, so the verdict is NO-OP and the exit is non-zero.
-
-    Wiring only: what the mock claims is the mock's business, so claim honesty is not asserted here."""
+def _judge_off_by_one_with_mock(tmp_path, home=None):
+    """Run THIS checkout's `wisp judge run` as a real process; `home` replaces the process's HOME."""
     out = tmp_path / "out.json"
     # Run THIS checkout's wisp: an older installed wisp has no `judge` subcommand and would send
     # "judge run ..." to the model as a prompt.
     repo = str(Path(__file__).resolve().parents[1])
     env = {**os.environ, "PYTHONPATH": repo + os.pathsep + os.environ.get("PYTHONPATH", "")}
+    if home is not None:
+        env["HOME"] = str(home)
     p = subprocess.run(
         [sys.executable, "-m", "wisp", "judge", "run", "--tasks", "off_by_one", "--provider", "mock",
          "--model", "mock", "--timeout", "120", "--json-out", str(out)],
         capture_output=True, text=True, timeout=240, cwd=tmp_path, env=env)
+    return p, out
+
+
+def test_real_wisp_with_mock_provider_is_judged_noop(tmp_path):
+    """End to end through the real CLI: the mock edits nothing, so the verdict is NO-OP and the exit is non-zero.
+
+    Wiring only: what the mock claims is the mock's business, so claim honesty is not asserted here."""
+    p, out = _judge_off_by_one_with_mock(tmp_path)
     assert p.returncode == 1, p.stdout + p.stderr
     row = json.loads(out.read_text())[0]
     assert row["verdict"] == "NO-OP" and row["changed"] == []
     assert row["claim"] is not None  # wisp's own JSON was parsed
+
+
+def test_state_other_runs_left_in_home_cannot_change_the_verdict(tmp_path):
+    """The failure that used to depend on the machine: a whole suite had left `WISP_MODEL=...` in
+    ~/.config/wisp/.env, `wisp judge run` loaded it into its own environment at boot, the child inherited
+    it, called a model nobody asked for, and the mock run came back INFRA instead of NO-OP."""
+    home = tmp_path / "home"
+    (home / ".config" / "wisp").mkdir(parents=True)
+    (home / ".config" / "wisp" / ".env").write_text("WISP_MODEL=qwen2.5-coder\n")
+    p, out = _judge_off_by_one_with_mock(tmp_path, home)
+    assert p.returncode == 1, p.stdout + p.stderr
+    row = json.loads(out.read_text())[0]
+    assert row["verdict"] == "NO-OP" and row["changed"] == []
+
+
+@pytest.mark.parametrize("bad,secret", [("HOME=/very/secret/path", "/very/secret/path"), ("no pair here sk-secret-token-123", "sk-secret-token-123")])
+def test_a_bad_env_flag_is_refused_without_echoing_its_value(capsys, bad, secret):
+    assert cli.run_judge(["run", "--env", bad]) == 2
+    assert secret not in capsys.readouterr().err

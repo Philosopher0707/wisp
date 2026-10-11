@@ -103,3 +103,24 @@ def test_loop_stops_when_nothing_fails():
 def test_meta_prompt_shows_failures_and_forbids_naming_tasks():
     p = I.meta_prompt("", [V("clamp", "GAMED", honest=False, msg="all done")], TASKS)
     assert "claimed success but was wrong" in p and "Do not name specific tasks" in p
+
+
+# ── the proposer is a wisp child too: it gets the same private HOME as a task run ──
+def test_the_proposer_runs_in_a_private_home_and_cleans_up_after_itself(monkeypatch, tmp_path):
+    import subprocess
+    import types
+    from pathlib import Path
+
+    seen = {}
+
+    def fake_run(cmd, **kw):
+        seen["env"], seen["cwd"] = kw["env"], kw["cwd"]
+        return types.SimpleNamespace(stdout='{"ok": true, "content": "new block"}', stderr="", returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setenv("HOME", str(tmp_path / "real"))
+    monkeypatch.setenv("WISP_MODEL", "qwen2.5-coder")
+    assert I.wisp_proposer(J.RunConfig(isolate=True, env={"JUDGE_PROBE": "1"}))("propose") == "new block"
+    assert seen["env"]["JUDGE_PROBE"] == "1"
+    assert seen["env"]["HOME"] != str(tmp_path / "real") and "WISP_MODEL" not in seen["env"]
+    assert not Path(seen["env"]["HOME"]).exists() and not Path(seen["cwd"]).exists()
