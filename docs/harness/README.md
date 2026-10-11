@@ -103,9 +103,11 @@ Known, documented behaviour: a generalist child is never offered extension (MCP,
 
 ## Merging
 
-The generated pages (`register.md`, `CURRENT_FLAGS.md`, `CURRENT_AUTHORITIES.md`) stamp the commit they were generated at, and a
-test requires the stamp to be an ancestor of `HEAD`. A **squash** merge replaces the branch commit and turns `main` CI red until the
-pages are re-pinned (this happened on #85). Prefer merge commits, or re-pin right after a squash.
+The generated pages (`register.md`, `CURRENT_FLAGS.md`, `CURRENT_AUTHORITIES.md`) stamp a commit, and a test requires the stamp to be an
+ancestor of `HEAD`. The stamp is the **merge-base of the branch with `origin/main`** (`scripts/_page_stamp.py`, since 2026-10-05): a commit
+already on `main`, so a merge commit, a squash and a rebase all leave it an ancestor (`tests/test_page_stamp.py` simulates the three).
+Squash-merging #85 turned `main` red before that fix; it no longer does. Regenerate pages with the current scripts, and commit a regenerated
+page only when a pinned line really moved (a stamp-only diff conflicts with every other open PR).
 
 ## Invariant gates
 
