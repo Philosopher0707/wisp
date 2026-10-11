@@ -15,11 +15,17 @@ WRITE = READ + ["write_file", "edit_file", "run_bash", "run_tests", "diagnose"]
 
 
 def _agent(nid: str, responsibility: str, tools: list[str],
-           output: str = "") -> dict[str, Any]:
-    return {"type": "agent", "responsibility": responsibility,
-            "allowed_tools": tools,
-            "output_schema": {"type": "object"} if output else {},
-            "timeout": 600, "retry": {"max_attempts": 1}}
+           output: str = "", tier: str = "") -> dict[str, Any]:
+    """*tier* (`cheap | strong`) is how much model the node deserves; the operator's `graph_model_tiers` says which model that is. Only independent read-only
+    workers are tagged `cheap` and only the node that decides from them `strong`; the write path is never tagged, so the tier map cannot change what
+    writes code."""
+    node: dict[str, Any] = {"type": "agent", "responsibility": responsibility,
+                            "allowed_tools": tools,
+                            "output_schema": {"type": "object"} if output else {},
+                            "timeout": 600, "retry": {"max_attempts": 1}}
+    if tier:
+        node["model"] = tier
+    return node
 
 
 def simple_analyze_implement_verify(ctx_files: list[str]) -> dict:
@@ -54,10 +60,10 @@ def parallel_repo_analysis(ctx_files: list[str]) -> dict:
     nodes: dict[str, Any] = {
         "split": {"type": "function", "function": "split_work",
                   "responsibility": "partition analysis"},
-        "synthesize": _agent("synthesize", "synthesize branch findings", READ),
+        "synthesize": _agent("synthesize", "synthesize branch findings", READ, tier="strong"),
     }
     for b in branches:
-        nodes[b] = _agent(b, f"analyze {focus[b]}; report findings", READ)
+        nodes[b] = _agent(b, f"analyze {focus[b]}; report findings", READ, tier="cheap")
     edges = [{"from": "split", "to": b,
               "reason": f"{b} consumes split.output.slice"} for b in branches]
     edges += [{"from": b, "to": "synthesize",
@@ -105,9 +111,9 @@ def complex_coding(ctx_files: list[str]) -> dict:
     """ANALYZE → parallel analysis → PLAN → IMPLEMENT → TEST → REVIEW ⇄ REPAIR."""
     nodes: dict[str, Any] = {
         "analyze": _agent("analyze", "scope the request", READ),
-        "arch": _agent("arch", "analyze architecture impact", READ),
-        "deps": _agent("deps", "analyze dependencies and blast radius", READ),
-        "plan": _agent("plan", "produce an implementation plan", READ),
+        "arch": _agent("arch", "analyze architecture impact", READ, tier="cheap"),
+        "deps": _agent("deps", "analyze dependencies and blast radius", READ, tier="cheap"),
+        "plan": _agent("plan", "produce an implementation plan", READ, tier="strong"),
         "implement": {
             "type": "agent", "responsibility": "implement the plan; report changed_files",
             "allowed_tools": WRITE, "timeout": 900, "retry": {"max_attempts": 1},

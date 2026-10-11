@@ -510,6 +510,17 @@ Search words: electron-builder, python-build-standalone, uv, codesign, ad-hoc, a
 - Verify the artifact you ship, not the build directory: `scripts/verify-packaged.mjs` launches the app (Playwright `_electron`, throwaway HOME) and checks window, managed backend, health, 401 without and with a wrong key, backend is the bundled python, loopback only, no renderer errors, and no orphan after quit. It passed on `release/mac-arm64/Wisp.app` and on the app unzipped from `Wisp-0.1.0-mac.zip`.
 - `npx electron-builder` can fail with "Missing script"; call `./node_modules/.bin/electron-builder`.
 
+## graph node tiers were a label nothing read; a general setting maps them to models (2026-10-11)
+
+Search words: model_class, cheap standard strong, tier map, graph_model_tiers, WISP_GRAPH_MODEL_TIERS, SubagentNodeRunner, contract.model, model_used, results_by_node model, graph trace, parse_model_tiers.
+
+- **Found:** `ModelPolicy.model_class` (`cheap | standard | strong`) was validated everywhere (the DSL enum, `allowed_models`, the optimizer's authority check as `class:X`) and used by nobody when the graph ran: `SubagentNodeRunner` built the `SubagentContract` without a model, although the contract has a `model` field and `SubagentRunner._build_child_config` already honours it (`contract.model or parent.model`). Separately, `NodeResult.model` was always empty: the runner read `result.model`, the field is `model_used`, and nothing sets it.
+- **Decision (owner, 2026-10-11): make it a general setting so it can be set later.** `graph_model_tiers` / `WISP_GRAPH_MODEL_TIERS`, `cheap=MODEL,standard=MODEL,strong=MODEL`, empty by default, and then nothing changes. A graph, its planner and every node input can pick a tier, never a model; the map is the operator's.
+- **Choices worth remembering:** models of the *session's provider* only (a second provider means a second endpoint and key: not a setting-sized change); a malformed entry is dropped and counted, never repaired and never quoted in the log; no fallback to the session model when a mapped model is wrong (it would hide the typo and double the cost); the field on the frozen `WispConfig` is the canonical *string*, so the config stays hashable and a typo is dropped once, at load; the stock executor takes the map from the config it was given, else from the environment and file, and an unreadable file means no tiers.
+- **Existence is not reachability, again:** a setting no template tag reaches would be inert. So the shipped graphs tag the unambiguous cases only (independent read-only workers `cheap`, the node that decides from them `strong`) and never the write path.
+- **Visible:** `results_by_node[node]["model"]` holds the model each node was asked to use and `/graph trace` prints it.
+- **Evidence:** RED first (57 tests failed); 57 mutants, all killed (four survived the first probe and each produced a test: a trailing comma, the order and the emptiness rules of the renderer; and one *equivalent* mutant exposed a branch I had written that could never run, since a text that starts with `{` and parses is always an object, which I deleted). The real executor, the real `SubagentOrchestrator` and the mock provider: the configuration the real runner builds for each child carries its tier's model. Design and limits: `docs/harness/graph-model-tiers.md`.
+
 ## desktop layout: sidebar / header / workbench dock, overlap checks (2026-10-06)
 
 Search words: overlap, header, traffic lights, hiddenInset, container query, WebContentsView, dock, diff tab, box-sizing.

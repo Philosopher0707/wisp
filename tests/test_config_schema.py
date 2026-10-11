@@ -192,3 +192,180 @@ class TestDiffMaxLinesSetting:
         assert WispConfig().diff_max_lines == 0, "0 means unlimited"
         monkeypatch.setenv("WISP_DIFF_MAX_LINES", "200")
         assert WispConfig().diff_max_lines == 200
+
+
+class TestGraphModelTiersSetting:
+    """`graph_model_tiers`: which real model each graph node tier (`cheap | standard | strong`) means, as `cheap=MODEL,strong=MODEL`.
+
+    Empty by default, and then nothing changes: every tier is the session model. Same provider as the session; a tier left out is the session model."""
+
+    def test_the_schema_declares_it_with_its_environment_variable(self):
+        entry = get_schema()["graph_model_tiers"]
+        assert entry["type"] is str and entry["default"] == "" and entry["env_var"] == "WISP_GRAPH_MODEL_TIERS"
+        assert "cheap=" in entry["description"] and "session" in entry["description"]
+
+    def test_it_is_empty_by_default(self, isolated_wisp_env):
+        from wisp.config import WispConfig
+
+        assert WispConfig().graph_model_tiers == ""
+
+    def test_the_environment_sets_it_in_the_canonical_form(self, isolated_wisp_env, monkeypatch):
+        from wisp.config import WispConfig
+
+        monkeypatch.setenv("WISP_GRAPH_MODEL_TIERS", " strong = big-model , cheap=tiny-model ")
+        assert WispConfig().graph_model_tiers == "cheap=tiny-model,strong=big-model"
+
+    def test_the_config_file_sets_it(self, isolated_wisp_env, monkeypatch, tmp_path):
+        import wisp.config as cfg_mod
+        from wisp.config import WispConfig
+
+        path = tmp_path / "config.json"
+        path.write_text('{"graph_model_tiers": "cheap=file-model"}')
+        monkeypatch.setattr(cfg_mod, "get_config_path", lambda: path)
+        monkeypatch.delenv("WISP_GRAPH_MODEL_TIERS", raising=False)
+        assert WispConfig().graph_model_tiers == "cheap=file-model"
+
+    def test_the_environment_beats_the_file(self, isolated_wisp_env, monkeypatch, tmp_path):
+        import wisp.config as cfg_mod
+        from wisp.config import WispConfig
+
+        path = tmp_path / "config.json"
+        path.write_text('{"graph_model_tiers": "cheap=file-model"}')
+        monkeypatch.setattr(cfg_mod, "get_config_path", lambda: path)
+        monkeypatch.setenv("WISP_GRAPH_MODEL_TIERS", "cheap=env-model")
+        assert WispConfig().graph_model_tiers == "cheap=env-model"
+
+    def test_a_typo_or_an_unknown_tier_is_dropped_never_guessed(self, isolated_wisp_env, monkeypatch):
+        from wisp.config import WispConfig
+
+        monkeypatch.setenv("WISP_GRAPH_MODEL_TIERS", "ultra=nope,cheap=ok,stronk=nope,strong")
+        assert WispConfig().graph_model_tiers == "cheap=ok"
+
+    def test_validate_config_takes_a_string_and_refuses_other_types(self):
+        assert validate_config({"graph_model_tiers": "cheap=a,strong=b"}) == []
+        assert len(validate_config({"graph_model_tiers": 5})) == 1
+
+
+class TestParseModelTiers:
+    @staticmethod
+    def parse(raw):
+        from wisp.graph.tiers import parse_model_tiers
+
+        return parse_model_tiers(raw)
+
+    @pytest.mark.parametrize("raw", ["", "   ", None, ",", " , ,", 5, [], {}])
+    def test_nothing_set_is_an_empty_map(self, raw):
+        assert self.parse(raw) == {}
+
+    def test_pairs_with_spaces(self):
+        assert self.parse(" cheap = a , strong=b ") == {"cheap": "a", "strong": "b"}
+
+    @pytest.mark.parametrize("name", ["nvidia/nemotron-3-ultra-550b-a55b", "qwen2.5-coder:7b", "meta-llama/llama-3.1-8b-instruct:free", "gpt_4o.mini", "org/m@v1+x"])
+    def test_real_model_names_pass(self, name):
+        assert self.parse(f"cheap={name}") == {"cheap": name}
+
+    def test_a_name_of_exactly_the_longest_allowed_length_passes_and_one_more_does_not(self):
+        assert self.parse("cheap=" + "m" * 128) == {"cheap": "m" * 128}
+        assert self.parse("cheap=" + "m" * 129) == {}
+
+    @pytest.mark.parametrize("bad", ["cheap=-x", "cheap=.x", "cheap=/x", "cheap=:x", "cheap=_x", "cheap=@x"])
+    def test_a_model_name_starts_with_a_letter_or_a_digit(self, bad):
+        assert self.parse(bad) == {}
+
+    def test_a_name_may_start_with_a_digit(self):
+        assert self.parse("cheap=4o-mini") == {"cheap": "4o-mini"}
+
+    def test_dropping_entries_is_logged_by_count_and_never_quotes_what_was_typed(self, caplog):
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="wisp.graph.tiers"):
+            assert self.parse("cheap=ok,strong=sk-LOOKS-LIKE-A-KEY with spaces,ultra=x") == {"cheap": "ok"}
+        text = " ".join(r.getMessage() for r in caplog.records)
+        assert "ignored 2 entries" in text and "sk-LOOKS" not in text and "ultra" not in text
+
+    def test_one_dropped_entry_is_worded_in_the_singular(self, caplog):
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="wisp.graph.tiers"):
+            self.parse("cheap=a b")
+        assert "ignored 1 entry" in " ".join(r.getMessage() for r in caplog.records)
+
+    def test_nothing_dropped_logs_nothing(self, caplog):
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="wisp.graph.tiers"):
+            self.parse("cheap=a,strong=b")
+            self.parse("")
+        assert caplog.records == []
+
+    def test_a_piece_that_is_not_a_pair_counts_as_dropped(self, caplog):
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="wisp.graph.tiers"):
+            assert self.parse("cheap=a,oops") == {"cheap": "a"}
+        assert "ignored 1 entry" in " ".join(r.getMessage() for r in caplog.records)
+
+    @pytest.mark.parametrize("raw", ['["cheap", "a"]', '"cheap=a"', "{not json"])
+    def test_json_that_is_not_an_object_is_an_empty_map(self, raw):
+        assert self.parse(raw) == {}
+
+    def test_a_broken_json_object_is_logged_as_dropped(self, caplog):
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="wisp.graph.tiers"):
+            self.parse("{not json")
+        assert "ignored 1 entry" in " ".join(r.getMessage() for r in caplog.records)
+
+    @pytest.mark.parametrize("bad", ["cheap", "=a", "cheap=", "cheap=a b", "cheap=a;rm -rf /", "cheap=$(x)", "cheap=a\nb", "cheap=`x`", "cheap=" + "m" * 129, "cheap=../../x", "cheap=a/../b", "cheap=a|b", "cheap=a&b", "cheap='a'"])
+    def test_malformed_entries_are_dropped_not_repaired(self, bad):
+        assert self.parse(bad) == {}
+
+    def test_one_bad_entry_does_not_take_the_good_ones_down(self):
+        assert self.parse("cheap=a b,strong=ok") == {"strong": "ok"}
+
+    def test_unknown_tiers_are_dropped(self):
+        assert self.parse("ultra=x,cheap=a") == {"cheap": "a"}
+
+    def test_tier_names_are_case_insensitive_and_model_names_keep_their_case(self):
+        assert self.parse("CHEAP=Tiny-Model") == {"cheap": "Tiny-Model"}
+
+    def test_a_later_entry_for_the_same_tier_wins(self):
+        assert self.parse("cheap=a,cheap=b") == {"cheap": "b"}
+
+    def test_a_mapping_is_accepted_and_filtered_the_same_way(self):
+        assert self.parse({"cheap": "a", "bogus": "b", "strong": 5, "standard": "c d"}) == {"cheap": "a"}
+
+    def test_a_json_object_string_is_accepted(self):
+        assert self.parse('{"cheap": "a", "strong": "b"}') == {"cheap": "a", "strong": "b"}
+
+    def test_broken_json_is_an_empty_map(self):
+        assert self.parse('{"cheap": "a"') == {}
+
+    def test_a_trailing_or_doubled_comma_is_not_an_error_and_logs_nothing(self, caplog):
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="wisp.graph.tiers"):
+            assert self.parse("cheap=a,") == {"cheap": "a"}
+            assert self.parse(",cheap=a,,strong=b,") == {"cheap": "a", "strong": "b"}
+        assert caplog.records == []
+
+    def test_a_json_list_is_dropped_and_logged(self, caplog):
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="wisp.graph.tiers"):
+            assert self.parse('["cheap", "a"]') == {}
+        assert "ignored" in " ".join(r.getMessage() for r in caplog.records)
+
+    def test_render_leaves_out_what_is_not_a_tier_and_what_is_empty(self):
+        from wisp.graph.tiers import render_model_tiers
+
+        assert render_model_tiers({"bogus": "x", "cheap": "a"}) == "cheap=a"
+        assert render_model_tiers({"cheap": "", "strong": "b"}) == "strong=b"
+
+    def test_render_is_canonical_and_round_trips(self):
+        from wisp.graph.tiers import render_model_tiers
+
+        mapping = {"strong": "b", "cheap": "a", "standard": "m"}
+        assert render_model_tiers(mapping) == "cheap=a,standard=m,strong=b"
+        assert self.parse(render_model_tiers(mapping)) == mapping
+        assert render_model_tiers({}) == ""
