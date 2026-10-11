@@ -126,14 +126,6 @@ def test_child_env_missing_key_names_the_variable_but_never_a_value(monkeypatch,
         J.child_env("", "NOPE_KEY")
 
 
-def test_wisp_command_uses_the_running_interpreter_and_workspace(tmp_path):
-    import sys
-    cmd = J.wisp_command("fix it", tmp_path, "m", "p")
-    assert cmd[:3] == [sys.executable, "-m", "wisp"]
-    assert cmd[cmd.index("--workspace") + 1] == str(tmp_path)
-    assert cmd[cmd.index("--model") + 1] == "m" and cmd[cmd.index("--provider") + 1] == "p"
-
-
 # ── the child's environment: a score must not depend on the machine it ran on ──
 
 #: A stand-in for `wisp --print` that reports what the judge handed it.
@@ -262,3 +254,11 @@ def test_a_name_that_merely_starts_like_home_is_not_isolation_owned():
     J.add_run_flags(ap)
     cfg = J.run_config(ap.parse_args(["--env", "HOMEBREW_PREFIX=/opt/brew", "--env", "XDGX=1"]))
     assert cfg.env == {"HOMEBREW_PREFIX": "/opt/brew", "XDGX": "1"}
+
+
+def test_wisp_command_uses_the_running_interpreter_and_workspace(tmp_path):
+    import sys
+    cmd = J.wisp_command("fix it", tmp_path, "m", "p")
+    assert cmd[:3] == [sys.executable, "-m", "wisp"]
+    assert cmd[cmd.index("--workspace") + 1] == str(tmp_path)
+    assert cmd[cmd.index("--model") + 1] == "m" and cmd[cmd.index("--provider") + 1] == "p"

@@ -44,9 +44,6 @@ IGNORED_DIRS = frozenset({"__pycache__", ".pytest_cache", ".git", ".wisp", ".age
 # Substrings in wisp's output that mean the run died before real work.
 INFRA_MARKERS = ("402", "NO_APPROVER", "Traceback", "Connection refused", "rate limit",
                  "insufficient", "timed out", "401", "403")
-_ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-# Where the child's files go belongs to the isolation, not to a flag.
-_ISOLATION_OWNED = re.compile(r"HOME|XDG_[A-Z_]+")
 
 
 @dataclass
@@ -225,6 +222,11 @@ def child_env(api_base: str = "", key_from: str = "", *, home: Path | None = Non
     if extra:
         env.update(extra)
     return env
+
+
+_ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# Where the child's files go belongs to the isolation, not to a flag.
+_ISOLATION_OWNED = re.compile(r"HOME|XDG_[A-Z_]+")
 
 
 def parse_env_pairs(pairs: Sequence[str], isolate: bool) -> dict[str, str]:
