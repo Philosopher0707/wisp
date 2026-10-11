@@ -89,7 +89,7 @@ AUTHORITIES: list[tuple[str, str, str, str, str]] = [
      "`progress`, `progress_signals` (`wisp/core/convergence.py:1305-1306`, "
      "`wisp/core/convergence.py:1344-1345`) · `measurement_observations` + `measurement_digest` "
      "— the raw payloads, digested over `WITNESS_FIELDS` only (F63; "
-     "`wisp/core/convergence.py:1192-1205`)"),
+     "`wisp/core/convergence.py:1197-1210`)"),
     ("1.5 goal state",
      "`goal.derive_goal_state` (`wisp/core/goal.py:146`); the contract as data is "
      "`goal.PRECEDENCE` (`wisp/core/goal.py:108-117`), 8 rows",
@@ -115,7 +115,7 @@ AUTHORITIES: list[tuple[str, str, str, str, str]] = [
      "class's legal rungs) → **ADR-0047** R6–R13 (R5's unit is the *strategy*, not the rung)",
      "`RecoveryDecision.seq` and `ladder_history` (`wisp/core/recovery.py:574`, "
      "`wisp/core/recovery.py:589`) · `AttemptRecord.rung`, `.directive`, `.failure_class` "
-     "(`wisp/core/convergence.py:1277-1278`, `wisp/core/convergence.py:1299`) · "
+     "(`wisp/core/convergence.py:1282-1283`, `wisp/core/convergence.py:1304`) · "
      "`BudgetGovernor.snapshot()` — reports `productive_continuations` "
      "(`wisp/core/recovery.py:505`)"),
 ]
@@ -133,7 +133,7 @@ SECTION_2 = """\
 > **A run's state is the ladder's escalation if it surrendered, otherwise the last attempt's derived state.**
 
 Source: **ADR-0047 R13**; `goal.derive_goal_state`'s row 2 consumes `escalated` (`wisp/core/goal.py:195`), and the
-convergence loop reads the last `AttemptRecord.goal_state` (`wisp/core/convergence.py:1281`). This is the *only*
+convergence loop reads the last `AttemptRecord.goal_state` (`wisp/core/convergence.py:1286`). This is the *only*
 place the aggregation is stated; a second statement would be a second authority for one question."""
 
 #: `row -> (condition, source)`. The row set and each row's result come from `goal.PRECEDENCE`;
