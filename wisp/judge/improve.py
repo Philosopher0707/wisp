@@ -13,6 +13,7 @@ Every attempt, adopted or not, is appended to the learnings file with its before
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 import tempfile
 from datetime import date
@@ -87,13 +88,19 @@ def meta_prompt(current: str, failures: list[Verdict], tasks: dict[str, Task]) -
 
 
 def wisp_proposer(cfg: core.RunConfig) -> Proposer:
-    """Proposer backed by one headless wisp call in an empty workspace."""
+    """Proposer backed by one headless wisp call in an empty workspace, with the same environment rules as a task run."""
     def ask(prompt: str) -> str:
         ws = Path(tempfile.mkdtemp(prefix="wispimprove-"))
-        p = subprocess.run(core.wisp_command(prompt, ws, cfg.model, cfg.provider), cwd=ws,
-                           capture_output=True, text=True, timeout=cfg.timeout,
-                           env=core.child_env(cfg.api_base, cfg.key_from))
-        return core.parse_message(p.stdout)
+        home = Path(tempfile.mkdtemp(prefix="wispimprove-home-")) if cfg.isolate else None
+        try:
+            p = subprocess.run(core.wisp_command(prompt, ws, cfg.model, cfg.provider), cwd=ws,
+                               capture_output=True, text=True, timeout=cfg.timeout,
+                               env=core.child_env(cfg.api_base, cfg.key_from, home=home, extra=cfg.env, isolate=cfg.isolate))
+            return core.parse_message(p.stdout)
+        finally:
+            shutil.rmtree(ws, ignore_errors=True)
+            if home is not None:
+                shutil.rmtree(home, ignore_errors=True)
     return ask
 
 
