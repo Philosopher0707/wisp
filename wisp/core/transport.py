@@ -58,6 +58,7 @@ __all__ = [
     "get_hardened_async_httpx_client",
     "is_transient_error",
     "is_transient_status",
+    "parse_retry_after",
     "with_retry",
     "hardened_post",
     "hardened_get",
@@ -448,6 +449,40 @@ def is_transient_status(status_code: Optional[int]) -> bool:
     return status_code == 429 or 500 <= status_code <= 599
 
 
+def parse_retry_after(value: Any, *, now: Optional[float] = None) -> Optional[float]:
+    """Seconds a server asked a client to wait (``Retry-After``: delay-seconds or an HTTP-date), or None.
+
+    Total and side-effect free: a missing, malformed, negative, non-finite or absurd value is None (the caller then uses its own
+    backoff), and a date in the past is 0.0. The caller decides how long it is willing to wait; this only reads what was said.
+    """
+    import math
+
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        seconds = float(value)
+    elif isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            seconds = float(text)
+        except ValueError:
+            try:
+                import email.utils
+
+                parsed = email.utils.parsedate_to_datetime(text)
+            except (TypeError, ValueError, IndexError, OverflowError):
+                return None
+            if parsed is None:
+                return None
+            seconds = parsed.timestamp() - (time.time() if now is None else now)
+            return max(seconds, 0.0) if math.isfinite(seconds) else None
+    else:
+        return None
+    return seconds if math.isfinite(seconds) and seconds >= 0 else None
+
+
 def is_transient_error(exc: BaseException) -> bool:
     """Check if exception is transient and retryable.
 
@@ -739,6 +774,7 @@ def hardened_post(
     stream: bool = False,
     timeout: HardenedTimeout | tuple[float, float] | None = None,
     max_attempts: int = 3,
+    retry_status: bool = True,
     **kwargs: Any,
 ) -> Any:
     """POST with hardened timeouts and transient retry.
@@ -757,6 +793,10 @@ def hardened_post(
         stream: Whether to stream response
         timeout: Override timeout (HardenedTimeout or (connect, read) tuple)
         max_attempts: Max attempts (3 = 2 retries)
+        retry_status: Retry a transient HTTP STATUS (429, 5xx) here. True keeps the historical behaviour. A caller that has its own,
+            smarter policy for statuses (the provider stream, which knows ``Retry-After`` and the turn) passes False and gets the
+            response back after one request, so two layers never multiply into nine requests. Transport ERRORS (write timeout,
+            connection reset) are retried either way: nothing above can tell them from a stall.
         **kwargs: Additional args passed to post
 
     Returns:
@@ -815,7 +855,7 @@ def hardened_post(
 
             # Check for transient status codes - retry before returning
             status = getattr(resp, "status_code", None)
-            if is_transient_status(status) and attempt < max_attempts:
+            if retry_status and is_transient_status(status) and attempt < max_attempts:
                 # Close the response body to return the socket to the pool
                 # before sleeping — prevents pool starvation under 429 bursts.
                 try:

@@ -186,3 +186,65 @@ class TestSecurePersistence:
 
         ok, detail = _probe("nope-provider", "m", "", "", timeout_s=3.0)
         assert ok is False and isinstance(detail, str) and detail
+
+
+# ── Ctrl-C / Ctrl-D: an abort, not a traceback ───────────────────────────────────────────────────────────────
+
+
+def _interrupting(script: Script, at: str, exc: BaseException):
+    """An input function that behaves like `script`, but raises `exc` at the prompt containing `at`."""
+
+    def fn(prompt: str = "") -> str:
+        if at in prompt:
+            script.out.append(prompt)
+            raise exc
+        return script.input(prompt)
+    return fn
+
+
+def test_ctrl_c_at_the_custom_model_prompt_is_a_clean_abort(no_persist):
+    """The reported case: provider 3 (nvidia), model 4 (custom), then Ctrl-C at 'Custom model name:'."""
+    s = Script(["3", "4"])
+    result = run_setup(input_fn=_interrupting(s, "Custom model name", KeyboardInterrupt()),
+                       password_fn=s.password, out=s.write)
+    assert result is None
+    assert "cancelled" in s.text.lower() and "nothing was saved" in s.text.lower()
+    assert no_persist == {"persist": [], "store_key": []}
+
+
+def test_ctrl_d_at_any_prompt_is_a_clean_abort(no_persist):
+    s = Script([])
+    assert run_setup(input_fn=_interrupting(s, "Provider", EOFError()), password_fn=s.password, out=s.write) is None
+    assert "cancelled" in s.text.lower() and no_persist == {"persist": [], "store_key": []}
+
+
+def test_ctrl_c_at_the_hidden_key_prompt_is_a_clean_abort(no_persist, monkeypatch):
+    for var in ("NVIDIA_API_KEY", "WISP_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    s = Script(["3", "1"])
+
+    def password(prompt: str = "") -> str:
+        raise KeyboardInterrupt
+
+    assert run_setup(input_fn=s.input, password_fn=password, out=s.write) is None
+    assert "cancelled" in s.text.lower() and no_persist == {"persist": [], "store_key": []}
+
+
+def test_ctrl_c_during_the_validation_handshake_saves_nothing(no_persist, monkeypatch):
+    for var in ("NVIDIA_API_KEY", "WISP_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    s = Script(["3", "1"], passwords=["nvapi-test"])
+
+    def probe(provider, model, key, base, timeout_s=8.0):
+        raise KeyboardInterrupt
+
+    assert run_setup(input_fn=s.input, password_fn=s.password, out=s.write, probe_fn=probe) is None
+    assert no_persist == {"persist": [], "store_key": []}
+
+
+def test_a_normal_completion_is_unchanged_by_the_abort_handling(no_persist, monkeypatch):
+    for var in ("NVIDIA_API_KEY", "WISP_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    s = Script(["3", "1"], passwords=["nvapi-test"])
+    result = run_setup(input_fn=s.input, password_fn=s.password, out=s.write, probe_fn=_ok_probe)
+    assert result and result["saved"] is True and no_persist["persist"]

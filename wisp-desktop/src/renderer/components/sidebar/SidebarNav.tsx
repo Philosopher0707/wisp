@@ -9,7 +9,7 @@ export const SidebarNav: React.FC = () => {
 
   const handleClick = (label: string) => {
     switch (label) {
-      case 'New Chat':
+      case 'New session':
         dispatch({ type: 'NEW_CHAT' });
         break;
       case 'Search':
@@ -22,7 +22,7 @@ export const SidebarNav: React.FC = () => {
   };
 
   const navItems = [
-    { icon: Pencil, label: 'New Chat' },
+    { icon: Pencil, label: 'New session' },
     { icon: Search, label: 'Search' },
     { icon: Grid3x3, label: 'Plugins' },
   ];

@@ -5,6 +5,7 @@ Handles workspace operations.
 
 import logging
 import os
+import sys
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -21,6 +22,36 @@ WORKSPACE_ROOT.mkdir(parents=True, exist_ok=True)
 _WORKSPACE_MUTABLE = os.environ.get("WISP_WORKSPACE_MUTABLE", "true").lower() == "true"
 
 router = APIRouter()
+
+# Route modules that lazily build something bound to the workspace (an index, a manager, a watcher). After a switch they must
+# be rebuilt for the new folder, so each cache is cleared and rebuilds on its next use.
+_WORKSPACE_BOUND_CACHES = {
+    "wisp.server.routes.codebase": "_semantic_index",
+    "wisp.server.routes.mcp": "_mcp_manager",
+    "wisp.server.routes.suggestions": "_app_suggestion_watcher",
+}
+
+
+def _rebind_workspace_root(old: Path, new: Path) -> int:
+    """Point every server module at the new workspace.
+
+    About twenty route modules did `from ...workspace import WORKSPACE_ROOT`, which copies the Path at import time, so
+    reassigning it here never reached them: after a switch, Diff, Files, git and the shell routes kept operating on the
+    OLD folder. Rebinding by identity (only modules that still hold the old value) is explicit and does not touch anything
+    that was deliberately given another path. Returns how many modules were rebound.
+    """
+    rebound = 0
+    for name, mod in list(sys.modules.items()):
+        if mod is None or not name.startswith("wisp.server"):
+            continue
+        if name != __name__ and getattr(mod, "WORKSPACE_ROOT", None) == old:
+            mod.WORKSPACE_ROOT = new
+            rebound += 1
+    for mod_name, attr in _WORKSPACE_BOUND_CACHES.items():
+        mod = sys.modules.get(mod_name)
+        if mod is not None and getattr(mod, attr, None) is not None:
+            setattr(mod, attr, None)
+    return rebound
 
 
 class WorkspaceRequest(BaseModel):
@@ -62,7 +93,9 @@ async def set_workspace(req: WorkspaceRequest, request: Request):
             detail=f"Workspace path must be within allowed roots: {allowed_roots_raw}"
         )
 
+    old_root = WORKSPACE_ROOT
     WORKSPACE_ROOT = new_root
+    _rebind_workspace_root(old_root, new_root)
     # Update CompositionRoot config if available
     root = getattr(request.app.state, "root", None)
     if root is not None:

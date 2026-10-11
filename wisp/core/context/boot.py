@@ -11,11 +11,18 @@ current structure, so splitting memory/git/repomap OUT of it would churn
 dozens of goldens for no cache gain (they're mtime-cached already). The
 new bytes this module adds are guidelines discovery (AGENTS.md/CLAUDE.md
 were never loaded) in spec order.
+
+User-level guidelines (`~/.config/wisp/CLAUDE.md`) come first. Only the web
+route (`WispConfig.load_context_files`) used to read that file, so a user's
+global instructions never reached a terminal session. They get their own
+budget, so neither file can evict the other. `WISP_USER_GUIDELINES=off`
+keeps the file out (it is sent to the provider).
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -30,9 +37,13 @@ __all__ = [
     "BUDGET_CHARS",
     "TRUNCATION_NOTE",
     "GIT_TIMEOUT_S",
+    "USER_GUIDELINES_LABEL",
+    "user_guidelines_path",
 ]
 
 GUIDELINE_CANDIDATES = ("AGENTS.md", "CLAUDE.md", ".wisp/instructions.md")
+USER_GUIDELINES_LABEL = "~/.config/wisp/CLAUDE.md"
+_OFF = frozenset({"off", "0", "false", "no"})
 # 2,000 tokens at the repo's chars_per_token=4 convention.
 BUDGET_CHARS = 8000
 TRUNCATION_NOTE = "\n\n[... Project instructions truncated at 2,000 token limit ...]"
@@ -43,6 +54,16 @@ REPOMAP_CHARS = 2000
 
 def _est_tokens(text: str) -> int:
     return max(0, len(text or "") // 4)
+
+
+def user_guidelines_path() -> Path | None:
+    """The user-level guidelines file, or None when `WISP_USER_GUIDELINES` switches it off.
+
+    Resolved per call so a changed HOME is honoured. The switch is read here and nowhere else.
+    """
+    if os.environ.get("WISP_USER_GUIDELINES", "").strip().lower() in _OFF:
+        return None
+    return Path.home() / ".config" / "wisp" / "CLAUDE.md"
 
 
 def _clean_cut(text: str, budget: int) -> tuple[str, bool]:
@@ -71,6 +92,7 @@ class BootPayload:
     bytes: int = 0
     est_tokens: int = 0
     guidelines: str = ""
+    user_guidelines: str = ""
     posture: str = ""
     memory_bullets: list[str] = field(default_factory=list)
     repomap_skeleton: str = ""
@@ -116,6 +138,19 @@ class BootContextAssembler:
             except UnicodeDecodeError:
                 return name, raw.decode("utf-8", errors="replace")
         return None, ""
+
+    def discover_user(self) -> str:
+        """The user-level file's text, or "" when it is off, absent or unreadable; never raises."""
+        path = user_guidelines_path()
+        if path is None:
+            return ""
+        try:
+            if not path.is_file():
+                return ""
+            raw = path.read_bytes()
+        except OSError:
+            return ""
+        return raw.decode("utf-8", errors="replace")
 
     # ── 2. Posture ────────────────────────────────────────────────
 
@@ -231,12 +266,17 @@ class BootContextAssembler:
         source, guidelines = self.discover()
         if guidelines and len(guidelines) > self.budget_chars:
             guidelines, _ = _clean_cut(guidelines, self.budget_chars)
+        user = self.discover_user()
+        if user and len(user) > self.budget_chars:
+            user, _ = _clean_cut(user, self.budget_chars)
         posture = self.git_posture()
         sandbox = self.sandbox_posture()
         bullets = self.memory_bullets()
         skeleton = self.repomap_skeleton()
 
         sections: list[str] = []
+        if user:
+            sections.append(f"## User guidelines ({USER_GUIDELINES_LABEL})\n{user}")
         if guidelines:
             sections.append(f"## Project guidelines ({source})\n{guidelines}")
         posture_text = (
@@ -253,7 +293,7 @@ class BootContextAssembler:
         # Inject only when something beyond bare posture exists: guidelines,
         # memory, or symbols. A posture-only frame burns tokens every
         # session for near-zero signal (git state already rides the prompt).
-        substantive = bool(guidelines or bullets or skeleton)
+        substantive = bool(user or guidelines or bullets or skeleton)
         text = ""
         if substantive:
             text = ("[Session boot context — workspace reality for this session. "
@@ -262,7 +302,7 @@ class BootContextAssembler:
         return BootPayload(
             source=source, status="found" if source else "none",
             bytes=raw_bytes, est_tokens=_est_tokens(guidelines),
-            guidelines=guidelines, posture=posture_text,
+            guidelines=guidelines, user_guidelines=user, posture=posture_text,
             memory_bullets=bullets, repomap_skeleton=skeleton, text=text)
 
     def seed_message(self) -> dict[str, str] | None:

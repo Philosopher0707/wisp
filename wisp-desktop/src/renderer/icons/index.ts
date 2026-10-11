@@ -60,4 +60,13 @@ export {
   AlertCircle,
   Lightbulb,
   Info,
+  Terminal,
+  Globe,
+  FileDiff,
+  PanelLeft,
+  Check,
+  ArrowLeft,
+  ArrowRight,
+  Cpu,
+  Circle,
 } from 'lucide-react';

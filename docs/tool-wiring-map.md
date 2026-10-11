@@ -65,3 +65,16 @@ matters more than partial output.
 3. **Plugins** stay unadvertised until a real manifest→code loading contract
    exists. The invariant test converts any future silent advertisement into a
    red suite.
+
+## Where a tool call is gated, and where its result is cleaned (verified 2026-10-07)
+
+Before dispatch, `WispAgentCore._gate_tool_call` runs, in this order, and the first refusal wins: role restriction, schema dry-run,
+**invariant gates** (`wisp/core/gates`; a refusal is `POLICY_DENIED` with `_src="invariant_gate"`, never overridable by approval), the
+approval gate, extension intercept. After execution, in `_turn_inner`, a `tool_result` event passes `withhold_if_injected`, then
+`scrub_secrets` (layer 3), and only then is appended to the conversation; the completion guard (`VerificationFloorGuard.note_tool_result`,
+single call site) receives the full command in `args["__command__"]` so only a real verification run counts.
+
+Known gap: the engine yields a **flat** dict (`{type, name, result, ...}`) and `withhold_if_injected`/`_payload` only understand a nested or
+`.data` shape, so the prompt-injection withholding does not fire on a real turn (`scrub_secrets` uses `_result_holder`, which handles both).
+A follow-up task is open; see `AGENTS_LEARNING.md`.
+

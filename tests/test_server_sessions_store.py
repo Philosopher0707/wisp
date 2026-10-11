@@ -66,6 +66,9 @@ class TestSessionsServeWorkspaceStore:
         """No-root fallback path still resolves via infra get_store."""
         import wisp.infra.store as store_mod
 
+        # The listing also reads the machine's OTHER Wisp stores (~/.config/wisp, ~/.wisp); point home at an empty folder so
+        # this test sees only the fallback store, as on a fresh machine. (CI's home had stores left by earlier tests.)
+        monkeypatch.setattr("pathlib.Path.home", classmethod(lambda cls: tmp_path / "empty-home"))
         fallback = _seeded_store(tmp_path / "home.db", sid="fallback-1")
         monkeypatch.setattr(store_mod, "get_store", lambda *a: fallback)
         client = _app_with_root(None)

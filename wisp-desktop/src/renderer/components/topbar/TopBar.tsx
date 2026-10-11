@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useAppState } from '../../state/context.js';
 import { useApi, type GitStatus } from '../../hooks/useApi.js';
-import { User, Folder, Square, Code2, Download, GitBranch } from '../../icons/index.js';
+import { Folder, Code2, Download, GitBranch, PanelLeft } from '../../icons/index.js';
 import { IconButton } from '../common/IconButton.js';
 import { PrincipalCapabilityChip } from '../PrincipalCapabilityChip.js';
 import type { CapabilityResponse } from '../../hooks/useApi.js';
+import { DOCK_TABS } from '../dock/Dock.js';
 import './TopBar.css';
 
 const STATUS_LABELS: Record<string, string> = {
@@ -103,17 +104,17 @@ export const TopBar: React.FC = () => {
     ? state.workspacePath.split('/').pop() || state.workspacePath
     : '';
 
+  const title = state.sessions.find((x) => x.id === state.sessionId)?.title || (state.messages.length > 0 ? 'Current session' : 'New session');
+
   return (
-    <header className="topbar">
-      <div className="topbar-left">
-        <button
-          className="topbar-new-chat-btn"
-          onClick={() => dispatch({ type: 'NEW_CHAT' })}
-        >
-          New chat
-        </button>
+    <header className={`topbar${state.sidebarCollapsed ? ' topbar--sidebar-hidden' : ''}`}>
+      <div className="topbar-title">
+        {state.sidebarCollapsed && (
+          <IconButton icon={PanelLeft} size={16} title="Show sidebar" onClick={() => dispatch({ type: 'TOGGLE_SIDEBAR' })} />
+        )}
+        <span className="topbar-title-text" title={title}>{title}</span>
       </div>
-      <div className="topbar-center">
+      <div className="topbar-meta">
         {wsLabel && (
           <span className="topbar-ws-label" title={state.workspacePath}>
             <Folder size={12} />
@@ -148,27 +149,21 @@ export const TopBar: React.FC = () => {
         </span>
       </div>
       <div className="topbar-right">
-        <IconButton
-          icon={Code2}
-          size={18}
-          title="Open in VS Code"
-          onClick={openVSCode}
-        />
-        <IconButton
-          icon={Download}
-          size={18}
-          title="Export conversation"
-          onClick={handleExport}
-        />
-        <IconButton icon={User} size={18} title="Account" />
-        <IconButton
-          icon={Folder}
-          size={18}
-          title="Files"
-          active={state.rightPanelOpen}
-          onClick={() => dispatch({ type: 'TOGGLE_RIGHT_PANEL' })}
-        />
-        <IconButton icon={Square} size={18} title="New Window" />
+        <span className="topbar-tools">
+          <IconButton icon={Code2} size={17} title="Open in VS Code" onClick={openVSCode} />
+          <IconButton icon={Download} size={17} title="Export conversation" onClick={handleExport} />
+          <span className="topbar-divider" />
+        </span>
+        {DOCK_TABS.map(({ id, label, icon }) => (
+          <IconButton
+            key={id}
+            icon={icon}
+            size={17}
+            title={`${label}${state.rightPanelOpen && state.dockTab === id ? ' (click to close)' : ''}`}
+            active={state.rightPanelOpen && state.dockTab === id}
+            onClick={() => dispatch({ type: 'SET_DOCK_TAB', tab: id })}
+          />
+        ))}
       </div>
     </header>
   );

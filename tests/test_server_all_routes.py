@@ -130,6 +130,7 @@ class TestServerMain:
         assert "/api/complete" in paths
         assert "/api/workspace" in paths
         assert "/api/git" in paths
+        assert "/api/git/diff" in paths
         assert "/api/context" in paths
         assert "/api/bash" in paths
         assert "/api/review/best-of-n" in paths

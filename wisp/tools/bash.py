@@ -6,6 +6,7 @@ and output size limits.
 
 import asyncio
 import logging
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,7 +33,52 @@ logger = logging.getLogger(__name__)
 _HOST_PROVIDER_NAMES = frozenset({"host", "noop"})
 
 
-def _format_bash_output(returncode: int, stdout_str: str, stderr_str: str) -> str:
+# A shell reports the LAST stage's status for a pipeline, so `swift build 2>&1 | tail -30` exits 0 when swift fails. The
+# command is followed by an epilogue that records every stage's status (`PIPESTATUS`) and re-exits with the real status,
+# so the exit code keeps its shell meaning while a masked failure can be reported. SIGPIPE (141) is excluded: `yes | head -1`
+# kills the first stage by design.
+_PIPE_MARK = "__WISP_PIPESTATUS__"
+_PIPE_EPILOGUE = (
+    '\n__wisp_rc=$? __wisp_ps=("${PIPESTATUS[@]}")\n'
+    f"printf '\\n{_PIPE_MARK} %s\\n' \"${{__wisp_ps[*]}}\" >&2\n"
+    'exit "$__wisp_rc"\n'
+)
+_PIPE_RE = re.compile(rf"(?:\r?\n)?{_PIPE_MARK} ([0-9 ]*)\r?\n?\s*\Z")
+_SIGPIPE = 141
+
+
+def _with_pipestatus(command: str) -> str:
+    return command + _PIPE_EPILOGUE
+
+
+def _take_pipestatus(stdout: str, stderr: str) -> tuple[str, str, tuple[int, ...]]:
+    """Remove the epilogue's marker from whichever stream carries it (a PTY merges stderr into stdout)."""
+    for which, text in (("stderr", stderr), ("stdout", stdout)):
+        m = _PIPE_RE.search(text)
+        if m:
+            codes = tuple(int(c) for c in m.group(1).split())
+            text = text[: m.start()]
+            return (stdout, text, codes) if which == "stderr" else (text, stderr, codes)
+    return stdout, stderr, ()
+
+
+def _masked_failures(returncode: int, codes: tuple[int, ...]) -> tuple[tuple[int, int], ...]:
+    """(stage, status) for earlier pipeline stages that failed while the command as a whole exited 0."""
+    if returncode != 0 or len(codes) < 2:
+        return ()
+    return tuple((i + 1, c) for i, c in enumerate(codes[:-1]) if c not in (0, _SIGPIPE))
+
+
+def pipeline_note(failures: tuple[tuple[int, int], ...]) -> str:
+    if not failures:
+        return ""
+    parts = ", ".join(f"stage {i} exited {c}" for i, c in failures)
+    return (f"[pipeline: {parts}; the exit code is the last stage's, so the command reads as successful. "
+            "Use `set -o pipefail` to make it fail.]")
+
+
+def _format_bash_output(returncode: int, stdout_str: str, stderr_str: str,
+                        pipeline_failures: tuple[tuple[int, int], ...] = ()) -> str:
     """Shape raw (exit, stdout, stderr) into the model-facing result.
 
     Shared by the host and sandbox paths so confinement never changes the
@@ -42,6 +88,9 @@ def _format_bash_output(returncode: int, stdout_str: str, stderr_str: str) -> st
     output = ""
     if returncode != 0:
         output = f"[exit code: {returncode}]\n"
+    note = pipeline_note(pipeline_failures)
+    if note:
+        output += note + "\n"
     if stdout_str:
         output += stdout_str
     if stderr_str:
@@ -65,6 +114,7 @@ class BashRun:
     provider: str
     duration_ms: int
     timed_out: bool
+    pipeline_failures: tuple[tuple[int, int], ...] = ()
 
 
 async def run_bash_confined(command: str, workspace: str, timeout: int = 60) -> BashRun:
@@ -153,7 +203,7 @@ async def run_bash_confined(command: str, workspace: str, timeout: int = 60) -> 
     start_time = time.time()
     try:
         returncode, stdout_str, stderr_str = await sandbox.run(
-            command, cwd="", timeout=timeout_val)
+            _with_pipestatus(command), cwd="", timeout=timeout_val)
     except asyncio.CancelledError:
         logger.warning("Command execution cancelled: %.100s", redact(command))
         raise
@@ -165,12 +215,14 @@ async def run_bash_confined(command: str, workspace: str, timeout: int = 60) -> 
     except Exception as e:
         logger.error("Unexpected error in run_bash: %s", e)
         raise ToolError(f"Command failed: {e}")
+    stdout_str, stderr_str, stage_codes = _take_pipestatus(stdout_str, stderr_str)
     timed_out = returncode == -1 and "timed out" in stderr_str.lower()
     if timed_out:
         logger.warning("Command timed out after %ds: %.100s", timeout_val, redact(command)[:100])
     return BashRun(
         returncode=returncode, stdout=stdout_str, stderr=stderr_str, provider=provider_name,
-        duration_ms=round((time.time() - start_time) * 1000), timed_out=timed_out)
+        duration_ms=round((time.time() - start_time) * 1000), timed_out=timed_out,
+        pipeline_failures=_masked_failures(returncode, stage_codes))
 
 
 def timeout_error(command: str, timeout: int) -> ToolError:
@@ -186,7 +238,7 @@ async def async_tool_run_bash(command: str, workspace: str, timeout: int = 60) -
     run = await run_bash_confined(command, workspace, timeout)
     if run.timed_out:
         raise timeout_error(command, _validate_int(timeout, "timeout", 1, 3600))
-    output = _format_bash_output(run.returncode, run.stdout, run.stderr)
+    output = _format_bash_output(run.returncode, run.stdout, run.stderr, run.pipeline_failures)
     logger.info(
         "Bash execution — workspace=%s sandbox=%s command=%.100s exit_code=%d output_len=%d duration_ms=%d",
         workspace, run.provider, redact(command), run.returncode, len(output), run.duration_ms,

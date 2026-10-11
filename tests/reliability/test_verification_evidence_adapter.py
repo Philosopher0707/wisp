@@ -171,15 +171,20 @@ class TestAFailingVerificationIsNotSuccess:
 # ══════════════════════════════════════════════════════════════════════════
 
 
+# The control is a REAL verifier that passes. It used to be `echo fine`, which exits 0 on broken code and so proved nothing; the
+# invariant gate (wisp/core/gates/verify.py) no longer counts such a command, and tests/gates/test_verify.py pins that.
+_PASSING_VERIFIER = "python3 -m compileall -q ."
+
+
 class TestASuccessfulVerificationStillVerifies:
     def test_the_guard_records_success(self, tmp_path):
-        turn = _mutate_then(tmp_path, "run_bash", {"command": "echo fine"}, sid="ok")
+        turn = _mutate_then(tmp_path, "run_bash", {"command": _PASSING_VERIFIER}, sid="ok")
         assert turn.guard.wrote_code is True
         assert turn.guard.verify_ok_after_edit is True
         assert turn.guard.resolved() is True
 
     def test_p3_passes_and_the_goal_is_met(self, tmp_path):
-        turn = _mutate_then(tmp_path, "run_bash", {"command": "echo fine"}, sid="ok")
+        turn = _mutate_then(tmp_path, "run_bash", {"command": _PASSING_VERIFIER}, sid="ok")
         assert turn.acceptance == "pass"
         assert turn.goal == "goal_met"
 

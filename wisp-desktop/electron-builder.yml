@@ -1,41 +1,31 @@
 appId: com.wisp.desktop
 productName: Wisp
+afterPack: scripts/adhoc-sign.cjs
 directories:
   output: release
   buildResources: resources
 files:
   - out/**/*
+# The backend is NOT the repository's source tree: scripts/bundle-backend.sh builds build/backend (a relocatable Python with wisp and
+# its dependencies installed), and that is what ships, so the app needs nothing from the machine it runs on.
 extraResources:
-  - from: ../wisp
-    to: backend/wisp
+  - from: build/backend
+    to: backend
     filter:
       - "**/*"
-      - "!.venv/**"
-      - "!__pycache__/**"
-      - "!tests/**"
-      - "!.git/**"
-      - "!*.egg-info/**"
-      - "!graphify-out/**"
-      - "!.playwright-mcp/**"
-      - "!.pytest_cache/**"
-      - "!wisp-desktop/**"
-      - "!wisp-tui/**"
-      - "!vscode-extension/**"
-      - "!android/**"
-      - "!docs/**"
-      - "!examples/**"
-      - "!skills/**"
-      - "!workspace/**"
       - "!**/.DS_Store"
-      - "!*.md"
+      - "!BUNDLE.txt"
 mac:
   icon: resources/icon.icns
   category: public.app-category.developer-tools
   target:
-    - dmg
-    - zip
+    - target: dmg
+      arch: [arm64]
+    - target: zip
+      arch: [arm64]
   artifactName: Wisp-${version}-mac.${ext}
   darkModeSupport: true
+  identity: null # signing is done by afterPack (ad-hoc); set a Developer ID here to sign and notarize for distribution
 
 # Auto-updates via GitHub Releases
 # electron-updater will poll ${repo}/releases/latest/latest-mac.yml

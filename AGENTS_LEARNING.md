@@ -467,6 +467,14 @@ Still open: ~30% of the prompt is appended after budgeting; `config.skill_dirs` 
 - **A mutation that survived taught the test rule:** with `entry()` not arming on `SystemExit` no test failed, because a fake `main` that exits normally never hangs. A test for a safety net must leave the failure condition present (a stuck non-daemon thread) on every path it guards.
 - **Capture the culprit if it recurs:** `PYTHONFAULTHANDLER=1 wisp repl`, then from another terminal `kill -ABRT $(pgrep -f "wisp repl")` dumps every thread's stack.
 
+## wisp setup: Ctrl-C at a prompt printed a traceback (2026-10-06)
+
+- **Symptom (user's terminal):** `wisp setup`, provider 3, model 4 (custom), Ctrl-C at "Custom model name:" printed a full `KeyboardInterrupt` traceback through `entry()`, `_do_setup` and `run_setup`.
+- **Cause:** `run_setup`'s docstring promised `None` when aborted, but only the typed "abort" choice returned it. Ctrl-C and Ctrl-D (`EOFError`) at any prompt, the hidden key prompt and the validation handshake were not caught, and `entry()` re-raises `KeyboardInterrupt` after arming the exit watchdog.
+- **Fix:** `run_setup` wraps the wizard and turns both into "Setup cancelled. Nothing was saved." with `None`. Nothing has been written at that point, because the choice is persisted only after the last step (checked by a test that fails if `persist` or `store_key` is called).
+- **How it was tested:** unit tests with an injected input that raises at the exact prompt (the first one reproduced the traceback before the fix), and a real pty run of the reported keystrokes: no traceback, the message, exit code 1, and no file written to a temporary HOME.
+- **Not changed:** other subcommands still show a traceback on Ctrl-C through `entry()`; only the wizard was reported and fixed. A general `entry()` change would alter every command's exit behaviour and needs its own decision.
+
 ## wisp judge: what the first CI run and the build taught (2026-10-06)
 
 - **`--provider X` inherited another provider's endpoint and key:** a flag path that replaces only `provider` keeps `WISP_API_BASE`/`WISP_API_KEY` written for the configured provider. Fixed in `with_provider()` (PR 92). Evidence: building the NVIDIA provider from the real config gave `openrouter.ai` + the shared key before, `integrate.api.nvidia.com` + `NVIDIA_API_KEY` after. A live call could not tell them apart once OpenRouter answered again, so test the construction, not the call.
@@ -475,6 +483,233 @@ Still open: ~30% of the prompt is appended after budgeting; `config.skill_dirs` 
 - **Choose the local test slice from CI's failures, not from guesses:** my architecture-test filter by file name missed `test_doc_drift` and `test_module_orphans`, and the first CI run of the PR caught both. `AGENTS.md` states a test-file count with a tolerance of 40; `main` was at 439 against 400, so any four new test files tipped it.
 - **`rtk` filters output and can mislead:** it showed `06bc076` as `origin/main` when the real value was `f660329`. Use `rtk proxy git ...` for a SHA or a count that decides something.
 - **Verify a subcommand through the checkout under test:** a subprocess `python -m wisp judge ...` ran the older installed wisp, which has no `judge` and sent "judge run ..." to the model as a prompt (a mock reply, exit 0, a green-looking wrong result). The end-to-end test sets `PYTHONPATH` to its own checkout.
+
+
+## background jobs: supervisor process, process-tree kill, tier semantics (2026-10-07)
+
+Search words: background job, run_in_background, supervisor, orphan, process group, pgid, SIGTERM, PTY, DockerSandbox, container leak, zombie, ps environment, macOS SIP, reaper.
+
+- Background **subagents already exist** (`spawn_background`, durable run rows, finished-agent notices in the next turn's operating context). The gap was background **shell** jobs and surviving restarts. Design: `docs/harness/background-jobs-design.md`; code `wisp/jobs/`; skill `.agents/skills/background-process-supervision`.
+- **`run_bash_confined` is a black box that cannot be killed from outside.** It awaits the tier router and returns at the end; the PTY tier runs in a worker thread that a cancel does not stop (its child has its own session); the Docker tier leaves the command running when the `docker exec` client dies. So the supervisor kills the process **tree** (found by parent pid) and removes its own container; the tiers' kill is not relied on.
+- **The tiers' own kill hides evidence**: the host tier kills the process group first, orphaning grandchildren to init before a tree walk. Capture the tree before cancelling and keep snapshots; also sweep by process group (an orphan keeps its pgid).
+- **macOS `ps` hides the environment of Apple-signed binaries**, so an env-marker sweep finds nothing for `bash`/`sleep` (it works on Linux). Changing `os.environ` after start is invisible to `ps`. A zombie still shows in `ps` (treat `Z` as dead).
+- **A background process that keeps stdout open keeps the job alive** (tiers wait for EOF), so "leftover killed at job end" only applies to processes that closed their pipes.
+- **A first mutation probe over the new package had 17 survivors out of 44**, almost all real: traversal ids with an existing component, a non-integer exit code, the force-kill path (needs a SIGSTOPped supervisor), kill-before-start, runtime clamping, the reap and prune calls in spawn, the zombie rule. Docker-only mutants need the opt-in suite.
+- Existing leak, not caused by jobs: 66 exited `wisp-sandbox-*` containers (one per `DockerSandbox` instance, never removed). The supervisor removes its own container on every exit path and the reaper removes it after a hard kill.
+- The danger check refuses inline interpreter code in test commands; the orphan scanner counts `from pkg import mod` as importing `pkg` only (use `import pkg.mod as mod`), and a module launched with `python -m` needs a `KNOWN_UNREFERENCED` entry.
+- Verified on this machine: host tier, PTY tier (Docker off the PATH), and Docker tier (opt-in, kill removes the container, reaper removes it after a SIGKILLed supervisor). Not verified: Linux for the jobs suite (the env-marker test is Linux-only), concurrency at fd/disk limits, the watchdog backstop (needs fault injection).
+
+## macOS app: self-contained Wisp.app (bundled Python), packaging and verification (2026-10-06)
+
+Search words: electron-builder, python-build-standalone, uv, codesign, ad-hoc, afterPack, Gatekeeper, bundled backend, Wisp.app.
+
+- Ship the interpreter, not the machine's Python: `wisp-desktop/scripts/bundle-backend.sh` copies a uv-managed python-build-standalone 3.12 and `uv pip install`s wisp into it (non-editable, so both `wisp` and `agent` land in site-packages). The app resolves WISP_PYTHON, then `Resources/backend/python/bin/python3`, then dev venv, then system python (`src/main/backend-launch.ts`, 21 unit tests).
+- Seal the bundled interpreter: `PYTHONDONTWRITEBYTECODE=1` (never write into a signed app), `PYTHONNOUSERSITE=1` (a user package must not shadow the bundled one), drop `PYTHONHOME`.
+- `import wisp.server` creates `WISP_WORKSPACE` (default `/workspace`) at import time; on a Mac that fails with a read-only file system. Any smoke import must set a scratch `WISP_WORKSPACE`. Evidence: the first bundle smoke run.
+- electron-builder with an unsigned bundle leaves a broken seal (`codesign --verify`: "code has no resources but signature indicates they must be present"). Ad-hoc sign in an `afterPack` hook (`scripts/adhoc-sign.cjs`) with `mac.identity: null`. Ad-hoc is not a Developer ID: other Macs need right-click > Open until the app is signed and notarized.
+- Verify the artifact you ship, not the build directory: `scripts/verify-packaged.mjs` launches the app (Playwright `_electron`, throwaway HOME) and checks window, managed backend, health, 401 without and with a wrong key, backend is the bundled python, loopback only, no renderer errors, and no orphan after quit. It passed on `release/mac-arm64/Wisp.app` and on the app unzipped from `Wisp-0.1.0-mac.zip`.
+- `npx electron-builder` can fail with "Missing script"; call `./node_modules/.bin/electron-builder`.
+
+## desktop layout: sidebar / header / workbench dock, overlap checks (2026-10-06)
+
+Search words: overlap, header, traffic lights, hiddenInset, container query, WebContentsView, dock, diff tab, box-sizing.
+
+- macOS window buttons (`hiddenInset`) sit top-left of the window, i.e. over whatever is leftmost. Give that strip to the sidebar (`--traffic-light-offset` padding, drag region) and let a hidden sidebar add the same padding to the main header. A narrow icon rail cannot clear them, so "collapsed" means hidden.
+- Header overlap was structural, not cosmetic: absolutely centred chips collided with the left and right groups. A flex row where only the title shrinks, plus container-query breakpoints that drop low-value chips, cannot overlap. Measured, not eyeballed: the bounding boxes of every leaf item in the header, pairwise, at 1400/1100/900 px and with the sidebar hidden (`scratchpad/shots.mjs` pattern): 0 overlaps.
+- `width:100%` plus padding on a button without `box-sizing: border-box` overflowed the shell by ~8-25 px and clipped the chevron and diff counts. Set border-box on new components and `overflow:hidden` on the shell.
+- A native `WebContentsView` (the Browser tab) is not in page screenshots and paints above all web content: hide it when a modal/approval is open, and check it from the main process (`app.evaluate`: url, title, bounds). It is sandboxed, own partition, no preload, http(s) only (`browser-url.ts`).
+- Auth headers are built in one pinned place (`useApi`); new endpoints (`/api/git/diff`, `/api/bash`, `/api/models`, `/api/models/select`) were added there, not as raw `fetch` in components.
+- `/api/git/diff` takes no path from the client (the file list comes from `git status -z -uall`), caps files and bytes per file; 7 tests against a real repo.
+- The Terminal tab calls `/api/bash`, which the default AUTO_EDIT policy refuses ("no approver is present over REST"). That is the policy working; the tab says so and does not bypass it. Widening it is the user's decision.
+
+## app shows "No sessions yet": sessions are per-workspace databases (2026-10-06)
+
+Search words: sessions, wisp.db, workspace store, read-only, import, session_sources, untitled.
+
+- Wisp stores sessions in `<workspace>/.wisp/wisp.db`. The app's workspace is `~/.wisp/workspace`, so its store started empty while the user's history sat in `~/.config/wisp/wisp.db` (8188 sessions) and `~/.wisp/wisp.db` (433). Measured with `sqlite3 -readonly immutable=1` counts, no content read.
+- Fix is additive: `GET /api/sessions` merges the app store with the other known stores, opened `mode=ro` (no migration, no WAL checkpoint). Opening a foreign session is an explicit copy into the app store (`POST /api/sessions/{id}/import`); delete and rename are refused (409) for sessions that exist only elsewhere. Tests hash the source files before and after list/get/import and require them unchanged (`tests/test_session_sources.py`).
+- `PATCH /api/sessions/{id}` was a stub returning `{session_id}`, so the UI's rename always reported failure; it now renames.
+- Untitled rows are labelled from the first text message via `json_extract` guarded by `json_type` (multimodal content is a list). 400 rows in 0.07 s on the real data; 40 stay untitled.
+- Not covered: per-project stores (`<project>/.wisp/wisp.db`) are not scanned; a registry of known workspaces would be needed.
+
+## switching the project folder did nothing: stale WORKSPACE_ROOT copies, allowlist, silent UI (2026-10-07)
+
+Search words: workspace switch, WORKSPACE_ROOT, allowed roots, from-import copy, rebind, project folder, prefs.json.
+
+- Three independent causes, each enough to make the selector look dead: (1) the backend only allows switching inside the *current* workspace unless `WISP_ALLOWED_WORKSPACE_ROOTS` is set, so choosing a real project returned 400; (2) ~20 route modules did `from ...workspace import WORKSPACE_ROOT`, which copies the Path at import, so even an accepted switch never reached Diff/Files/git/shell routes; (3) the UI ignored a non-ok response (`if (resp.ok)` with no else).
+- Fix: `workspace._rebind_workspace_root` rebinds, by identity, every `wisp.server*` module still holding the old value (a module deliberately given another path is left alone) and clears the three caches built for the old folder (`codebase._semantic_index`, `mcp._mcp_manager`, `suggestions._app_suggestion_watcher`). The desktop app passes `WISP_ALLOWED_WORKSPACE_ROOTS=$HOME` (an explicit environment value wins). The UI shows the server's reason.
+- A from-import of a mutable module global is a latent bug anywhere it is reassigned later; mutation probe: removing the rebind call fails 3 of the 7 tests in `tests/test_workspace_switch.py`.
+- The remembered project lives in a main-process file (`userData/prefs.json`, atomic write, 0600), not localStorage: Chromium flushes localStorage lazily, so a killed or crashed app lost it (seen in the e2e restart check).
+- The shell's cwd follows the project (validated in main: absolute, exists, inside home, no `..`); a running shell in another folder shows a "restart in the project folder" prompt instead of being killed.
+- `deleteSession` tested `data.ok` but the server returns `{"deleted": true}`: every delete in the UI looked failed. Found by reading the call site against the route while fixing something else; now covered by `useApi.sessions.test.ts` against the real response shapes.
+- The auth-header ratchet test (`authHeaderAuthority.test.ts`) fails *when a known duplicate disappears*: delete the entry (that is the design).
+- Glued assistant text ("available.Swift 6.2") in one opened session is already glued in the stored message content; that session came from another producer (CodeAgentMac), so it is data as stored, not a wisp-core finding.
+
+## invariant gates: five deterministic layers before every tool call (2026-10-07)
+
+Search words: gates, shellparse, PIPESTATUS, fail closed, fixed point, flat event, tool_result_guard, verification floor, mutation probe, denial vocabulary.
+
+- Shape: `wisp/core/gates/` (pure, stdlib plus `wisp.pathsec` and `wisp.auth.secrets`): `shellparse` (tree), `invocations` (what actually runs: wrappers looked through, `cd` tracked), `commands`, `paths`, `secrets`, `deps`, `verify`, and `gate.check_tool_call`, the one entry point. Invariant table with a witness per row: `docs/harness/invariant-gates.md`; `tests/gates/test_invariant_table.py` fails if a named witness disappears.
+- Seams, all single sites: `_gate_tool_call` (BEFORE the approval prompt, so no human yes overrides a hard denial), the `tool_result` path (`scrub_secrets` next to `withhold_if_injected`), and `VerificationFloorGuard.note_tool_result`. A refusal rides `POLICY_DENIED` with `_src="invariant_gate"`: the denial vocabulary is closed (recovery, scoring and the renderer depend on it), and a non-`gate` source is audited once by the existing path.
+- A parser for a security gate must terminate on every input. A 3,000-case fuzz test hung: `&& a` made the statement loop return without consuming a token. Fixed by an explicit refusal plus a step budget; fuzz tests run under `signal.alarm` so a hang fails instead of wedging the suite. (macOS has no `timeout` binary.)
+- Scrubbing must reach a fixed point (S1). `secret=[REDACTED:x]` was re-matched by the generic `secret=` assignment pattern and the entropy detector re-flagged placeholder labels; both are skipped when the span lies inside a `[REDACTED:...]` placeholder. The first S1 test passed because its fixtures lacked that shape; a mutation probe found it.
+- **The engine yields a flat dict, and `tool_result_guard._payload` only understands `.data` or a nested `"data"` dict.** A real-turn test showed the model was shown the secret; the same helper makes `withhold_if_injected` inert in production (probe: flat -> not withheld, nested -> withheld). `scrub_secrets` uses `_result_holder` (handles all shapes); the injection guard is left as is and a follow-up task is open, because enabling it changes what the model sees and needs a false-positive measurement.
+- `VerificationFloorGuard.note_tool_result(name, text, args)` is a pinned signature (spies in `test_verification_evidence_adapter` wrap it), so the full command travels in `args["__command__"]` (`COMMAND_ARG`) and is stripped from the step trail. Asymmetric on purpose: a failing command is always a failure; a passing one counts only if `gates.verify.classify` says a real runner's exit status decides the result (`true`, `pytest || true`, `pytest | tail`, `pytest; echo done`, `pytest &` no longer verify).
+- Existing tests that encoded the old behaviour were changed, not weakened: the READ_ONLY test's incidental command (`rm -rf /` is now refused by the gate first, with its own message, pinned in `tests/gates/test_gate_seam.py`) and the verification success control (`echo fine` -> `python3 -m compileall -q .`, a real passing build check).
+- A new exception class needs a register row; the parser's internal refusal is `ValueError` (alias), not a new class. Added lines shift pinned read sites: `scripts/derive_current_flags.py` had `stateless.py:524/1360`, now `525/1367`; regenerate all four derived pages and `register.md`.
+- Mutation probe (26 deliberate breakages, bytes restored in `finally`) found the S1 gap; never run it while a full suite uses the same checkout (that run's result is contaminated). Run the full suite from a snapshot clone.
+- Stated limits: inline interpreter code (`python -c`) is not parsed (pinned by `TestKnownLimits`), symlink races between check and write are not defended, entropy detection is a narrow heuristic, `xargs rm` / `find -exec rm` are refused because their targets cannot be bounded, a custom test script is not recognised as verification (use `make test`).
+
+## reasoning core: ledger, claim audit, decide, per-rule modes (2026-10-07)
+
+Search words: reasoning core, evidence ledger, claim audit, observe, enforce, per-rule modes, fault-injection persona, baseline, 402, can only afford, exit marker, refusal seam, mutation probe, equivalent mutant, hybrid posture.
+
+- Shape: `wisp/core/reasoning/` = `ledger` (facts that only an engine event can make OBSERVED; a verification goes stale at the next edit attempt), `claims` (precision-first extractor plus audit), `decision` (R1-R4 as pure functions over `GoalState`/`FailureClass`/`RecoveryRung`), `shellwrites` (shell writes from the gates' parser), `runtime` (`TurnReasoning`, the only non-pure module, journal). Design and phases: `docs/harness/reasoning-core-design.md`; measured before/after: `docs/harness/reasoning-core-baseline.md`.
+- **Posture (owner's hybrid rule):** security and workspace integrity are ENFORCED (gates: path jail, destructive commands, secrets, dependency lock, now also `.gitignore` and CI workflows); heuristics start in OBSERVE and are flipped to ENFORCE one at a time once the baseline shows they do not block legitimate behaviour. `reasoning_core` is the default, `reasoning_core_rules` (`R1=enforce,R4=enforce`) overrides per rule; a typo means `observe`, `off` as the default wins.
+- **Enforcement is owed, not optional.** R1 and R4 are built, probed and witnessed but run in `observe` by default, so today they change nothing for a user. See "Enforcement roadmap" in the design doc for the exit criteria; do not let `observe` become the permanent state by inertia.
+- **A seam placed where you expect the event can miss the real path.** Refused calls never pass the tool-result loop (they go to `tool_results_events_early` via `_refusal_result_event`), so the first seam saw no refusals; a real 402 arrives as a provider `error` EVENT, not an exception, so the first R4 seam covered the wrong path. Both were found only by driving a real turn with a scripted provider (personas), never by unit tests. Put the seam at the one helper every path uses, and pin one call site per seam with an AST test.
+- **A tool that succeeded is not a command that succeeded.** A failing shell command is an "ok" tool result with `[exit code: N]` in its text; R2 saw nothing until the runtime read that marker (the same lesson as the `| tail` pipeline bug, one layer up).
+- **Decide at the last gate, not the first.** R1 is computed after the verification floor and the other completion gates, so none of them changes and a turn is never nudged twice; computing it at the first final answer would have spent its budget on rounds another gate handled.
+- **Test a heuristic against look-alikes, not only hits.** The claim corpus (49 hits, 100+ look-alikes) found three real false positives ("The README says all tests pass", "Tests passed on CI last week") and two misses ("no errors" tripped the failure words). Synthetic corpora only: the false-positive rate on real transcripts is NOT measured.
+- **A baseline can only agree with the core by accident if it does not share its code.** The persona predicates use their own regexes, not `claims.extract`. A comparison that said observe differed from off was only a temp path inside event arguments: normalise before comparing, then keep the whole-stream equality as the RC4 witness.
+- **Mutation probes find the missing test, and equivalent mutants are real.** 0 survivors after adding: a disclaimer in a separate sentence, `if`/`but`/`should` each tested only beside another excluded word, the iteration-budget guard, the stop message, "applied once", R2/R3 `off`. Equivalent survivors (R2 `==` vs `>=`) are recorded, not chased. Use `Edit`/Python for source edits: `sed -i` was mangled by the rtk hook here.
+- Not measured yet: how often real models make these claims, and whether flagging an answer annoys users. Live paired judge runs need a key and a cap the owner names.
+
+## live paired runs on OpenRouter, rate limits and background jobs (2026-10-07)
+
+Search words: live run, OpenRouter, ling-3.1-flash, 429, INFRA, judge, PYTHONPATH, run_in_background, resumable, key handling, skills.
+
+- **Authorisation and cap:** the owner named the key (the one in `~/.config/wisp/.env`, an OpenRouter `sk-or-` key against `openrouter.ai`) and the model `inclusionai/ling-3.1-flash`. Preflight showed the model exists, is priced 0/0, supports tools, and the key has a $5 limit; I still set my own stop at +$0.25 of usage. The key is read in-process and never printed; a provider's key is never sent to another provider (check the shape against the endpoint first).
+- **Force the checkout under test.** `~/.venvs/wisp` imports `~/dev/wisp` (the owner's checkout), so a child launched without `PYTHONPATH=<worktree>` tests old code and never loads the reasoning core. Verified with `python -c "import wisp; print(wisp.__file__)"` from a temp directory.
+- **Rate limits are infrastructure.** The model sits behind a shared upstream pool (Novita): HTTP 429 "temporarily rate-limited upstream, retry shortly". Observed: a run whose turn ended with `ok: false` after 429s was scored NO-OP, and a SOLVED task was labelled `claim false / honest false`. So count the child's 429s per run (`judge_one.py` wraps `core.run_one`), probe with a tiny request until 200 before each task, label runs with 429s INFRA, retry a bounded number of times, and never read `honest` from a run that hit 429s. The judge itself does not do this (a follow-up).
+- **Bare `( ... ) &` jobs died** when the Bash call's shell ended (no process left, logs truncated, no completion event). The harness's `run_in_background: true` jobs survive. Long runs were still cut short, so the runner appends each result to a JSONL file and skips finished tasks on rerun (resumable, one writer per log).
+- **System Python lacks CA certificates** (`CERTIFICATE_VERIFY_FAILED`): use the venv's `httpx`; never disable verification.
+- **Persist the journal to see what fired.** `reasoning_journal` / `WISP_REASONING_JOURNAL` writes JSON lines; without it a live run cannot show which rules fired.
+- **Docker Linux parity (HEAD of the reasoning branch):** targeted suites 1,535 passed; the full-suite run had one failure, `tests/test_multi_agent_worktree.py::TestConcurrentWorktreeIsolation::test_parallel_writers_never_see_each_other`, which passes 3 of 3 alone on the branch and on clean `origin/main` (an order/load flake, unconfirmed, not caused by this work).
+- **Pre-existing leak, not ours:** `DockerSandbox` starts a per-instance container and never removes it; 66 exited `wisp-sandbox-*` containers (55 on `python:3.12-slim`, 11 on `wisp-sandbox:py312`) were present. The background-jobs supervisor removes its own container.
+- Skills written from this process: `.agents/skills/{mutation-probe,fault-injection-personas,observe-then-enforce-rollout,live-model-paired-runs}`.
+
+
+## CI parity: main went red after a merge, and three lint/type misses (2026-10-07)
+
+Search words: CI, ruff, mypy, step order, main red, flaky test, asyncio.sleep, monkeypatch, global patch, qa, test-python, merge ref, rtk, background jobs.
+
+- **#100 failed CI on the Ruff step after 10,470 tests passed** (an unused import in `tests/gates/conftest.py`). I had run ruff on the new files only; CI runs `ruff check` on `wisp/`, `wisp_net/` and `tests/`, then bare `mypy`, then `compileall`, in that order, so a long green test step hid it. The reasoning branch had two more (an unused import and a mypy `union-attr` on `self.provider.affordable_ceiling`). Fixed; rule: run every CI step on the branch before pushing (`.agents/skills/ci-parity-before-push`).
+- **`main` went red after merging #96** (CI run for `c14d9cc`) on `tests/test_rate_limit_retry.py::test_the_whole_path_honours_retry_after_from_the_http_response`, which passed alone and passed in #96's own CI. Its `waits` fixture patched `asyncio.sleep` on the real module, so any other coroutine's sleep (a leaked task in another loop or thread sleeping 0.02 s) was recorded, giving `[0.02, 0.02, ...]` instead of `[5.0, 5.0]`. Reproduced with a competing thread; fixed by replacing `asyncio` only inside `provider_stream`. A theory I had first (the 0.02 s poll in `providers/protocol.py`) did **not** reproduce and was dropped; that poll only runs during cancel teardown.
+- **A PR's green CI is not main's green CI**: the merge changes what runs and the timing. Check `gh run list --branch main` after each merge.
+- **Every remaining PR conflicted after the first merge** (all append to `AGENTS_LEARNING.md` and regenerate the same pages): resolve them one at a time, merging `main` into each branch, keeping both appended sections, regenerating `register.md`/`CURRENT_*.md`, then rerunning lint, mypy and the pin tests. `gh pr merge` from the agent is denied by the auto-mode classifier ("Merge Without Review"); the owner merges, and `gh pr merge N --merge --auto` merges when checks pass. A `checkpoint/...` tag name that already exists means an earlier tag was made: use a new name.
+- **Wrong conclusions I drew, so you do not:** I reported `origin/main` had moved when I had misread a commit from another branch (`rtk` output; verify SHAs with `rtk proxy git rev-parse`); I concluded background runs had died because `ps | grep` showed nothing, relaunched them, and ended up with four runners writing the same files and rate-limiting each other. Check with `pgrep -f` and whether the log or results file is still growing.
+
+## interpreter level: run_tests, the Docker tier, leftover children, import hijack (2026-10-07)
+
+Search words: sys.executable, run_tests, run_bash, interpreter, credential_free_env, verification floor, Docker tier, pytest, sleep infinity, container leak, hook timeout, MCP, import shadow, PYTHONPATH, provenance, PYTHONHASHSEED, -P. Full register with evidence and status: `docs/harness/findings-2026-10-07.md`; plan and results: `docs/harness/interpreter-level-harness.md`.
+
+- **Two ways to ask "do the tests pass?" give different answers.** `run_tests` runs `[sys.executable, -m, pytest]` (Wisp's interpreter, host, no `env=`); `run_bash` runs the project's venv with credentials stripped. Verified in throwaway projects: a dependency only in the project's venv gives a false failure under `run_tests`; one only in Wisp's venv gives a **false pass**; the project's tests saw a fake API key under `run_tests` and not under `run_bash`.
+- **The floor accepts that false pass** (real engine, scripted model: 3 rounds, 0 nudges), even after a failed `run_bash` pytest in the same turn, and **the system prompt steers models to `run_tests`** (rule 7 and the Verification loop). Real-model call frequency is unmeasured.
+- **The Docker tier is a third interpreter** (container `python` 3.12.14, no pytest), so with Docker reachable `run_bash pytest` cannot run tests at all by default; `run_tests` then becomes the escape hatch, unsandboxed. Every process using the Docker tier also leaves a **running** `sleep infinity` container (cleanup exists only in `reset_router`, "tests"); the 66 exited ones are the same leak.
+- **Children outlive their owner** in: `cmd &` on the host and PTY tiers, a timed-out **async** hook (never killed), a timed-out **compound** sync hook, a non-global MCP manager. Clean: single-command sync hook, global MCP manager (`atexit`).
+- **A workspace with its own `wisp/` package hijacks `python -m wisp`** when it is the cwd. `-P` or `PYTHONSAFEPATH=1` prevents it. Found by reasoning about my own supervisor, confirmed in a throwaway directory, fixed test-first for the jobs supervisor; the other launch sites are not audited.
+- **Hypotheses that did not survive measurement** (keep them out of the next plan): forcing `PYTHONHASHSEED=0` (the judge's checks are not seed-dependent; a fixed seed would pin a set-order bug), and bytecode/cache flags (git and the judge snapshot saw no extra files). `-P` stays for security, not for results.
+- **Method notes:** run each experiment in a throwaway directory with a throwaway `HOME` (note: a throwaway `HOME` makes Docker unreachable, so the "default sandbox" silently becomes the PTY tier); pin `PYTHONPATH` to the worktree under test (a script run from another directory imported the owner's checkout twice); a first-pass hypothesis about the 0.02 s poll in `providers/protocol.py` did not reproduce and was dropped; an empty `$(...)` fed to `grep` hangs on stdin (give it `</dev/null`); `rtk` mangles grep output (print with a script when the content matters).
+
+## setup wizard never validated keyed providers: `_probe` called a method they do not have (2026-10-07)
+
+Search words: wisp setup, _probe, handshake, generate, generate_stream_events, NVIDIAProvider, save anyway, 402, classify.
+
+- Symptom (a real REPL transcript): `[4/4] Validating… ✗ AttributeError: 'NVIDIAProvider' object has no attribute 'generate'`, then "Configuration saved WITHOUT validation". Not NVIDIA-specific: only the mock and Ollama providers define `generate`; OpenAI, OpenRouter and NVIDIA expose `generate_stream_events` only, so the wizard's handshake failed for **every** keyed provider and always ended at "save anyway".
+- Why the tests missed it: every wizard test injects `probe_fn`, so `_probe` itself was never executed against a real provider class.
+- Fix (`wisp/cli/setup.py::_handshake`): use `generate` when the provider has it; otherwise read `generate_stream_events` until the first content/thinking/tool/done event (events normalised through `canonical_event`, the single implementation), raise on an error event or an empty stream, and always close the generator so a probe never pays for a whole completion.
+- Reproduced the exact failure with the real `NVIDIAProvider` against a local HTTP stub (200 SSE and 402 JSON), before and after: before, both cases gave the AttributeError; after, 200 validates and 402 is reported.
+- Second fault found by that stub: the provider layer words a 402 as "the provider refused this request on billing", and `_classify_probe_error` read "refused" as a network failure ("unreachable"). Billing (402 / more credits) is now checked first.
+- Not changed: how the REPL itself sizes `max_tokens` against a key's remaining credit (the 402 in that transcript said 4096 requested, 83 affordable); that is account state, not a wisp bug.
+
+## run_bash exit code hid a failed pipeline stage (2026-10-06)
+
+Search words: pipefail, PIPESTATUS, pipeline, exit code, `| tail`, run_bash, masked failure, sink.
+
+- Symptom (agent session): `swift build 2>&1 | tail -30` showed 3 compiler errors and `# exit: 0`. A shell reports the LAST stage's status, so `tail` hid swift's failure; the agent and its log said success.
+- Fix is in `wisp/tools/bash.py::run_bash_confined`, the one place a command executes (the disk sink goes through it too): the command is followed by an epilogue that records `PIPESTATUS` and re-exits with the real status. The exit code keeps its shell meaning (no behaviour change for scripts). When the command exits 0 but an earlier stage failed, the result starts with `[pipeline: stage N exited C; ...]`, and the sink log gets a `# [pipeline: ...]` header line. SIGPIPE (141) is excluded (`yes | head -1`). If the command already fails (`set -o pipefail`), no note: the exit code says it.
+- Why not just prepend `set -o pipefail`: it would turn `git log | head` and `grep x | wc -l` into reported failures for correct commands, a silent change to every existing script.
+- The marker travels on stderr, or stdout for the PTY tier (it merges streams); both are parsed and stripped. Verified on real bash, the real PtySandbox, and a merged-stream fake. A provider that never ran the epilogue is left alone.
+- Changed a pin: `tests/test_sink_keeps_sandbox.py` asserted the sandbox got exactly `echo via-root`; it now asserts the command is carried and starts with it. The intent (it goes through the sandbox, not the host) is unchanged.
+- Not covered: `POST /api/bash` (REST) calls `sandbox.run` directly and does not report masked stages.
+- Meta-lesson, repeated in this very session: our own tooling reported `exit code 0` from `cmd | tail` and from `(script; echo exit=$?) ; tail`. Read the real status from a file or `${pipestatus[1]}`, never from a pipeline's end.
+
+## rate limits: two retry layers multiplied into nine requests (2026-10-06)
+
+- **Symptom (user's REPL, OpenRouter 429):** one message produced three groups of "Transient status 429 on attempt 1/3, 2/3" in `.agent/runtime.log`, then "after 3 attempts". The timestamps showed the structure: `guarded_provider_stream` (3 rounds) around `hardened_post` (3 requests per round) is up to 9 requests in ~20 s, against an endpoint that was already throttling.
+- **Two retry layers over the same status is a multiplier, not a safety margin.** Pick one owner. The stream owns statuses (it knows the turn, cancellation and the server's advice); `hardened_post` keeps transport errors, which nothing above can tell from a stall. The new `retry_status` parameter defaults to the old behaviour, so only the provider changes.
+- **A 429 is a window, not a blip.** Retries 1-2 s apart cannot outlast a minute-long limit; they add load and delay nothing useful. Space them in seconds, and read `Retry-After` (never read before; neither layer looked at response headers).
+- **Do not sleep through unbounded advice, and do not ignore it.** Over the 30 s cap the stream stops at once and says how long the server asked for.
+- **A message that counts attempts must count requests.** "after 3 attempts" was nine requests.
+- **Mutation probes found a pattern that matched two loops** (`hardened_post` and `hardened_get` share a retry shape): a replace-first on a verified range is safer than loosening the assertion.
+- **Not the user's config or the model's fault to fix here:** the route (`inclusionai/ling-3.1-flash` on OpenRouter) was rate-limiting; switching with `/provider nvidia <model>` works since PR 92.
+
+## Lesson: a generated page depends on the interpreter that generated it (2026-10-07)
+
+Search: derive_register python3 version, register.md raise sites 285 286, generated pages interpreter, JobLimitError register row
+
+`python3 scripts/derive_register.py` under the system `python3` (3.9.6) wrote **285 raise sites**; the same script under the venv interpreter (3.12.8, the version CI uses) writes **286**. `test_regenerating_reproduces_the_page` regenerates under the test interpreter, so a page written by the wrong Python fails it. The script's header says it "runs under any python3"; that is true for starting, not for the result. The cause (which construct 3.9 and 3.12 count differently) was not isolated.
+
+- Regenerate every derived page with the project's venv interpreter (`/Users/philosopher/.venvs/wisp/bin/python scripts/derive_*.py`), never a bare `python3`.
+- A new exception class needs a data row in `scripts/derive_register.py` first (`JobLimitError` in `wisp/jobs/spawn.py` failed `test_every_defined_class_has_a_row` until it had one); regenerating alone does not add it.
+- Related to the interpreter-level findings (`docs/harness/findings-2026-10-07.md`, section A): which interpreter ran a tool changes its result.
+
+## Lesson: read-then-check-liveness reported a finished job as lost (2026-10-07)
+
+Search: jobs lost exited race, TOCTOU state.json supervisor alive, test_a_failing_command_keeps_its_exit_status, reap_lost overwrite
+
+PR #102's Linux CI failed one test in 11,124 (`test_a_failing_command_keeps_its_exit_status`: `('lost', None)` instead of `('exited', 3)`). It passed locally. Cause, read in `JobStore._status`: the reader looked at `state.json` (not there yet), then asked whether the supervisor was alive; the supervisor wrote its result and exited in between, so the reader saw "dead, no result" and said `lost`. `reap_lost` had the same shape and was worse: it wrote `lost` into `state.json`, which could replace a real result for good.
+
+- When a writer's last act is "write the result, then exit", a reader that finds the writer dead must **read the result again**; the first read is stale by definition.
+- A settler that records a verdict must create-if-absent (`os.link` of a temp file), never overwrite.
+- Test the race by injecting the writer's action into the check (`procs.alive` writes the result, then returns False); both tests were RED first and reproduced the CI values exactly. Mutation probe: reverting either change fails a test.
+- A single failure in a long suite on one OS is a signal, not noise: read the assertion before calling it a flake.
+
+## Lesson: a check that did not run reported success (2026-10-07)
+
+Search: ci parity, pytest tail exit code, export HOME tilde, zsh no matches found glob, rtk npx, npm 10 ci dry-run, empty target list
+
+Three checks for PR #97 looked green or red for the wrong reason in one afternoon. Evidence: the command outputs of that run.
+
+- **`export HOME=$(mktemp -d)` changes what `~` means for the rest of the command.** `~/.venvs/wisp/bin/python` then pointed into the empty temp HOME, pytest never started, and the background task still reported `exit code 0` because the last stage was `tail`. Use an absolute interpreter path and set `HOME=...` only on the pytest command (`HOME=$H /abs/python -m pytest ...`), and write the real status to the output file (`echo rc=$?`).
+- **An unmatched zsh glob can silently empty a list.** `tests/test_desktop*` matched nothing, the target variable was empty, and a 79-test run stood in for the intended 3201. Print the resolved target list and the collected count before trusting a pass.
+- **The `rtk` hook rewrites `npx`.** `npx -y npm@10 ci` became "Unknown command: npm@10", which looked like a lockfile failure. `rtk proxy npx -y npm@10 ci --dry-run --ignore-scripts` exits 0, so the lockfile was in sync all along.
+- General rule: when a check fails or passes unexpectedly, first prove that the check ran (resolved arguments, collected count, real exit status), then read the result.
+
+## Lesson: R1 and R4 are enforced by default; an explicit setting is the kill switch (2026-10-07)
+
+Search: reasoning core default enforce, DEFAULT_ENFORCED_RULES, WISP_REASONING_CORE observe kill switch, enforce roadmap flipped
+
+The owner decided on 2026-10-07 to enforce R1 (unbacked success claim: withhold once, then flag) and R4 (affordability: one bounded retry, else an honest stop) when nothing is configured. This is a **decision made before the roadmap's exit criteria were met**: no false-positive rate on real transcripts, no valid live run (429 noise), and a real "can only afford N" 402 from OpenRouter was seen with `curl` but not driven through Wisp. The roadmap rows say so.
+
+- One constant (`DEFAULT_ENFORCED_RULES` in `wisp/core/reasoning/decision.py`), applied in `WispConfig` only when neither `reasoning_core` nor `reasoning_core_rules` is set anywhere (env or file). **Any explicit value replaces it**: `WISP_REASONING_CORE=observe` makes every rule observe, `off` disables the core, `WISP_REASONING_CORE_RULES=` (empty) means no overrides. A per-rule override beats a global `observe`, so without the "explicit replaces default" rule the observe switch would not have worked; a global `off` already wins over overrides (`test_a_default_of_off_switches_everything_off`).
+- Tests written first (two RED), a real-turn witness for the default and one for the kill switch, and four config mutants all killed. One seam test relied on the old default and now sets observe explicitly.
+- Full-suite run on this branch: two failures, neither caused by the flip. `test_preflight_doctor::...no_runner_fails` fails on clean `main` as well when the Docker daemon is not reachable. `test_judge_cli::...judged_noop` passes alone and fails when `HOME` holds the state of a whole suite run; with that `HOME` it gives the same INFRA "Traceback" on clean `main` code. The trigger inside that `HOME` was not isolated: a test-isolation weakness, not a regression.
+
+## Lesson: a turn must never end in silence about its own state (2026-10-07)
+
+Search: honest finish, verification floor surrender, UNVERIFIED note, empty round, thinking only, last_uncounted, pytest echo tail masked, token events
+
+A real session (the owner's kvagent project) ran its tests many times with `pytest > f 2>&1; echo "EXIT:$?"; tail -40 f`. `gates.verify.classify` rightly says that command proves nothing (its exit status is `tail`'s), so the verification floor never counted it, rejected the finish twice with "no verification command has been run" (false: one ran, it did not count), then let the turn end; the model answered with reasoning only and the user got no summary and no word that the work was unverified. Reproduced with the real engine and a scripted model; the sequence matched the paste event for event, with the reasoning core `off` and `enforce` alike. `docs/harness/field-observations-2026-10-07.md` (O-9, O-10).
+
+- **Say why a run did not count.** The guard now remembers the last verification-looking command that did not count and its reason (`last_uncounted`); the nudge names it. A gate that is right but silent about its reason makes the model repeat the thing the gate rejected.
+- **The harness says it, not the model.** The only statement that the work is UNVERIFIED used to be an instruction to the model. When the floor lets a code-changing turn end without a verification that exited 0, the harness appends one line itself (not when the model already said UNVERIFIED, and not when R1 already flagged the answer). A round that ends with no answer gets one bounded nudge, then a plain statement.
+- **Do not define "empty" by one event type.** The first version tested `partial_content`, which only collects `content` events; a provider whose text arrives as `token` events looked empty and got an extra round. Two old tests caught it. Production providers emit `content`, but the gate must never call a streamed answer empty: it now watches content/text/token (not reasoning).
+- **A new harness line changes baselines.** The persona `ClaimsWithoutRunning` no longer "reaches the user" with the core off, because the floor's own note now tells the user; `flagged()` in the persona harness was split into any harness note and R1's note specifically. A published table and eight tests had to say which one they meant.
+- Method that worked: reproduce the owner's sequence with a scripted provider first (it showed the same event order), RED tests, 12 mutants (11 killed first time; the survivor was a test bound that was too loose), full suite twice. Two failures remain locally and are environmental (Docker daemon; a test that needs a clean `HOME`); a third group (web tests) failed once because DNS dropped during the run.
+
+## Lesson: the user's global instructions file reached only the web route (2026-10-08)
+
+Search: user guidelines, ~/.config/wisp/CLAUDE.md, boot seed, Turn-0, load_context_files, WISP_USER_GUIDELINES, context_files, same workflow as Claude, skills block dropped
+
+`WispConfig.load_context_files` reads `~/.config/wisp/CLAUDE.md`, and its docstring says so, but its only caller is `server/routes/context.py`. The CLI/REPL builds the static prompt without `context_files` and the Turn-0 seed read only the workspace's `AGENTS.md` / `CLAUDE.md` / `.wisp/instructions.md`, so instructions a user set for every session never reached a terminal session (found while giving Claude Code and Wisp one shared workflow file). The seed now reads the user file first, under its own 8,000-char budget; `WISP_USER_GUIDELINES=off` keeps it out; `/doctor`'s `boot_context` reports `found | none | off`.
+
+- **Find the production consumer of a config path, not its docstring.** The function existed, was documented and was called; the call site was the web route only.
+- **Measure before using the static prompt.** Adding ~1.5k tokens there (tried as an inline skill, `inline-instructions: true`) pushed the real prompt past its 6,000-token budget and the fitter dropped the whole skills block (priority 2). The seed is outside that budget and is where boot.py's docstring says new bytes belong.
+- **A file read from the real HOME leaks into tests.** With a user file present, `test_no_history_no_seed_without_substance` failed (reproduced). `tests/conftest.py` now switches the file off for every test except live E2E; the file's own tests remove the switch.
+- **A probe that copies with `cp -R dir/` measures nothing.** On macOS the trailing slash copies the folder's contents, so the probe HOME had no skills and the prompt looked empty. Check the fixture before believing the measurement.
+- Method: RED first (7 of 9 failed for the missing section; the 2 passing ones pin what must not change), a real `WispAgentCore.turn()` through a recording provider, 6 of 6 mutants killed on a copy of the tree, and 2,405 related tests against `origin/main` as sets (one run each, empty HOME): no new and no gone failures; the one common failure is the Docker deep-sandbox check.
 
 ## tool-result injection guard did nothing in a real turn: flat event shape (core) (2026-10-07)
 
