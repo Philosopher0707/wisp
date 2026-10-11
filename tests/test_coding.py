@@ -335,6 +335,88 @@ class TestParallelMergeTemplate:
         assert line and "merge" in line
 
 
+class TestModelTiersInTheTemplates:
+    """The shipped graphs tag only the unambiguous cases: independent read-only workers are `cheap`, the node that decides from them is `strong`.
+    The write path (implement, repair, test, verify, review, final) is never tagged, so setting the tier map cannot change what writes code."""
+
+    @staticmethod
+    def classes(template):
+        ir = build_template(template, _ctx("x"))
+        graph, _, _, _ = compile_optimized({"objective": "x", "execution_shape": "GRAPH", "graph": ir["graph"]}, None)
+        return {n.id: n.effective_contract().model_policy.model_class for n in graph.nodes}
+
+    def test_the_analysis_readers_are_cheap_and_the_synthesis_is_strong(self):
+        got = self.classes("parallel-analysis")
+        assert {got[b] for b in ("structure", "symbols", "deps", "tests")} == {"cheap"}
+        assert got["synthesize"] == "strong"
+
+    def test_the_complex_graphs_parallel_readers_are_cheap_and_its_plan_is_strong(self):
+        got = self.classes("complex")
+        assert got["arch"] == got["deps"] == "cheap" and got["plan"] == "strong"
+        for write_path in ("analyze", "implement", "test", "review", "final"):
+            assert got[write_path] == "standard", write_path
+
+    @pytest.mark.parametrize("template", ["simple", "repair", "parallel-implement-merge"])
+    def test_the_other_templates_are_not_tagged_at_all(self, template):
+        assert set(self.classes(template).values()) == {"standard"}
+
+
+class TestModelTiersEndToEnd:
+    """The setting through config, executor, runner and the real template, with only the subagent's `run` replaced."""
+
+    @staticmethod
+    def run(monkeypatch, tmp_path, tiers):
+        from wisp.config import WispConfig
+        from wisp.multi_agent import SubagentOrchestrator
+        from wisp.multi_agent.task import SubagentResult
+
+        seen = {}
+
+        async def fake_run(self, contract, *args, **kwargs):
+            seen[contract.name] = contract.model
+            return SubagentResult(task_id=contract.name, success=True, output={"findings": f"{contract.name} found it"})
+
+        monkeypatch.setattr(SubagentOrchestrator, "run", fake_run)
+        config = WispConfig().replace(workspace=str(tmp_path), provider="mock", model="mock", graph_model_tiers=tiers)
+        final = C.run_coding_template("parallel-analysis", _ctx("audit the services", str(tmp_path)), config=config)
+        return seen, final
+
+    def test_the_tiers_set_in_the_config_reach_each_node(self, monkeypatch, tmp_path):
+        seen, final = self.run(monkeypatch, tmp_path, "cheap=tiny-model,strong=big-model")
+        assert final["status"] == "succeeded"
+        assert seen == {"structure": "tiny-model", "symbols": "tiny-model", "deps": "tiny-model", "tests": "tiny-model", "synthesize": "big-model"}
+
+    def test_with_the_setting_empty_every_node_runs_on_the_session_model(self, monkeypatch, tmp_path):
+        seen, final = self.run(monkeypatch, tmp_path, "")
+        assert final["status"] == "succeeded" and set(seen.values()) == {None} and len(seen) == 5
+
+    def test_a_real_run_with_the_mock_provider_reports_the_model_each_node_used(self, tmp_path, monkeypatch):
+        import asyncio
+
+        from wisp.config import WispConfig
+        from wisp.graph.runner import default_executor
+
+        ir = build_template("parallel-analysis", _ctx("audit the services", str(tmp_path)))
+        graph, _, _, _ = compile_optimized({"objective": "x", "execution_shape": "GRAPH", "graph": ir["graph"]}, None)
+        config = WispConfig().replace(workspace=str(tmp_path), provider="mock", model="mock", graph_model_tiers="cheap=mock-cheap,strong=mock-strong")
+        from wisp.multi_agent._runner import SubagentRunner
+
+        child_models = {}
+        original = SubagentRunner._build_child_config
+
+        def spy(self, contract, workspace):
+            child = original(self, contract, workspace)
+            child_models[contract.name] = child.model
+            return child
+
+        monkeypatch.setattr(SubagentRunner, "_build_child_config", spy)
+        final = asyncio.run(default_executor(str(tmp_path), 8, config=config).run(graph, {"objective": "x"}))
+        models = {nid: r.get("model") for nid, r in final["results_by_node"].items()}
+        assert final["status"] == "succeeded"
+        assert models["structure"] == models["tests"] == "mock-cheap" and models["synthesize"] == "mock-strong"
+        # not only recorded: the real runner built each child's configuration for the model its tier names
+        assert child_models == {"structure": "mock-cheap", "symbols": "mock-cheap", "deps": "mock-cheap", "tests": "mock-cheap", "synthesize": "mock-strong"}
+
 class TestAnInterruptedGraphTurn:
     """Field log O-3: Ctrl-C during the graph path must interrupt the turn, not end the REPL (the pty version is tests/test_graph_cancel_pty.py)."""
 

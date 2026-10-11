@@ -41,6 +41,10 @@ def _build_parser() -> argparse.ArgumentParser:
                         help=("Permit the ROLLBACK rung. It restores the "
                               "workspace from a snapshot taken before the "
                               "first attempt, discarding later changes."))
+    parser.add_argument("--revert", action="store_true",
+                        help=("Keep-or-revert: undo an attempt whose measurement did not "
+                              "improve (needs --journal; the attempt's files are kept "
+                              "beside it), so the next attempt starts from the best state."))
     parser.add_argument("--json", action="store_true",
                         help="Emit the machine-readable result instead of prose")
     return parser
@@ -68,6 +72,7 @@ def run_converge(argv: list[str], *, model: str | None = None,
         permission_mode=args.permission_mode,
         max_attempts=args.max_attempts,
         allow_rollback=args.allow_rollback,
+        revert_no_progress=args.revert,
         journal_path=args.journal,
         resume=args.resume,
         on_attempt=_on_attempt,
@@ -87,6 +92,10 @@ def run_converge(argv: list[str], *, model: str | None = None,
             print(f"       session={record.session_id or '-'} "
                   f"changed={', '.join(record.observation.changed_files) or '-'} "
                   f"tools={record.observation.tool_calls}")
+            if record.reverted:
+                print(f"       reverted: {', '.join(record.reverted)}")
+            if record.revert_note:
+                print(f"       {record.revert_note}")
             if record.evidence_lines:
                 print("       shown:")
                 for line in record.evidence_lines:
