@@ -543,6 +543,19 @@ class TestSurface:
         assert '"a"' in render_dot({"id": "g", "nodes": ["a"], "edges": []})
         assert quality_metrics(trace)["node_count"] == 1
 
+    def test_trace_shows_the_model_each_node_ran_on_and_leaves_old_lines_alone(self):
+        trace = {"graph_id": "g", "run_id": "r", "status": "succeeded", "wall_s": 1.0,
+                 "results_by_node": {"a": {"status": "success", "duration_s": 0.5, "model": "tiny-model"},
+                                     "b": {"status": "success", "duration_s": 0.25},
+                                     "c": {"status": "success", "duration_s": 0.25, "model": ""},
+                                     "d": {"status": "success", "duration_s": 0.25, "model": "evil\x1b[31m-model" + "x" * 200}},
+                 "tokens": {}, "cost_usd": 0}
+        lines = render_ascii(trace).splitlines()
+        assert "✓ a  0.5s  (tiny-model)" in lines
+        assert "✓ b  0.2s" in lines and "✓ c  0.2s" in lines
+        d = [ln for ln in lines if ln.startswith("✓ d")][0]
+        assert "\x1b" not in d and len(d) < 120
+
     def test_split_and_conflicts(self):
         assert len(split_by_items([1, 2, 3, 4], 2)) == 2
         assert detect_write_conflicts({"a": {"f.py"}, "b": {"f.py"}}) != []

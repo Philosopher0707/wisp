@@ -40,13 +40,21 @@ WITHHELD_TEMPLATE = (
 
 
 def _payload(event: Any) -> dict[str, Any] | None:
-    """The event's payload, for either an `AgentEvent` or a plain dict."""
+    """The mapping that holds the event's `result`, whatever the event's shape.
+
+    Three shapes reach the seam: an `AgentEvent` (payload on `.data`), a dict with a
+    nested `"data"` dict, and — what the engine actually yields after
+    `_flatten_event` — a FLAT dict with `"result"` beside `"type"`. The flat shape
+    was missed, so the control did nothing in a real turn.
+    """
     data = getattr(event, "data", None)
     if isinstance(data, dict):
         return data
     if isinstance(event, dict):
         inner = event.get("data")
-        return inner if isinstance(inner, dict) else None
+        if isinstance(inner, dict):
+            return inner
+        return event if "result" in event else None
     return None
 
 
