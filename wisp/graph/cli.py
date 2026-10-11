@@ -8,9 +8,12 @@ plus the built-in 'coding-agent' reference graph.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import shlex
+import sys
+from collections.abc import Iterator
 from typing import Any
 
 from wisp.graph.security import scrub_text as redact
@@ -70,14 +73,55 @@ def _builtin_defs() -> dict[str, Any]:
     return {"coding-agent": yaml.safe_load(REFERENCE_YAML)["graph"]}
 
 
+@contextlib.contextmanager
+def _workers(orchestrator: Any, workspace: str, model: str, provider: str) -> Iterator[Any]:
+    """The orchestrator the graph's agent nodes run on.
+
+    Inside the REPL it is the host's own (`/graph run`): the REPL passes `runtime.orchestrator`, which the CLI entry already gave the person's approver. From the shell
+    (`wisp graph run`) nothing is running yet, so this builds the same composition root the REPL uses, with the terminal's approver when there is a terminal. A bare
+    `SubagentOrchestrator()` is not an option: it has no ToolExecutor, so every worker could only read.
+    """
+    if orchestrator is not None:
+        yield orchestrator
+        return
+    root = None
+    try:
+        from wisp.composition import CompositionRoot
+        from wisp.config import WispConfig
+
+        config = WispConfig().replace(workspace=os.path.abspath(workspace))
+        if model:
+            config = config.replace(model=model)
+        if provider:
+            from wisp.provider_select import with_provider
+            config = with_provider(config, provider)
+        root = CompositionRoot(config)
+        root.start()
+        if sys.stdin.isatty():
+            from wisp.transport.cli import CLITransport
+            transport = CLITransport(root.runtime, config, background_agents=getattr(root, "background_agents", None),
+                                     hook_manager=getattr(root, "_tool_hook_manager", None))
+            root.subagent_orchestrator.set_approval_handler(transport.approve)
+        worker_host: Any = root.subagent_orchestrator
+    except Exception as exc:  # noqa: BLE001 - a graph of function nodes still runs; say what the agent nodes lose
+        print(f"! workers could not be wired ({type(exc).__name__}: {redact(str(exc))[:200]}); agent nodes will only be able to read", file=sys.stderr)
+        worker_host = None
+    try:
+        yield worker_host
+    finally:
+        if root is not None:
+            with contextlib.suppress(Exception):
+                root.shutdown()
+
+
 def main(argv: list[str], workspace: str = ".", model: str = "",
-           provider: str = "") -> int:
+           provider: str = "", orchestrator: Any = None) -> int:
     if not argv or argv[0] in ("-h", "--help"):
         print(USAGE)
         return 0
     verb, args = argv[0], argv[1:]
     try:
-        return _main(verb, args, workspace, model, provider)
+        return _main(verb, args, workspace, model, provider, orchestrator)
     except (FileNotFoundError, ValueError, KeyError, PermissionError) as exc:
         # Fail closed with a diagnostic — never a traceback with paths/SQL.
         print(f"✗ {redact(str(exc))[:500]}")
@@ -85,7 +129,7 @@ def main(argv: list[str], workspace: str = ".", model: str = "",
 
 
 def _main(verb: str, args: list[str], workspace: str, model: str = "",
-          provider: str = "") -> int:
+          provider: str = "", orchestrator: Any = None) -> int:
     store = GraphStore(workspace=workspace)
     if verb == "list":
         print("graphs: coding-agent")
@@ -160,8 +204,9 @@ def _main(verb: str, args: list[str], workspace: str, model: str = "",
             except ValueError:
                 print("✗ --max must be an integer"); return 1
         from wisp.graph.runner import default_executor
-        ex = default_executor(workspace, max_c)
-        result = asyncio.run(ex.run(graph, inputs))
+        with _workers(orchestrator, workspace, model, provider) as workers:
+            ex = default_executor(workspace, max_c, orchestrator=workers)
+            result = asyncio.run(ex.run(graph, inputs))
         print(render_ascii(result))
         return 0 if result["status"] == "succeeded" else 1
     if verb == "resume":
@@ -188,8 +233,9 @@ def _main(verb: str, args: list[str], workspace: str, model: str = "",
         graph = _load_graph(row["graph_id"]) if row["graph_id"] != "coding-agent" \
             else coding_agent_graph()
         from wisp.graph.runner import default_executor
-        ex = default_executor(workspace, 8, store)
-        result = asyncio.run(ex.resume(graph, args[0], approvals or None))
+        with _workers(orchestrator, workspace, model, provider) as workers:
+            ex = default_executor(workspace, 8, store, orchestrator=workers)
+            result = asyncio.run(ex.resume(graph, args[0], approvals or None))
         print(render_ascii(result))
         return 0
     if verb == "status":
@@ -295,8 +341,9 @@ def _main(verb: str, args: list[str], workspace: str, model: str = "",
         from wisp.graph.planner import PlanError, execute_proposal
         from wisp.graph.runner import default_executor
         try:
-            result = asyncio.run(execute_proposal(
-                prop, default_executor(workspace, 8, store), inputs, approve=True))
+            with _workers(orchestrator, workspace, model, provider) as workers:
+                result = asyncio.run(execute_proposal(
+                    prop, default_executor(workspace, 8, store, orchestrator=workers), inputs, approve=True))
         except PlanError as exc:
             print(f"✗ {exc}"); return 1
         store.set_proposal_status(pid, "EXECUTED" if result["status"] == "succeeded"

@@ -369,6 +369,7 @@ class BackgroundAgentManager:
     async def _run_entry(self, entry: BackgroundAgentEntry) -> None:
         entry.turns += 1
         message = entry.contract.task
+        entry.contract.background = True
         self._chain_telemetry_callback(entry)
         try:
             result = await self._orchestrator._run_with_retry(entry.contract)

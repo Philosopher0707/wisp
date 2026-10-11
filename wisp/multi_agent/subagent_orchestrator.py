@@ -513,6 +513,10 @@ class SubagentOrchestrator:
 
     # ── Token budget API ───────────────────────────────────────────────
 
+    def set_approval_handler(self, handler: Any) -> None:
+        """Let this orchestrator's children ask the person at the keyboard (the CLI passes its transport's approver); None removes it."""
+        self._runner.set_approval_handler(handler)
+
     def set_global_token_budget(self, budget: Optional[int]) -> None:
         self._budget.set_budget(budget)
 

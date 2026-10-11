@@ -193,6 +193,11 @@ def _run_cli(root: CompositionRoot, prompt: str | None = None, **kwargs) -> None
         hook_manager=getattr(root, "_tool_hook_manager", None),
     )
     transport.start()
+    # Subagents started from this terminal (graph workers, /spawn, /swarm, spawn/fanout) ask the person here, through the same prompt the parent's own tool calls
+    # use, instead of being refused for having no approver. Background agents are excluded (multi_agent/approval_relay.py).
+    orchestrator = getattr(root, "subagent_orchestrator", None)
+    if orchestrator is not None and hasattr(orchestrator, "set_approval_handler"):
+        orchestrator.set_approval_handler(transport.approve)
 
     # Interactive setup offer (GH#18): tty-only, mock counts as usable,
     # scripts/pipes never block. A completed setup needs a restart since

@@ -22,7 +22,7 @@
 > `—` therefore means *no catch inside these roots*, which is **not** the same claim as
 > *unhandled* — see §(c).
 >
-> Generated 2026-09-30 at `f2368d1` · **57 classes** · **320 raise sites** · **65 catch sites** · **9 with no test naming them**.
+> Generated 2026-09-30 at `e06bb1e` · **57 classes** · **320 raise sites** · **65 catch sites** · **9 with no test naming them**.
 
 ---
 
@@ -30,11 +30,11 @@
 
 | exception | base | role | phase | defined_at | raise_sites | first_raise | caught_at | adr |
 |---|---|---|---|---|---|---|---|---|
-| `ExitREPL` | `Exception` | verdict | cli | `wisp/exceptions.py:13` | 1 | `wisp/repl/commands/core.py:175` | `wisp/cli/dispatcher.py:179`, `wisp/cli/dispatcher.py:208`, `wisp/entry.py:713`, `wisp/repl/commands/__init__.py:108` | — |
+| `ExitREPL` | `Exception` | verdict | cli | `wisp/exceptions.py:13` | 1 | `wisp/repl/commands/core.py:175` | `wisp/cli/dispatcher.py:179`, `wisp/cli/dispatcher.py:208`, `wisp/entry.py:718`, `wisp/repl/commands/__init__.py:108` | — |
 | `ApprovalCancelled` | `Exception` | verdict | approval | `wisp/exceptions.py:17` | 1 | `wisp/transport/cli.py:947` | `wisp/core/approval_gate.py:117`, `wisp/core/approval_gate.py:146`, `wisp/tool_executor.py:882` | — |
 | `ApprovalTimeout` | `Exception` | verdict | approval | `wisp/exceptions.py:33` | 1 | `wisp/transport/cli.py:910` | `wisp/core/approval_gate.py:127`, `wisp/tool_executor.py:895` | — |
 | `_TransientOpenError` | `Exception` | recoverable | provider | `wisp/core/provider_stream.py:40` | 1 | `wisp/core/provider_stream.py:174` | `wisp/core/provider_stream.py:278` | — |
-| `FirstTokenTimeout` | `asyncio.TimeoutError` | recoverable | subagent | `wisp/multi_agent/_runner.py:168` | 1 | `wisp/multi_agent/_runner.py:662` | `wisp/multi_agent/_runner.py:433`, `wisp/multi_agent/_runner.py:736`, `wisp/multi_agent/_runner.py:903` | — |
+| `FirstTokenTimeout` | `asyncio.TimeoutError` | recoverable | subagent | `wisp/multi_agent/_runner.py:168` | 1 | `wisp/multi_agent/_runner.py:663` | `wisp/multi_agent/_runner.py:434`, `wisp/multi_agent/_runner.py:737`, `wisp/multi_agent/_runner.py:904` | — |
 | `CircuitOpenError` | `Exception` | recoverable | provider | `wisp/infra/circuit_breaker.py:175` | 2 | `wisp/infra/circuit_breaker.py:93` | `wisp/core/stateless.py:1363` | — |
 | `CircuitBreakerOpenError` | `Exception` | recoverable | subagent | `wisp/multi_agent/_circuit_breaker.py:102` | 1 | `wisp/multi_agent/_circuit_breaker.py:44` | — | — |
 | `_Exit` | `Exception` | recoverable | cli | `wisp/review/cli.py:32` | 1 | `wisp/review/cli.py:48` | `wisp/review/cli.py:141`, `wisp/review/cli.py:202` | — |
@@ -63,7 +63,7 @@
 | `SourceError` | `Exception` | fault | cli | `wisp/review/source.py:39` | 15 | `wisp/review/source.py:59` | `wisp/review/cli.py:152`, `wisp/review/source.py:202`, `wisp/review/source.py:235` | — |
 | `TriageError` | `Exception` | fault | cli | `wisp/review/triage.py:58` | 5 | `wisp/review/triage.py:277` | `wisp/review/cli.py:212` | — |
 | `ToolError` | `Exception` | fault | tool | `wisp/tools/errors.py:8` | 87 | `agent/fast_tools.py:47` | `agent/tools/batch_reader.py:386`, `agent/tools/batch_reader.py:629`, `wisp/cli/dispatcher.py:398`, `wisp/jobs/supervisor.py:102`, `wisp/tool_executor.py:279`, `wisp/tool_executor.py:1409`, `wisp/tool_executor.py:1522`, `wisp/tools/bash.py:211`, `wisp/tools/registry.py:1309`, `wisp/tools/registry.py:1451` | — |
-| `PlanError` | `Exception` | fault | plan | `wisp/graph/planner.py:72` | 28 | `wisp/graph/planner.py:87` | `wisp/graph/cli.py:300`, `wisp/graph/cli.py:342`, `wisp/graph/planner.py:314`, `wisp/graph/planner.py:396` | — |
+| `PlanError` | `Exception` | fault | plan | `wisp/graph/planner.py:72` | 28 | `wisp/graph/planner.py:87` | `wisp/graph/cli.py:347`, `wisp/graph/cli.py:389`, `wisp/graph/planner.py:314`, `wisp/graph/planner.py:396` | — |
 | `LSPServerError` | `Exception` | fault | tool | `wisp/lsp/client.py:24` | 16 | `wisp/lsp/client.py:78` | `wisp/lsp/client.py:529`, `wisp/lsp/manager.py:174`, `wisp/lsp/manager.py:188` | — |
 | `SearchReplaceError` | `ValueError` | fault | tool | `wisp/core/mutator/search_replace.py:38` | 3 | `wisp/core/mutator/search_replace.py:59` | — | — |
 | `JsonExtractionError` | `RuntimeError` | fault | provider | `wisp/structured_output.py:28` | 3 | `wisp/structured_output.py:160` | — | — |
