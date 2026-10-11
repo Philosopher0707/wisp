@@ -663,6 +663,38 @@ class TestBuildChildConfig:
         cfg = runner._build_child_config(contract, "/tmp")
         assert cfg.model == "test-model"
 
+    def test_a_parent_with_no_model_gives_the_child_the_model_the_parent_turn_serves(self):
+        """`WISP_MODEL=` (empty) means "the first model the provider serves". The parent turn resolves that in `_create_core`, but a child used to
+        inherit the empty string and the provider answered 400 "model field is required" for every graph node and every /spawn."""
+        from wisp.config import WispConfig
+        from wisp.multi_agent._runner import SubagentRunner
+        parent = WispConfig().replace(provider="mock", model="")
+        assert parent.model == ""
+        runner = SubagentRunner(parent, Path("/tmp"))
+        child = runner._build_child_config(SubagentContract(name="test", task="hello"), "/tmp")
+        assert child.model == "mock-model"
+        assert parent.model == ""  # the parent's own setting is not rewritten
+
+    def test_a_contract_model_still_wins_over_the_resolution(self):
+        from wisp.config import WispConfig
+        from wisp.multi_agent._runner import SubagentRunner
+        runner = SubagentRunner(WispConfig().replace(provider="mock", model=""), Path("/tmp"))
+        child = runner._build_child_config(SubagentContract(name="test", task="hello", model="tier-model"), "/tmp")
+        assert child.model == "tier-model"
+
+    def test_an_unresolvable_model_stays_empty_and_does_not_stop_the_child(self, monkeypatch):
+        from wisp import provider_catalog
+        from wisp.config import WispConfig
+        from wisp.multi_agent._runner import SubagentRunner
+
+        def boom(cfg):
+            raise RuntimeError("catalog down")
+
+        monkeypatch.setattr(provider_catalog, "resolve_selection", boom)
+        runner = SubagentRunner(WispConfig().replace(provider="mock", model=""), Path("/tmp"))
+        child = runner._build_child_config(SubagentContract(name="test", task="hello"), "/tmp")
+        assert child.model == ""
+
     def test_workspace_from_contract(self, mock_parent_agent):
         from wisp.multi_agent._runner import SubagentRunner
         runner = SubagentRunner(mock_parent_agent.config, Path("/tmp"))
