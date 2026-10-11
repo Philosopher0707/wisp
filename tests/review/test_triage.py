@@ -140,6 +140,7 @@ class TestRelationsBetweenPRs:
         rows = {r.number: r for r in T.classify([a, b, c], now=NOW, default_branch="main")}
         assert rows[1].outcome == "possible_duplicate" and rows[1].overlaps == [2]
         assert rows[2].outcome == "possible_duplicate" and rows[2].overlaps == [1]
+        assert not any("merge-order" in r for r in rows[1].reasons + rows[2].reasons), "a duplicate is not also reported as a mere merge-order question"
         assert rows[3].outcome == "ready_for_review" and rows[3].overlaps == []
 
     def test_identical_titles_count_too(self):
@@ -161,6 +162,55 @@ class TestRelationsBetweenPRs:
         a = pr(1, files=[{"path": "src/x.py", "additions": 1, "deletions": 0}, {"path": "src/a.py", "additions": 1, "deletions": 0}])
         b = pr(2, files=[{"path": "src/x.py", "additions": 1, "deletions": 0}, {"path": "src/b.py", "additions": 1, "deletions": 0}])
         assert [r.overlaps for r in T.classify([a, b], now=NOW, default_branch="main")] == [[], []]
+
+    def test_files_nearly_every_pr_changes_say_nothing_about_duplication(self):
+        """The generated pages and the knowledge-base log are in almost every pull request of a repository like this one. Counted as overlap,
+        a green PR looked like a duplicate of two others it only shared those with, and the next action told the owner to keep one."""
+        pages = [{"path": p, "additions": 1, "deletions": 0} for p in ("register.md", "CURRENT_FLAGS.md", "CURRENT_AUTHORITIES.md", "AGENTS_LEARNING.md")]
+        prs = [pr(n, title=f"change {n}", files=pages + [{"path": f"src/own{n}.py", "additions": 1, "deletions": 0}]) for n in range(1, 6)]
+        rows = T.classify(prs, now=NOW, default_branch="main")
+        assert all(r.overlaps == [] and r.outcome == "ready_for_review" for r in rows)
+
+    def test_a_file_three_prs_change_still_counts_as_overlap(self):
+        shared = [{"path": f"src/shared{i}.py", "additions": 1, "deletions": 0} for i in range(4)]
+        rows = T.classify([pr(n, title=f"change {n}", files=shared) for n in (1, 2, 3)], now=NOW, default_branch="main")
+        assert [r.overlaps for r in rows] == [[2, 3], [1, 3], [1, 2]]
+
+    def test_a_file_four_prs_change_is_too_common_to_count(self):
+        shared = [{"path": f"src/shared{i}.py", "additions": 1, "deletions": 0} for i in range(4)]
+        rows = T.classify([pr(n, title=f"change {n}", files=shared) for n in (1, 2, 3, 4)], now=NOW, default_branch="main")
+        assert all(r.overlaps == [] and r.outcome == "ready_for_review" for r in rows)
+
+    def test_a_real_file_two_prs_both_change_is_a_merge_order_question_not_a_duplicate(self):
+        pages = [{"path": p, "additions": 1, "deletions": 0} for p in ("register.md", "CURRENT_FLAGS.md", "CURRENT_AUTHORITIES.md", "AGENTS_LEARNING.md")]
+        coding = {"path": "wisp/coding.py", "additions": 3, "deletions": 1}
+        prs = [pr(n, title=f"change {n}", files=pages + ([coding] if n in (1, 2) else []) + [{"path": f"src/own{n}.py", "additions": 1, "deletions": 0}]) for n in range(1, 5)]
+        rows = {r.number: r for r in T.classify(prs, now=NOW, default_branch="main")}
+        assert rows[1].overlaps == [] and rows[1].outcome == "ready_for_review"
+        assert any("#2" in r and "wisp/coding.py" in r and "merge-order" in r for r in rows[1].reasons)
+        assert any("#1" in r and "wisp/coding.py" in r for r in rows[2].reasons)
+        assert not any("coding.py" in r for r in rows[3].reasons + rows[4].reasons)
+
+    @pytest.mark.parametrize("count,expected", [(3, "(src/t0.py, src/t1.py, src/t2.py)"), (4, "(src/t0.py, src/t1.py, src/t2.py +1 more)"), (6, "(src/t0.py, src/t1.py, src/t2.py +3 more)")])
+    def test_the_merge_order_remark_names_three_files_and_counts_the_rest(self, count, expected):
+        shared = [{"path": f"src/t{i}.py", "additions": 1, "deletions": 0} for i in range(count)]
+        a = pr(1, title="a", files=shared + [{"path": f"a/{i}.py", "additions": 1, "deletions": 0} for i in range(20)])
+        b = pr(2, title="b", files=shared + [{"path": f"b/{i}.py", "additions": 1, "deletions": 0} for i in range(20)])
+        (remark,) = [r for r in {x.number: x for x in T.classify([a, b], now=NOW, default_branch="main")}[1].reasons if "merge-order" in r]
+        assert expected in remark
+
+    def test_files_everyone_touches_do_not_dilute_a_real_duplicate(self):
+        """Two PRs with the same real files are duplicates even when only one of them also changes the files every PR changes."""
+        hot = [{"path": f"CURRENT_{i}.md", "additions": 1, "deletions": 0} for i in range(4)]
+        real = [{"path": f"src/real{i}.py", "additions": 1, "deletions": 0} for i in range(3)]
+        prs = [pr(1, title="a", files=real + hot), pr(2, title="b", files=real)] + [pr(n, title=f"other {n}", files=hot + [{"path": f"src/own{n}.py", "additions": 1, "deletions": 0}]) for n in (3, 4, 5)]
+        rows = {r.number: r for r in T.classify(prs, now=NOW, default_branch="main")}
+        assert rows[1].overlaps == [2] and rows[2].overlaps == [1]
+
+    def test_a_stack_gets_no_merge_order_remark(self):
+        shared = [{"path": f"src/shared{i}.py", "additions": 1, "deletions": 0} for i in range(4)]
+        rows = {r.number: r for r in T.classify([pr(1, title="base", files=shared), pr(2, title="on top", baseRefName="branch-1", files=shared)], now=NOW, default_branch="main")}
+        assert not any("merge-order" in r for row in rows.values() for r in row.reasons)
 
     def test_a_stack_overlaps_by_construction_and_is_not_a_duplicate(self):
         shared = [{"path": f"src/shared{i}.py", "additions": 1, "deletions": 0} for i in range(4)]

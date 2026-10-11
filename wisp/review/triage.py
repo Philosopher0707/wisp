@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 import subprocess
+from collections import Counter
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Sequence
@@ -26,6 +27,9 @@ LARGE_FILES = 40
 LARGE_LINES = 1500
 DUPLICATE_OVERLAP = 0.6
 DUPLICATE_MIN_SHARED = 2
+#: A file this many open pull requests change is a magnet, not evidence: the generated pages and the knowledge-base log are in almost every PR of a repository like
+#: this one. Counted, they made a green PR look like a duplicate of two others it only shared those with.
+HOT_FILE_MIN_PRS = 4
 MIN_BODY_CHARS = 20
 GH_TIMEOUT_S = 60
 
@@ -133,6 +137,9 @@ def classify(prs: Sequence[Any], *, now: datetime | None = None, default_branch:
         parent = head_to_number.get(str(p.get("baseRefName", ""))) if str(p.get("baseRefName", "")) != default_branch else None
         stacked_of[p["number"]] = None if parent == p["number"] else parent
 
+    touched = Counter(path for paths in files_by_number.values() for path in set(paths))
+    hot = {path for path, count in touched.items() if count >= HOT_FILE_MIN_PRS}
+
     def ancestors(number: int) -> set[int]:
         seen: set[int] = set()
         current = stacked_of.get(number)
@@ -211,12 +218,16 @@ def classify(prs: Sequence[Any], *, now: datetime | None = None, default_branch:
         for other in parsed:
             if other["number"] == number or other["number"] in ancestors(number) or number in ancestors(other["number"]):
                 continue  # a stack overlaps by construction: a pull request is not a duplicate of the one it is built on
-            shared = set(files) & set(files_by_number[other["number"]])
-            union = set(files) | set(files_by_number[other["number"]])
+            mine, theirs = set(files) - hot, set(files_by_number[other["number"]]) - hot
+            shared, union = mine & theirs, mine | theirs
             same_files = len(shared) >= DUPLICATE_MIN_SHARED and len(shared) / len(union) >= DUPLICATE_OVERLAP
             same_title = bool(title) and title == _normalized_title(str(other.get("title", "")))
             if same_files or same_title:
                 overlaps.append(other["number"])
+            elif shared:
+                names = sorted(shared)
+                shown = ", ".join(names[:3]) + (f" +{len(names) - 3} more" if len(names) > 3 else "")
+                reasons.append(f"it changes the same file(s) as #{other['number']} ({shown}): a merge-order question, not necessarily a duplicate")
         if overlaps:
             applies.add("possible_duplicate")
             reasons.append("it overlaps #" + ", #".join(str(n) for n in sorted(overlaps)))
