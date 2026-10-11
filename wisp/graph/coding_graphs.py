@@ -12,6 +12,7 @@ from typing import Any
 
 READ = ["read_file", "list_files", "search_symbols", "search_codebase"]
 WRITE = READ + ["write_file", "edit_file", "run_bash", "run_tests", "diagnose"]
+VERIFY = READ + ["run_tests"]  # a verdict with evidence is a test run's result, not an opinion
 
 
 def _agent(nid: str, responsibility: str, tools: list[str],
@@ -38,7 +39,7 @@ def simple_analyze_implement_verify(ctx_files: list[str]) -> dict:
                     "analyze": _agent("analyze", "analyze the request and locate relevant code", READ),
                     "implement": _agent("implement", "implement the change; report changed_files", WRITE),
                     "verify": {"type": "verifier", "responsibility": "verify the change with evidence",
-                               "allowed_tools": READ},
+                               "allowed_tools": VERIFY},
                 },
                 "edges": [
                     {"from": "analyze", "to": "implement",
@@ -92,7 +93,7 @@ def implement_review_repair(ctx_files: list[str]) -> dict:
                                   "exit": "verify", "max_iterations": 3}},
                     "verify": {"type": "verifier",
                                "responsibility": "verify with test evidence",
-                               "allowed_tools": READ},
+                               "allowed_tools": VERIFY},
                     "done": _agent("done", "summarize the verified change", READ),
                 },
                 "edges": [

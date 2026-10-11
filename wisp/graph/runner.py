@@ -14,6 +14,7 @@ passes ToolExecutor.authorize().
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import os
@@ -21,11 +22,54 @@ from collections.abc import Mapping
 from typing import Any
 
 from wisp.graph.security import scrub_text as redact
-from wisp.graph.types import GraphNode, NodeResult, NodeStatus
+from wisp.graph.types import GraphNode, NodeResult, NodeStatus, NodeType
 
 MAX_TASK_CHARS = 8000
 
 logger = logging.getLogger(__name__)
+
+#: What a verifier node is told to end its reply with. The executor reads the verdict from `output["decision"]`; a model's free text never has that key, so
+#: before this every verifier answered REJECT whatever it said.
+VERDICT_INSTRUCTIONS = (
+    "\n\n[Reply format]\nEnd your reply with ONE JSON object on its own line, nothing after it:\n"
+    '{"decision": "ALLOW" | "REJECT" | "RETRY" | "ESCALATE", "reason_codes": ["..."], "evidence": ["..."], "message": "..."}\n'
+    "ALLOW only when you have evidence you observed yourself (a test run's result, a file you read, a diff); list each item in \"evidence\". "
+    "Anything else, or no evidence, is REJECT, and \"message\" says what is wrong so the work can be corrected."
+)
+_MAX_VERDICT_TEXT = 20_000
+
+
+def verdict_from_reply(text: str) -> dict[str, Any]:
+    """The verifier's verdict from the end of its reply: the LAST JSON object in the text that has a `decision`.
+
+    Fail closed. No such object, a decision outside the four, ALLOW with no evidence of its own: each is a REJECT whose reason code says which, never an accept
+    and never an exception. The reply is the model's text and is data: it can only ask for ALLOW, and only an observed piece of evidence lets the request stand.
+    """
+    reject = {"decision": "REJECT"}
+    if not isinstance(text, str) or not text.strip():
+        return {**reject, "reason_codes": ["NO_VERDICT"]}
+    text = text[-_MAX_VERDICT_TEXT:]
+    decoder = json.JSONDecoder()
+    found: dict[str, Any] | None = None
+    index = text.find("{")
+    while index != -1:
+        try:
+            value, end = decoder.raw_decode(text, index)
+        except ValueError:
+            index = text.find("{", index + 1)
+            continue
+        if isinstance(value, dict) and "decision" in value:
+            found = value
+        index = text.find("{", end if isinstance(value, dict) else index + 1)
+    if found is None:
+        return {**reject, "reason_codes": ["NO_VERDICT"]}
+    decision = str(found.get("decision", "")).strip().upper()
+    codes = [str(c)[:128] for c in (found.get("reason_codes") or []) if isinstance(c, (str, int))][:32]
+    evidence = [e.strip()[:512] for e in (found.get("evidence") or []) if isinstance(e, str) and e.strip()][:64]
+    message = str(found.get("message", ""))[:2048]
+    if decision == "ALLOW" and not evidence:
+        return {"decision": "REJECT", "reason_codes": [*codes, "NO_EVIDENCE"][:32], "evidence": [], "message": message}
+    return {"decision": decision, "reason_codes": codes, "evidence": evidence, "message": message}
 
 
 class SubagentNodeRunner:
@@ -73,9 +117,10 @@ class SubagentNodeRunner:
                 workspace = isolated
             except (OSError, ValueError):
                 workspace = self._workspace
+        verifier = node.type == NodeType.VERIFIER
         sub = SubagentContract(
             name=node.id, role=str(node.config.get("role", "generalist"))[:64],
-            task=f"{task_text}\n\n[Node input]\n{_compact(inputs)}",
+            task=f"{task_text}\n\n[Node input]\n{_compact(inputs)}" + (VERDICT_INSTRUCTIONS if verifier else ""),
             tools=list(contract.allowed_tools) or ["all"],
             max_iterations=max_iter,
             timeout_seconds=float(timeout),
@@ -84,10 +129,19 @@ class SubagentNodeRunner:
             model=model,
             output_format="json" if contract.output_schema else "text",
             output_schema=contract.output_schema or None,
-            max_retries=max(min(contract.retry_policy.max_attempts - 1, 10), 0))
+            max_retries=max(min(contract.retry_policy.max_attempts - 1, 10), 0),
+            cache=False)
         result = await self._orch.run(sub)
         status = NodeStatus.SUCCESS if result.success else NodeStatus.FAILURE
-        output = result.output if isinstance(result.output, dict) else {"text": str(result.output)}
+        structured = getattr(result, "validated_output", None)
+        if isinstance(result.output, dict):
+            output = result.output
+        elif isinstance(structured, dict):
+            output = {**structured, "text": str(result.output)}  # the parsed reply the orchestrator already validated, plus the text the summary reads
+        else:
+            output = {"text": str(result.output)}
+        if verifier:
+            output = {**output, **verdict_from_reply(output.get("text", ""))}
         patch = getattr(result, "worktree_patch", "")
         if isinstance(patch, str) and patch and len(patch) < 4_000_000:
             output = {**output, "worktree_patch": patch}
