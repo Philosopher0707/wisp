@@ -811,3 +811,7 @@ The owner pressed Ctrl-C during a prompt that the strategy gate had routed to th
 - **Reproduce with a real signal in a real pty**, with the stalled-provider stub #90 used: the new test failed with the owner's traceback (`_run_once` → `select` → KeyboardInterrupt) before any change. A fake exception would not have shown that the shutdown of `asyncio.run` does not hang (it did not: `/exit` still left within 12 s).
 - Test the handler stays armed: two interrupted graph turns, then a normal command, then `/exit`.
 - Not verified: whether work the graph's workers had already started (a shell command) is stopped by the cancel.
+
+## Two `git worktree` commands at once corrupt each other's view; CI failed three times on it (2026-10-11)
+
+`test_conflicting_shared_edits_reported_not_corrupted` failed on #122, #127 and elsewhere with `fatal: failed to read .git/worktrees/writer-1-.../commondir` (exit 128): writer 2's `git worktree add` listed `.git/worktrees/` while writer 1's `git worktree remove` was deleting its own entry. It passed on rerun, which is why it was taken for a flake. `WorktreeManager` now runs `add`, `remove` and `prune` (including the orphan reaper's) one at a time, one lock per event loop (the orchestrator is used from the REPL's loop and from the graph's own `asyncio.run`). Test: `tests/test_worktree_admin_serialized.py` counts `git worktree add|remove|prune` processes alive at once: 6 before, 1 after; each of the four lock sites was removed in turn and the test failed every time.
