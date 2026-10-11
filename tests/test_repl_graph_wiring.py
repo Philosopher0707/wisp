@@ -89,6 +89,164 @@ class FakeRunner:
         self.config = {"workspace": "."}
 
 
+def run_fan_out(monkeypatch, tmp_path, failing=(), findings="found three things"):
+    """The `parallel-analysis` template through `run_coding_template` and the real executor, with a fake node runner (a model is not needed to
+    know what the summary says about what the nodes returned)."""
+    from wisp.graph import runner as graph_runner
+    from wisp.graph.executor import GraphExecutor
+    from wisp.graph.store import GraphStore
+    from wisp.graph.types import NodeResult, NodeStatus
+
+    async def run(node, inputs):
+        if node.id in failing:
+            return NodeResult(node.id, NodeStatus.FAILURE, error_code="NODE_FAILED", message="Provider kept rejecting requests (HTTP 429)")
+        if node.id == "synthesize":
+            return NodeResult(node.id, NodeStatus.SUCCESS, output={"text": "Layout is clean; deps has no tests."})
+        return NodeResult(node.id, NodeStatus.SUCCESS, output={"findings": f"{node.id}: {findings}"})
+
+    async def no_sleep(seconds):
+        pass
+
+    def executor(workspace, max_concurrency=8, emit=None, config=None):
+        ex = GraphExecutor(runner=run, workspace=workspace, store=GraphStore(workspace=workspace), sleep=no_sleep)
+        ex.register_function("split_work", lambda inputs: {"ok": True})
+        return ex
+
+    monkeypatch.setattr(graph_runner, "default_executor", executor)
+    context = C.task_context_from_prompt("audit the services", str(tmp_path), {"workspace": str(tmp_path)})
+    final = C.run_coding_template("parallel-analysis", context)
+    return final, C.summarize_graph("parallel-analysis", final["run_id"], final)
+
+
+class TestWhatTheGraphProducedIsNotThrownAway:
+    """Found by running the shipped `parallel-analysis` template through the real executor (2026-10-11): a run in which every branch succeeded
+    reported `graph succeeded` (the synthesised analysis, the whole point of the graph, was dropped: the summary looked for nodes called `final`,
+    `final2` or `review`, and this template ends in `synthesize`); and a run in which one branch hit a 429 reported only `tests: Provider kept
+    rejecting requests (HTTP 429)`, dropping what the three branches that finished had found."""
+
+    def test_the_run_result_names_the_graphs_sinks(self, monkeypatch, tmp_path):
+        final, _ = run_fan_out(monkeypatch, tmp_path)
+        assert final["sinks"] == ["synthesize"]
+
+    def test_a_finished_analysis_reports_what_it_found(self, monkeypatch, tmp_path):
+        final, r = run_fan_out(monkeypatch, tmp_path)
+        assert final["status"] == "succeeded" and r.success is True
+        assert r.summary == "Layout is clean; deps has no tests."
+
+    def test_one_dead_branch_does_not_hide_what_the_others_found(self, monkeypatch, tmp_path):
+        final, r = run_fan_out(monkeypatch, tmp_path, failing=("tests",))
+        assert final["status"] == "cancelled"
+        assert r.success is False, "the status stays honest: the run did not finish"
+        assert "tests: Provider kept rejecting requests (HTTP 429)" in r.summary, "and it says why"
+        assert "finished before it stopped" in r.summary
+        for branch in ("structure", "symbols", "deps"):
+            assert f"{branch}: {branch}: found three things" in r.summary
+        assert "synthesize" not in r.summary and "split" not in r.summary, "nodes that produced nothing are not listed"
+
+    def test_what_the_finished_nodes_produced_is_bounded(self, monkeypatch, tmp_path):
+        _, r = run_fan_out(monkeypatch, tmp_path, failing=("tests",), findings="x" * 5000)
+        assert len(r.summary) <= 2000
+        # each node's text starts with its own name (`deps: ` is 6 characters, `structure: ` is 11) and is cut to 150 characters in all
+        assert "x" * 144 in r.summary and "x" * 145 not in r.summary, "each node is cut to 150 characters"
+
+    def test_a_run_that_ended_at_its_reviewer_is_summarised_by_the_reviewer_not_by_every_node(self):
+        r = C.summarize_graph("t", "graph-abc", final_with("REJECT"))
+        assert r.summary == "reviewer said REJECT"
+
+    def test_without_sinks_the_old_tail_names_still_work(self):
+        final = final_with("ALLOW")
+        assert "sinks" not in final
+        assert C.summarize_graph("t", "graph-abc", final).summary == "reviewer said ALLOW"
+
+    def test_many_finished_nodes_are_counted_not_all_listed(self):
+        nodes = {f"b{i}": {"status": "success", "output": {"findings": f"found {i}"}} for i in range(10)}
+        nodes["bad"] = {"status": "failure", "message": "boom"}
+        r = C.summarize_graph("t", "graph-abc", {"status": "cancelled", "run_id": "g", "results_by_node": nodes, "sinks": ["sink"]})
+        assert "bad: boom" in r.summary and "b0: found 0" in r.summary and "b5: found 5" in r.summary
+        assert "b6" not in r.summary and "(+4 more)" in r.summary
+
+
+class TestWhichTextTheGraphReports:
+    @staticmethod
+    def tail(**out):
+        final = {"status": "succeeded", "run_id": "g", "sinks": ["done"], "results_by_node": {"done": {"status": "success", "output": out}}}
+        return C.summarize_graph("t", "g", final).summary
+
+    @staticmethod
+    def stopped(nodes):
+        return C.summarize_graph("t", "g", {"status": "cancelled", "run_id": "g", "sinks": ["sink"], "results_by_node": nodes})
+
+    def test_summary_beats_text_beats_findings(self):
+        assert self.tail(summary="S", text="T", findings="F") == "S"
+        assert self.tail(text="T", findings="F") == "T"
+        assert self.tail(findings="F") == "F"
+
+    def test_findings_given_as_a_list_are_joined_and_cut_to_five(self):
+        assert self.tail(findings=["a", "b", "c", "d", "e", "f"]) == "a; b; c; d; e"
+
+    def test_whitespace_is_not_a_summary_and_the_product_keeps_its_shape(self):
+        assert self.tail(summary="  \n ", text="T") == "T"
+        assert self.tail(summary="line one\nline two") == "line one\nline two"
+
+    def test_a_node_listed_as_finished_is_one_line(self):
+        r = self.stopped({"a": {"status": "success", "output": {"findings": "first line\nsecond   line"}}, "bad": {"status": "failure", "message": "boom"}})
+        assert "a: first line second line" in r.summary
+
+    def test_a_successful_run_with_no_text_at_its_sink_is_not_dressed_up_as_a_stop(self):
+        nodes = {"implement": {"status": "success", "output": {"summary": "implemented", "changed_files": ["a.py"]}}, "verify": {"status": "success", "output": {"decision": "ALLOW"}}}
+        final = {"status": "succeeded", "run_id": "g", "sinks": ["verify"], "results_by_node": nodes}
+        assert C.summarize_graph("t", "g", final).summary == "graph succeeded"
+
+    def test_a_failed_nodes_output_is_not_counted_as_finished(self):
+        r = self.stopped({"a": {"status": "failure", "output": {"findings": "partial garbage"}, "message": "boom"}, "b": {"status": "success", "output": {"findings": "good"}}})
+        assert "b: good" in r.summary and "garbage" not in r.summary
+
+    def test_the_problems_are_cut_to_make_room_for_what_finished(self):
+        nodes = {f"bad{i}": {"status": "failure", "message": "m" * 300} for i in range(4)}
+        nodes["ok"] = {"status": "success", "output": {"findings": "kept"}}
+        head, sep, tail = self.stopped(nodes).summary.partition(" | ")
+        assert sep and len(head) == 200 and tail == "finished before it stopped: ok: kept"
+
+    def test_without_anything_finished_the_problems_keep_their_whole_room(self):
+        nodes = {f"bad{i}": {"status": "failure", "message": "m" * 300} for i in range(4)}
+        summary = self.stopped(nodes).summary
+        assert len(summary) > 1000 and " | " not in summary
+
+    def test_the_whole_summary_is_cut_to_two_thousand_characters(self):
+        nodes = {"bad": {"status": "failure", "message": "m" * 300}}
+        nodes.update({f"b{i}" + "n" * 400: {"status": "success", "output": {"findings": "y" * 1000}} for i in range(8)})  # node ids have no bound of their own
+        assert len(self.stopped(nodes).summary) == 2000
+
+    def test_what_finished_comes_early_enough_to_survive_the_conversations_record(self):
+        nodes = {"bad": {"status": "failure", "message": "m" * 300}}
+        nodes.update({f"b{i}": {"status": "success", "output": {"findings": f"found {i}"}} for i in range(4)})
+        kept = self.stopped(nodes).summary[:C.RECORD_SUMMARY_CHARS]
+        assert "b0: found 0" in kept and "b1: found 1" in kept
+
+    def test_the_sink_beats_a_node_that_merely_has_a_familiar_name(self):
+        nodes = {"review": {"status": "success", "output": {"summary": "interim review"}}, "report": {"status": "success", "output": {"summary": "final report"}}}
+        final = {"status": "succeeded", "run_id": "g", "sinks": ["report"], "results_by_node": nodes}
+        assert C.summarize_graph("t", "g", final).summary == "final report"
+
+    def test_the_graphs_product_is_cut_to_two_thousand_characters(self):
+        assert len(self.tail(summary="z" * 5000)) == 2000
+
+    def test_exactly_six_finished_nodes_are_all_listed_without_a_count_of_more(self):
+        nodes = {f"b{i}": {"status": "success", "output": {"findings": f"found {i}"}} for i in range(6)}
+        nodes["bad"] = {"status": "failure", "message": "boom"}
+        summary = self.stopped(nodes).summary
+        assert "b5: found 5" in summary and "more" not in summary
+
+    def test_only_the_first_four_problems_are_reported(self):
+        nodes = {f"bad{i}": {"status": "failure", "message": f"problem {i}"} for i in range(5)}
+        summary = self.stopped(nodes).summary
+        assert "bad3: problem 3" in summary and "bad4" not in summary
+
+    def test_a_run_that_succeeded_but_whose_sink_made_no_text_lists_nothing(self):
+        final = {"status": "succeeded", "run_id": "g", "sinks": ["sink"], "results_by_node": {"a": {"status": "success", "output": {"findings": "x"}}}}
+        assert C.summarize_graph("t", "g", final).summary == "graph succeeded"
+
+
 GRAPH_PROMPT = "implement the login api for this service across the module"
 
 

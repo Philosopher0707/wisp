@@ -112,6 +112,9 @@ def test_a_question_goes_to_the_model_and_an_objective_goes_to_the_loop_which_is
 
 
 def test_the_harness_proves_a_fix_by_measuring_the_repository_not_by_believing_the_model(project):
+    # The mock model does nothing, so without a pause all three attempts finish in well under a second and the person's edit below can land after
+    # the loop has already given up (2 of 5 runs on main, and on CI). The test waits first, then imports, so an edit made during the wait is measured.
+    (project / "tests" / "test_totals.py").write_text("import time\n\n\ndef test_total():\n    time.sleep(3)\n    from totals import total\n\n    assert total([1, 2]) == 3\n")
     repl = Repl(project)
     try:
         mark = repl.send(OBJECTIVE)

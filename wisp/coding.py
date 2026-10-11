@@ -243,7 +243,31 @@ def run_coding_template(template: str, ctx: TaskContext,
     result = asyncio.run(ex.run(graph, run_inputs))
     result["template"], result["transports"] = template, meta.get(
         "artifact_transport", {}).get("transports", {})
+    result["sinks"] = sorted(n.id for n in graph.nodes if not any(e.from_node == n.id for e in graph.edges))
     return result
+
+
+#: Where a run's product used to be looked for, by name. The sinks the run result names come first; these remain for results that carry none.
+_LEGACY_TAILS = ("final", "final2", "review")
+# The conversation keeps RECORD_SUMMARY_CHARS of the summary and the terminal shows 1500, so what the finished nodes found must come early and be short: the reason
+# the run stopped is cut to PARTIAL_PROBLEM_CHARS to make room, and each finished node to PARTIAL_CHARS (the trace has the rest).
+PARTIAL_NODES = 6
+PARTIAL_CHARS = 150
+PARTIAL_PROBLEM_CHARS = 200
+
+
+def _produced(result: Any, oneline: bool = False) -> str:
+    """What a finished node reported: its summary, else its text, else its findings."""
+    out = result.get("output") if isinstance(result, dict) else None
+    if not isinstance(out, dict):
+        return ""
+    for key in ("summary", "text", "findings"):
+        value = out.get(key)
+        if isinstance(value, (list, tuple)):
+            value = "; ".join(str(v) for v in value[:5])
+        if isinstance(value, str) and value.strip():
+            return " ".join(value.split()) if oneline else value
+    return ""
 
 
 def summarize_graph(template: str, run_id: str, final: dict) -> ExecutionResult:
@@ -261,19 +285,28 @@ def summarize_graph(template: str, run_id: str, final: dict) -> ExecutionResult:
                 if isinstance(f, str) and f not in changed:
                     changed.append(f)
         artifacts.extend(a for a in r.get("artifacts", []) if isinstance(a, str))
-    tail = results.get("final") or results.get("final2") or results.get("review") or {}
+    sinks = [n for n in final.get("sinks") or [] if isinstance(n, str)]
     summary = ""
-    if isinstance(tail, dict) and isinstance(tail.get("output"), dict):
-        summary = str(tail["output"].get("summary", tail["output"].get("text", "")))[:2000]
+    for nid in [*sinks, *_LEGACY_TAILS]:
+        summary = _produced(results.get(nid))[:2000]
+        if summary:
+            break
     if not summary:
-        # Surface failed-node messages (e.g. conflict reports) instead of silence.
+        # Surface failed-node messages (e.g. conflict reports) instead of silence, and, when the run stopped, what the nodes that did finish
+        # produced: one branch's 429 must not throw away what three others found.
         problems = []
         for nid, r in results.items():
             if isinstance(r, dict) and r.get("status") not in ("success", "skipped"):
                 msg = str(r.get("message", "") or "")[:300]
                 if msg:
                     problems.append(f"{nid}: {msg}")
-        summary = "; ".join(problems[:4])[:2000]
+        summary = "; ".join(problems[:4])
+        produced = [f"{nid}: {_produced(r, oneline=True)[:PARTIAL_CHARS]}" for nid, r in results.items()
+                    if isinstance(r, dict) and r.get("status") == "success" and _produced(r)]
+        if produced and not ok:
+            listed = "; ".join(produced[:PARTIAL_NODES]) + (f" (+{len(produced) - PARTIAL_NODES} more)" if len(produced) > PARTIAL_NODES else "")
+            summary = (summary[:PARTIAL_PROBLEM_CHARS] + " | " if summary else "") + "finished before it stopped: " + listed
+        summary = summary[:2000]
     verification = "unverified"
     for r in results.values():
         if isinstance(r, dict) and isinstance(r.get("output"), dict) \

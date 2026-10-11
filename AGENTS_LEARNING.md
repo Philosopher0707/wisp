@@ -645,6 +645,15 @@ Search words: wisp setup, _probe, handshake, generate, generate_stream_events, N
 - Second fault found by that stub: the provider layer words a 402 as "the provider refused this request on billing", and `_classify_probe_error` read "refused" as a network failure ("unreachable"). Billing (402 / more credits) is now checked first.
 - Not changed: how the REPL itself sizes `max_tokens` against a key's remaining credit (the 402 in that transcript said 4096 requested, 83 affordable); that is account state, not a wisp bug.
 
+## graph result summary dropped what the graph produced and what the finished branches found (2026-10-11)
+
+Search words: summarize_graph, parallel-analysis, synthesize, graph succeeded, sinks, finished before it stopped, 429, partial results, fan-out, _LEGACY_TAILS, results_by_node, record summary chars.
+
+- **Symptom, found by running the shipped template through the real executor:** a `parallel-analysis` run in which every branch succeeded reported `graph succeeded`, not the synthesised analysis. `summarize_graph` looked for a tail node called `final`, `final2` or `review`, and this template ends in `synthesize` (`simple` ends in `verify`, `parallel-implement-merge` in `merge`). A run in which one branch hit a 429 reported only `tests: Provider kept rejecting requests (HTTP 429)`: the three branches that finished had found things, but the default `all` join never released, the sink was skipped (run status `cancelled`), and their output sat in the store and in no message.
+- **Fix:** `run_coding_template` records the graph's sinks (nodes with no outgoing edge) in the run result; the summary looks at the sinks first and at the old names after. When the run stopped without a product, the failed nodes' messages stay first (cut to 200 characters) and what the finished nodes reported follows (`finished before it stopped: ...`, six nodes, 150 characters each, `(+N more)`). The order and the caps are not cosmetic: the conversation keeps 600 characters of the summary (`RECORD_SUMMARY_CHARS`) and the terminal shows 1,500, so the findings must come early and be short; my first caps (700 and 300) put them after the 600th character, into the part the conversation discards, and a test now pins it. The run's status is untouched: it is still a failure.
+- **What this is not:** the join policy is unchanged (`all`). `JoinPolicy.BEST_EFFORT` exists and would continue past a dead branch, but there is no `partial` run status, so using it would report `succeeded` over a dead branch. That stays a decision for the owner.
+- **Evidence:** RED first (five tests failed on the real-executor path: the sinks, the finished analysis, the dead branch, the bound, the count); 31 mutants of the summary logic, all killed (four survived the first probe and each produced a test: the order of sinks and old names, the 2,000-character cut of the product, the `>` that decides "(+N more)", the limit of four problems).
+
 ## run_bash exit code hid a failed pipeline stage (2026-10-06)
 
 Search words: pipefail, PIPESTATUS, pipeline, exit code, `| tail`, run_bash, masked failure, sink.
