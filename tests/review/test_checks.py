@@ -73,6 +73,36 @@ class TestSecrets:
         line = "    check_secrets, check_conflict_markers, check_config_and_dependencies, check_debug_leftovers,"
         assert run(checks.check_secrets, added_file("src/registry.py", [line])) == []
 
+    # Only a token with a distinctive format is evidence enough to block. A shape (a loose `sk-` prefix, a URL with a password, a JWT, a credential word and a value) is a
+    # heuristic: it warns in code and is ignored in tests and docs, where fixtures live.
+
+    @pytest.mark.parametrize("line", ['OPENAI_SECRET_KEY = "sk-should-never-leak-1"', 'x = {"key": "sk-fixture-1234"}', ".sk-spinner-fold-cube { color: red; }", 'name = "sk-learn-pipeline"'])
+    @pytest.mark.parametrize("path", ["src/app.py", "web/spinner.css", "tests/test_a.py"])
+    def test_a_short_sk_string_is_not_a_key_anywhere(self, line, path):
+        assert run(checks.check_secrets, added_file(path, [line])) == []
+
+    def test_a_long_openai_style_key_blocks_in_source_and_not_only_in_tests(self):
+        key = "sk-" + "Ab1Cd2Ef3Gh4" * 4  # 48 characters after the prefix, the legacy format
+        (finding,) = run(checks.check_secrets, added_file("src/app.py", [f'client = Client(api_key="{key}")']))
+        assert finding.severity is Severity.BLOCK
+        (in_tests,) = run(checks.check_secrets, added_file("tests/test_app.py", [f'client = Client(api_key="{key}")']))
+        assert in_tests.severity is Severity.BLOCK
+
+    @pytest.mark.parametrize("prefix", ["sk-proj-", "sk-ant-api03-", "sk-svcacct-"])
+    def test_the_modern_prefixed_keys_block(self, prefix):
+        key = prefix + "Ab1Cd2Ef3Gh4Ij5Kl6Mn7Op8Qr9St0Uv1Wx2Yz3Ab4Cd5Ef6Gh7"
+        (finding,) = run(checks.check_secrets, added_file("src/app.py", [f'KEY = "{key}"']))
+        assert finding.severity is Severity.BLOCK
+
+    @pytest.mark.parametrize("line", ["DATABASE_URL = 'postgres://admin:hunter2pass@db.internal/app'", "TOKEN = 'eyJhbGciOi.eyJzdWIiOiIx.c2lnbmF0dXJl'"])
+    def test_a_loose_shape_warns_in_source_and_is_ignored_in_tests(self, line):
+        (finding,) = run(checks.check_secrets, added_file("src/settings.py", [line]))
+        assert finding.severity is Severity.WARN
+        assert run(checks.check_secrets, added_file("tests/test_settings.py", [line])) == []
+
+    def test_a_credential_named_variable_assigned_an_environment_read_is_not_a_leak(self):
+        assert run(checks.check_secrets, added_file("src/app.py", ['OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]', "ANTHROPIC_API_KEY = get_key()"])) == []
+
     def test_a_high_entropy_literal_in_source_still_warns(self):
         (finding,) = run(checks.check_secrets, added_file("src/settings.py", ['value = "Zk9Qw3Rt7Yp2Lm8Nb4Vc6Xd1"']))
         assert finding.severity is Severity.WARN and "entropy" in finding.message

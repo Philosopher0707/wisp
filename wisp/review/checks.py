@@ -100,27 +100,41 @@ def _found_in_code(pattern: re.Pattern[str], text: str) -> bool:
 # ── secrets ──────────────────────────────────────────────────────────────────
 
 _TOKEN_SHAPED = re.compile(r"[A-Za-z0-9+/_=.\-]{20,}")
+#: Kinds with a distinctive format, which is what makes a match evidence rather than a guess. Everything else the gate recognises (a loose `sk-` prefix, a URL with a
+#: password, a JWT, a credential word next to a value) is a shape: it warns in code and is ignored in tests and docs, where fixtures live. The gate over-matches on
+#: purpose (redaction should), a review that blocks must not.
+_STRUCTURED_KINDS = frozenset({
+    "aws-access-key", "github-token", "github-fine-grained-token", "slack-token", "slack-webhook", "discord-webhook", "private-key-block", "openrouter-key", "nvidia-key",
+    "google-api-key", "stripe-key", "npm-token", "pypi-token", "huggingface-token", "sendgrid-key",
+})
+_STRUCTURED_SK = re.compile(r"\bsk-(?:proj|ant|svcacct|admin)-[A-Za-z0-9_\-]{40,}|\bsk-[A-Za-z0-9]{48}\b")
+_SHORT_SK = re.compile(r"sk-[A-Za-z0-9_\-]{0,28}")
 
 
-def _certain_kinds(line: str) -> list[str]:
+def _structured_kinds(line: str) -> list[str]:
     """Kinds specific enough to block on. The gate merges overlapping spans, so a vendor token after `token:` comes back as a generic assignment or as `entropy`;
     the bare token is checked on its own so its vendor pattern is not hidden by the words around it."""
     kinds = set(secret_gate.high_confidence_kinds(line))
     for token in _TOKEN_SHAPED.findall(line):
         kinds.update(secret_gate.high_confidence_kinds(token))
-    return sorted(kinds)
+    found = {kind for kind in kinds if kind in _STRUCTURED_KINDS}
+    if _STRUCTURED_SK.search(line):
+        found.add("openai-or-anthropic-key")
+    return sorted(found)
 
 
 def _weak_is_noise(path: str, text: str, findings: Sequence[Any]) -> bool:
-    """Weak shapes (a credential word assigned something, a high-entropy token) are for production code. In tests and docs they are almost always fixtures and prose, and a
-    credential word assigned an expression (`token = make_token()`, `KEY = os.environ[...]`) is code that handles a secret, not a secret. A vendor token is never weak."""
+    """A shape is for production code. In tests and docs it is almost always a fixture or prose; a credential word assigned an expression (`token = make_token()`,
+    `KEY = os.environ[...]`) is code that handles a secret, not a secret; a long snake_case name beside a credential word is not a token; and a short `sk-` string is not
+    a key (real ones are long)."""
     if is_test_path(path) or path.lower().endswith(_DOC_SUFFIXES):
         return True
     for found in findings:
         value = text[found.start:found.end]
         expression = any(c in value for c in "([{") or text[found.end:found.end + 1] in ("(", "[", "{")
-        identifier = found.kind == "entropy" and value.replace("_", "").isalpha()  # a long snake_case name next to a credential word, not a token
-        if not (expression or identifier):
+        identifier = found.kind == "entropy" and value.replace("_", "").isalpha()
+        short_key = _SHORT_SK.fullmatch(value) is not None
+        if not (expression or identifier or short_key):
             return False
     return True
 
@@ -132,12 +146,12 @@ def check_secrets(files: Sequence[FileDiff], ctx: CheckContext) -> list[Finding]
             result = secret_gate.scrub(text)
             if not result.findings:
                 continue
-            certain = _certain_kinds(text)
-            if not certain and _weak_is_noise(fd.path, text, result.findings):
+            structured = _structured_kinds(text)
+            if not structured and _weak_is_noise(fd.path, text, result.findings):
                 continue
-            kinds = certain or sorted({f.kind for f in result.findings})
+            kinds = structured or sorted({f.kind for f in result.findings})
             found.append(Finding(
-                rule="secret", severity=Severity.BLOCK if certain else Severity.WARN, file=fd.path, line=number,
+                rule="secret", severity=Severity.BLOCK if structured else Severity.WARN, file=fd.path, line=number,
                 quote=result.text.strip()[:QUOTE_CHARS], evidence="gate:secrets",
                 message=f"added line looks like it contains a credential ({', '.join(kinds)}); the value is not shown here",
                 suggestion="Remove it from the change and from history, and rotate it: a credential that was committed is compromised."))
