@@ -45,3 +45,67 @@ def test_slash_graph_in_the_repl_hands_over_the_repls_own_orchestrator(monkeypat
     ctx = ReplContext(runtime=SimpleNamespace(orchestrator=host), transport=None, session={}, config={"workspace": "."})
     Dispatcher().dispatch(ctx, "/graph run g.yaml {}")
     assert seen["orchestrator"] is host and seen["argv"][:2] == ["run", "g.yaml"]
+
+
+def test_from_the_shell_the_terminals_subagent_approver_is_the_one_wired(monkeypatch):
+    """`wisp graph run` gives the workers the transport's subagent approval (the one that stops the spinner it starts), not its plain `approve`."""
+    from types import SimpleNamespace
+
+    import wisp.composition as composition
+    import wisp.transport.cli as transport_cli
+
+    given: list = []
+
+    class FakeRoot:
+        def __init__(self, config):
+            self.runtime = object()
+            self.subagent_orchestrator = SimpleNamespace(set_approval_handler=given.append)
+            self.background_agents = None
+
+        def start(self):
+            pass
+
+        def shutdown(self):
+            pass
+
+    class FakeTransport:
+        def __init__(self, *a, **k):
+            pass
+
+        async def approve(self, tool_call):
+            return True
+
+        async def approve_for_subagent(self, tool_call):
+            return True
+
+    monkeypatch.setattr(composition, "CompositionRoot", FakeRoot)
+    monkeypatch.setattr(transport_cli, "CLITransport", FakeTransport)
+    monkeypatch.setattr("sys.stdin", SimpleNamespace(isatty=lambda: True))
+    with _workers(None, ".", "", ""):
+        pass
+    assert len(given) == 1 and given[0].__name__ == "approve_for_subagent"
+
+
+def test_without_a_terminal_the_workers_get_no_approver(monkeypatch):
+    from types import SimpleNamespace
+
+    import wisp.composition as composition
+
+    given: list = []
+
+    class FakeRoot:
+        def __init__(self, config):
+            self.runtime = object()
+            self.subagent_orchestrator = SimpleNamespace(set_approval_handler=given.append)
+
+        def start(self):
+            pass
+
+        def shutdown(self):
+            pass
+
+    monkeypatch.setattr(composition, "CompositionRoot", FakeRoot)
+    monkeypatch.setattr("sys.stdin", SimpleNamespace(isatty=lambda: False))
+    with _workers(None, ".", "", "") as workers:
+        assert workers is not None
+    assert given == []

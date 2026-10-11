@@ -197,7 +197,7 @@ def _run_cli(root: CompositionRoot, prompt: str | None = None, **kwargs) -> None
     # use, instead of being refused for having no approver. Background agents are excluded (multi_agent/approval_relay.py).
     orchestrator = getattr(root, "subagent_orchestrator", None)
     if orchestrator is not None and hasattr(orchestrator, "set_approval_handler"):
-        orchestrator.set_approval_handler(transport.approve)
+        orchestrator.set_approval_handler(transport.approve_for_subagent)
 
     # Interactive setup offer (GH#18): tty-only, mock counts as usable,
     # scripts/pipes never block. A completed setup needs a restart since

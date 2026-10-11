@@ -877,6 +877,19 @@ class CLITransport(Transport):
             if typeahead is not None and typeahead.enabled:
                 typeahead.resume()
 
+    async def approve_for_subagent(self, tool_call: dict) -> bool:
+        """`approve()` for a subagent's tool call.
+
+        The prompt starts a spinner for the tool it just approved and this transport stops it when that tool's result is rendered. A subagent's results are not
+        rendered here (the graph prints its own progress lines, `/spawn` its own status), so nothing would stop it and it kept repainting the terminal for as long as
+        the REPL sat at its prompt.
+        """
+        try:
+            return await self.approve(tool_call)
+        finally:
+            if self._spinner is not None:
+                self._spinner.stop()
+
     async def _prompt_loop(self, tool_call: dict, tool_name: str,
                            args_map: dict, approval_info: Any) -> bool:
         """Run the y/n/v/a/d/c prompt until it resolves to allow/deny.
