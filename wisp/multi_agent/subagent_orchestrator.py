@@ -784,7 +784,7 @@ class SubagentOrchestrator:
 
         # ── Cache check ────────────────────────────────────────────────
         contract._cache_context = self._cache_namespace
-        cached = self._cache.get(contract)
+        cached = self._cache.get(contract) if contract.cache else None
         if cached is not None:
             await self._fire_subagent_hook("subagent_complete", contract, cached)
             return cached
@@ -894,7 +894,7 @@ class SubagentOrchestrator:
             # ── Post-run bookkeeping ───────────────────────────────────
             # Only successes are cached: replaying a failure/timeout as a
             # short-circuited "complete" result defeats retries.
-            if result.success:
+            if result.success and contract.cache:
                 self._cache.set(contract, result)
             self._persistence.save(contract, result)
             self._budget.record(result.tokens_used)

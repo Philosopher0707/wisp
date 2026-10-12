@@ -83,6 +83,7 @@ class GraphExecutor:
         self._approvals: dict[str, dict[str, bool]] = {}
         self._join_wait: dict[str, float] = {}
         self._join_wait_reason: dict[str, str] = {}
+        self._corrections: dict[str, dict[str, Any]] = {}
 
     # ── setup ──
     def register_function(self, name: str, fn: FunctionImpl) -> None:
@@ -712,6 +713,7 @@ class GraphExecutor:
                     # Replay the loop body: reset the correction target and
                     # everything downstream of it inside the declared cycle
                     # (e.g. generator AND verifier), clearing taken labels.
+                    self._corrections[f"{rid}:{e.to_node}"] = _feedback(node.id, result)  # the replay below drops this result; the target is still told why
                     for m in _cycle_replay_set(graph, e.to_node):
                         sched.statuses[m] = NodeStatus.PENDING
                         results.pop(m, None)
@@ -816,13 +818,20 @@ class GraphExecutor:
                 continue
             for dst_path, src_path in (e.mapping or {}).items():
                 val = _resolve_path(src.output, src_path)
+                if val is None:
+                    val = _reply_for_key(graph, e.from_node, src, src_path)
                 if val is not None:
                     _assign_path(data, dst_path, val)
             if not e.mapping:
                 data[e.from_node] = {"output": src.output,
                                      "artifacts": list(src.artifact_ids)}
+        feedback = self._corrections.get(f"{rid}:{nid}")
+        if feedback:
+            data.setdefault("corrections", feedback)
         if nid == graph.entrypoint:
             data = {**run_inputs, **data}
+        elif isinstance(run_inputs.get("objective"), str) and run_inputs["objective"]:
+            data.setdefault("objective", run_inputs["objective"])  # only the entry node used to see the request; a worker further in worked blind
         if len(json.dumps(data, default=str)) > MAX_INPUT_BYTES:
             raise ValueError(f"node {nid}: derived inputs exceed size cap")
         return arts.resolve_inputs(data, rid)
@@ -1067,6 +1076,33 @@ def _over_budget(budget, tokens: int, cost: float, elapsed: float) -> bool:
     if budget.max_runtime_s is not None and elapsed > budget.max_runtime_s:
         return True
     return False
+
+
+MAX_FEEDBACK_CHARS = 4000
+
+
+def _feedback(from_node: str, result: NodeResult) -> dict[str, Any]:
+    """What a correction edge tells the node it sends back: who rejected it, the verdict's own words, and the reviewer's reply, bounded."""
+    out = result.output if isinstance(result.output, dict) else {}
+    return {"from": from_node, "decision": str(out.get("decision", ""))[:32], "message": str(out.get("message", ""))[:2048],
+            "reason_codes": [str(c)[:128] for c in (out.get("reason_codes") or [])][:32], "reply": str(out.get("text", ""))[:MAX_FEEDBACK_CHARS]}
+
+
+def _reply_for_key(graph: Graph, node_id: str, src: NodeResult, src_path: str) -> Any:
+    """A worker that answered in plain text still feeds an edge that reads `output.<key>`: the text stands in for the key.
+
+    An agent node's reply is free text (`{"text": ...}`) unless the model happened to return that key, so an edge such as `output.findings` found nothing and the node
+    after it started from `{}`. Only a plain top-level key of an AGENT or VERIFIER node qualifies; function and router nodes produce real structure and a missing key
+    there stays missing.
+    """
+    key = src_path[len("output."):] if src_path.startswith("output.") else src_path
+    if not key or "." in key or key == "text":
+        return None
+    node = next((n for n in graph.nodes if n.id == node_id), None)
+    if node is None or node.type not in (NodeType.AGENT, NodeType.VERIFIER):
+        return None
+    text = src.output.get("text") if isinstance(src.output, dict) else None
+    return text if isinstance(text, str) and text.strip() else None
 
 
 def _resolve_path(output: dict, path: str) -> Any:

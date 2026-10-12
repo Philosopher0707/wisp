@@ -159,6 +159,10 @@ class SubagentContract:
     context_files: list[str] = field(default_factory=list)
     """Specific file paths to mention in the subagent's context."""
 
+    cache: bool = True
+    """False = never answer this contract from the orchestrator's result cache and never store its result there. A graph node is not a pure function of its task text
+    (a correction retry sends the same text to a worker whose workspace has changed), so the graph runner turns it off."""
+
     background: bool = False
     """Run by the BackgroundAgentManager while the person may be typing at the REPL's own prompt. Such a child never asks for a yes: the prompt would fight the
     input line for the keyboard (see ``approval_relay``)."""
