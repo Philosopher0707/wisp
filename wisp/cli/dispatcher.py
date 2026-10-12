@@ -26,6 +26,14 @@ from typing import Any, Callable, Protocol
 logger = logging.getLogger(__name__)
 
 
+# Commands the input loop handles before a line reaches any registry (`wisp/cli/repl.py`, and `/multiline` in `wisp/entry.py`), so `/help` would
+# otherwise never show them. name -> (description, usage).
+INPUT_LOOP_COMMANDS: dict[str, tuple[str, str]] = {
+    "multiline": ("Switch the prompt between single-line and multi-line input", "/multiline [single|multi]  (no argument toggles)"),
+    "converge": ("Work toward an objective in bounded rounds until the harness says it is met", "/converge <objective> | /converge resume | /converge status"),
+}
+
+
 class CommandResult(Enum):
     """Outcome of dispatching one input line."""
 
@@ -253,6 +261,10 @@ class Dispatcher:
                     ctx.emit(f"/{spec.name} — {spec.description}"
                              + (f"\n  usage: {spec.usage}" if spec.usage else ""))
                     return CommandResult.CONSUMED
+                loop_command = INPUT_LOOP_COMMANDS.get(want)
+                if loop_command is not None:
+                    ctx.emit(f"/{want} — {loop_command[0]}\n  usage: {loop_command[1]}")
+                    return CommandResult.CONSUMED
                 legacy = _legacy_command(want)
                 if legacy is not None:
                     ctx.emit(f"/{legacy.name} — {legacy.description}"
@@ -271,6 +283,10 @@ class Dispatcher:
                 lines.append("Legacy commands (same registry, via the adapter):")
                 for name in sorted(legacy):
                     lines.append(f"  /{name:<12} {legacy[name].description}")
+            lines.append("")
+            lines.append("Input commands (handled by the prompt itself):")
+            for name in sorted(INPUT_LOOP_COMMANDS):
+                lines.append(f"  /{name:<12} {INPUT_LOOP_COMMANDS[name][0]}")
             lines.append("")
             lines.append("  /help <name> for one command's usage.")
             ctx.emit("\n".join(lines))
