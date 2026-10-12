@@ -994,8 +994,12 @@ class SubagentRunner:
         self._approvals = ApprovalBroker(handler) if handler is not None else None
 
     def _approval_kwargs(self, contract: SubagentContract) -> dict[str, Any]:
-        """`approval_handler=` for this child's turn, or nothing: a child with no approver is refused, which is also what its contract's `auto_approve` is for."""
-        broker = self._approvals
+        """`approval_handler=` for this child's turn, or nothing: a child with no approver is refused, which is also what its contract's `auto_approve` is for.
+
+        Whom it asks: the orchestrator's own approver (the CLI) if there is one, else the approver of the turn that started it (the server, the TUI)."""
+        from wisp.multi_agent.approval_relay import current_turn_broker
+
+        broker = self._approvals or current_turn_broker()
         if broker is None or getattr(contract, "background", False):
             return {}
         return {"approval_handler": broker.for_child(contract.name)}
