@@ -2337,7 +2337,7 @@ class ToolExecutor:
         try:
             from wisp.tools.tests import tool_run_tests
             test_result = await asyncio.to_thread(
-                tool_run_tests, files=[file_path], workspace=workspace, timeout=60
+                tool_run_tests, files=[file_path], workspace=workspace, timeout=60, include_named_tests=False
             )
             if test_result:
                 # Only include if tests were actually found and run

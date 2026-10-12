@@ -56,7 +56,7 @@
 | `ContextOverflow` | `RuntimeError` | guard | context | `wisp/core/context_trust.py:104` | 1 | `wisp/core/context_trust.py:314` | — | — |
 | `CriteriaDeclarationRejected` | `Exception` | guard | turn | `wisp/core/convergence.py:674` | 9 | `wisp/core/convergence.py:783` | `wisp/autonomous.py:341`, `wisp/autonomous_repl.py:70` | ADR-0050 |
 | `ReplayDivergence` | `RuntimeError` | guard | persist | `wisp/core/replay_digest.py:64` | 2 | `wisp/core/replay_digest.py:125` | `wisp/core/runtime.py:1863` | — |
-| `ImportGraphTooLarge` | `RuntimeError` | guard | tool | `wisp/import_graph.py:25` | 1 | `wisp/import_graph.py:133` | `wisp/test_runner.py:351` | — |
+| `ImportGraphTooLarge` | `RuntimeError` | guard | tool | `wisp/import_graph.py:25` | 1 | `wisp/import_graph.py:133` | `wisp/test_runner.py:353` | — |
 | `WalkBudgetExceeded` | `RuntimeError` | guard | tool | `wisp/core/workspace_walk.py:39` | 1 | `wisp/core/workspace_walk.py:130` | `wisp/import_graph.py:132` | — |
 | `JobLimitError` | `ToolError` | guard | tool | `wisp/jobs/spawn.py:20` | 2 | `wisp/jobs/spawn.py:41` | — | — |
 | `DiskTooFull` | `RuntimeError` | guard | bench | `wisp/dashboard/bench.py:129` | 1 | `wisp/dashboard/bench.py:168` | `wisp/dashboard/__main__.py:70` | — |
