@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 PROBE_TIMEOUT_S = 8.0
 
-# Order matters: default (index 0) is the local-first recommendation.
+# No provider is preselected: the wizard asks, and an empty answer asks again. Ollama is one choice among the others, not the recommendation.
 SETUP_PROVIDERS = ["ollama", "openai", "nvidia", "openrouter"]
 
 RECOMMENDED_MODELS: dict[str, list[str]] = {
@@ -55,18 +55,19 @@ KEY_URLS = {
 
 
 def _pick(prompt: str, options: list[str], input_fn: Callable[[str], str],
-          out: Callable[[str], None], default: int = 0) -> int:
-    """Numbered single-choice picker; returns the chosen index."""
+          out: Callable[[str], None], default: int | None = 0) -> int:
+    """Numbered single-choice picker; returns the chosen index. ``default=None``: no option is preselected and an empty answer asks again."""
     for i, opt in enumerate(options):
-        marker = " (default)" if i == default else ""
+        marker = " (default)" if default is not None and i == default else ""
         out(f"  {i + 1}) {opt}{marker}")
+    suffix = f", default {default + 1}" if default is not None else ""
     while True:
-        raw = (input_fn(f"{prompt} [1-{len(options)}, default {default + 1}]: ") or "").strip()
-        if not raw:
+        raw = (input_fn(f"{prompt} [1-{len(options)}{suffix}]: ") or "").strip()
+        if not raw and default is not None:
             return default
         if raw.isdigit() and 1 <= int(raw) <= len(options):
             return int(raw) - 1
-        out(f"  Enter a number 1-{len(options)} (or empty for default).")
+        out(f"  Enter a number 1-{len(options)}" + (" (or empty for default)." if default is not None else "."))
 
 
 def _yes_no(prompt: str, input_fn: Callable[[str], str],
@@ -255,7 +256,7 @@ def _run_wizard(input_fn: Callable[[str], str] | None,
     # ── [1/4] provider ──────────────────────────────────────────
     _out("[1/4] Provider")
     options = [f"{name} — {_provider_label(name)}" for name in SETUP_PROVIDERS]
-    provider = SETUP_PROVIDERS[_pick("Provider", options, _in, _out, default=0)]
+    provider = SETUP_PROVIDERS[_pick("Provider", options, _in, _out, default=None)]
     spec = KNOWN_PROVIDERS.get(provider, {})
     needs_key = bool(spec.get("requires_key", False))
 

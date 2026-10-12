@@ -21,12 +21,16 @@ logger = logging.getLogger(__name__)
           usage="/model [<provider> <model>|<provider>/<model>|<num>|<name>]")
 def cmd_model(agent, args: str):
     from wisp.provider_select import (
-        KNOWN_PROVIDERS, build_provider, missing_key,
-        parse_target, probe,
+        KNOWN_PROVIDERS, build_provider, missing_key, no_provider_message,
+        parse_target, probe, provider_name_of,
     )
 
-    provider = getattr(agent.config, "provider", None) or "ollama"
+    provider = provider_name_of(agent.config)
     target = parse_target(args)
+    if not provider and target["provider"] is None:
+        print(error(f"✗ {no_provider_message()}"))
+        print(dim("  Pick one with /provider <name>, or run /setup."))
+        return
 
     # ── Explicit provider component ────────────────────────────────
     if target["provider"] is not None and args.strip():
@@ -272,10 +276,10 @@ def _apply_model_switch(agent, provider: str, new_model: str,
           aliases=("prov",), usage="/provider [name]")
 def cmd_provider(agent, args: str):
     from wisp.provider_select import (
-        KNOWN_PROVIDERS, apply_switch, persist,
+        KNOWN_PROVIDERS, apply_switch, persist, provider_name_of,
     )
 
-    current = getattr(agent.config, "provider", None) or "ollama"
+    current = provider_name_of(agent.config)
 
     # No args → guided flow (falls back to the print listing when the
     # picker is unavailable, e.g. piped input).
@@ -397,7 +401,9 @@ def _ensure_api_key(agent, name: str) -> bool:
           aliases=(), usage="/setup")
 def cmd_setup(agent, args: str):
     """Walk the full selection chain with the interactive picker."""
-    current = getattr(agent.config, "provider", None) or "ollama"
+    from wisp.provider_select import provider_name_of
+
+    current = provider_name_of(agent.config)
     result = _guided_provider_flow(agent, start_at=current)
     if result is None:
         _print_provider_listing(agent, current)

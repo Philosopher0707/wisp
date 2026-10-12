@@ -157,10 +157,14 @@ def _apply_model_switch(agent, provider: str, new_model: str, switch_provider: b
 
 
 def cmd_model(agent, args: str):
-    from wisp.provider_select import KNOWN_PROVIDERS, build_provider, missing_key, parse_target, probe
+    from wisp.provider_select import KNOWN_PROVIDERS, build_provider, missing_key, no_provider_message, parse_target, probe, provider_name_of
 
-    provider = getattr(agent.config, "provider", None) or "ollama"
+    provider = provider_name_of(agent.config)
     target = parse_target(args)
+    if not provider and target["provider"] is None:
+        print(error(f"✗ {no_provider_message()}"))
+        print(dim("  Pick one with /provider <name>, or run /setup."))
+        return
 
     if target["provider"] is not None and args.strip():
         new_provider = target["provider"]
@@ -235,9 +239,9 @@ def _cmd_model_apply(agent, args: str, target: dict, provider: str) -> None:
 
 
 def cmd_provider(agent, args: str):
-    from wisp.provider_select import KNOWN_PROVIDERS, apply_switch, persist
+    from wisp.provider_select import KNOWN_PROVIDERS, apply_switch, persist, provider_name_of
 
-    current = getattr(agent.config, "provider", None) or "ollama"
+    current = provider_name_of(agent.config)
     if not args.strip():
         target = _guided_provider_flow(agent, start_at=current)
         if target is None:
@@ -330,7 +334,9 @@ def _ensure_api_key(agent, name: str) -> bool:
 
 
 def cmd_setup(agent, args: str):
-    current = getattr(agent.config, "provider", None) or "ollama"
+    from wisp.provider_select import provider_name_of
+
+    current = provider_name_of(agent.config)
     result = _guided_provider_flow(agent, start_at=current)
     if result is None:
         _print_provider_listing(agent, current)

@@ -394,6 +394,17 @@ class CompositionRoot:
 
         cfg = getattr(getattr(self, "runtime", None), "config", None) or self.config
         resolution = resolve_selection(cfg)
+        if resolution.status == "no_provider":
+            # No default provider: the core still builds so the REPL, the server and the desktop app stay up and `/provider` or `/setup` can fix it in place; each
+            # turn answers with what is missing and nothing is dialled.
+            logger.warning("%s", resolution.detail)
+            return WispAgentCore(
+                config=cfg,
+                provider=_NullProvider(detail=resolution.detail),
+                security=self.security,
+                extensions=self.extensions,
+                tool_executor=self.tool_executor,
+            )
         # Helper to handle both real WispConfig (has replace) and test
         # doubles like _TestConfig in test_integration_e2e.py.
         def _replace_cfg(c, **kw):
@@ -474,11 +485,10 @@ class CompositionRoot:
             factory = ProviderFactory()
             provider = factory.from_config(cfg)
         else:
-            logger.warning(
-                "No LLM provider configured. Set WISP_PROVIDER or provider in config. "
-                "Using null provider — turns will produce no output."
-            )
-            provider = _NullProvider()
+            from wisp.provider_select import no_provider_message
+
+            logger.warning("%s", no_provider_message())
+            provider = _NullProvider(detail=no_provider_message())
 
         return WispAgentCore(
             config=cfg,

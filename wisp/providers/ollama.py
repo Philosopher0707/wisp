@@ -16,7 +16,9 @@ class OllamaProvider(Provider):
     def __init__(self, config=None, base_url: str = "", model: str = ""):
         if config is not None:
             self._client = OllamaClient(config)
-            self.base_url = getattr(config, "ollama_url", "http://localhost:11434")
+            from wisp.config import ollama_endpoint
+
+            self.base_url = ollama_endpoint(getattr(config, "ollama_url", ""))
             self.model = getattr(config, "model", "")
         else:
             # Direct instantiation for testing/new code

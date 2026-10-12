@@ -110,13 +110,14 @@ class TestConfigValidation:
         errors = config.validate()
         assert any("permission_mode" in e.lower() for e in errors)
 
-    def test_provider_empty(self):
-        """Empty provider should fail."""
+    def test_provider_empty_is_a_legal_unset_state(self):
+        """Empty provider is UNSET, not invalid: there is no default provider, and the REPL must start so `/provider` or `/setup` can choose one.
+        Each turn then says what is missing (tests/test_no_default_provider.py)."""
         from wisp.config import WispConfig
         config = WispConfig()
         config = config.replace(provider="")
         errors = config.validate()
-        assert any("provider" in e.lower() for e in errors)
+        assert not any("provider" in e.lower() for e in errors)
 
     def test_model_empty_is_resolvable_unset(self):
         """Empty model is a legal UNSET state: the selection contract

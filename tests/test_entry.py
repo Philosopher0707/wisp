@@ -53,6 +53,7 @@ class TestRunCLI:
 
         root = MagicMock()
         root.config = MagicMock()
+        root.config.provider = "mock"  # a one-shot prompt with no provider stops before the loop (tests/test_no_default_provider.py)
         root.config.model = "test"
         root.config.workspace = "/tmp"
 

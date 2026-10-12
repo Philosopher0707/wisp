@@ -27,38 +27,54 @@ DEFAULT_MODEL = ""
 DEFAULT_MAX_CONTEXT_TOKENS = 256000
 WISP_CONFIG_DIR = Path.home() / ".config" / "wisp"
 
+def ollama_endpoint(url: Any = "") -> str:
+    """The Ollama endpoint to dial: the configured URL, or Ollama's own default.
+
+    Ollama is never assumed as the provider (there is no default provider); once it IS chosen, "no URL set" means its usual local daemon. The one place that default is applied.
+    """
+    text = url.strip() if isinstance(url, str) else ""
+    return text or DEFAULT_OLLAMA_URL
+
+
 # ── Schema definition ────────────────────────────────────────────────
 
 SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
+    # Selection settings (`blank_is_unset`): which provider, model and endpoint to use. There is NO default provider: an install nobody configured is "unset" and says so
+    # (`wisp setup`), it does not assume a local Ollama. A blank environment value (`WISP_MODEL=` in .env) is "not set here", not a choice: it falls through to config.json.
     "provider": {
         "type": str,
-        "default": "ollama",
-        "description": "Model provider backend: ollama, openai, nvidia, openrouter, mock",
+        "default": "",
+        "description": "Model provider backend (no default; choose one with `wisp setup`): ollama, openai, nvidia, openrouter, mock",
         "env_var": "WISP_PROVIDER",
+        "blank_is_unset": True,
     },
     "ollama_url": {
         "type": str,
-        "default": DEFAULT_OLLAMA_URL,
-        "description": "Ollama API endpoint URL",
+        "default": "",
+        "description": f"Ollama API endpoint URL, used only when provider=ollama (empty = Ollama's own default, {DEFAULT_OLLAMA_URL})",
         "env_var": "WISP_OLLAMA_URL",
+        "blank_is_unset": True,
     },
     "api_key": {
         "type": str,
         "default": "",
         "description": "API key for cloud providers (OpenAI, Anthropic, etc.)",
         "env_var": "WISP_API_KEY",
+        "blank_is_unset": True,
     },
     "api_base": {
         "type": str,
         "default": "",
         "description": "Base URL for OpenAI-compatible API endpoints",
         "env_var": "WISP_API_BASE",
+        "blank_is_unset": True,
     },
     "model": {
         "type": str,
         "default": DEFAULT_MODEL,
         "description": "Model id (empty = first model the provider serves)",
         "env_var": "WISP_MODEL",
+        "blank_is_unset": True,
     },
     "graph_model_tiers": {
         "type": str,
@@ -655,11 +671,15 @@ def save_config(config: dict[str, Any]) -> None:
 
 
 def get_setting(key: str, default: Any = None) -> Any:
-    """Resolve a setting: env var > config file > default."""
+    """Resolve a setting: env var > config file > default.
+
+    A blank environment value is the operator's explicit choice for most settings (a flag set to nothing means nothing), but not for a SELECTION setting
+    (`blank_is_unset` in the registry: provider, model, endpoint, key): `WISP_MODEL=` is "not set here" and the value saved in config.json counts.
+    """
     config = load_config()
     env_key = f"WISP_{key.upper()}"
     env_val = os.environ.get(env_key)
-    if env_val is not None:
+    if env_val is not None and not (SETTINGS_SCHEMA.get(key, {}).get("blank_is_unset") and not env_val.strip()):
         return env_val
     return config.get(key, default)
 
@@ -919,14 +939,11 @@ class WispConfig:
     _subagent_branch_count: int
 
     def __init__(self) -> None:
-        object.__setattr__(self, "provider", get_setting("provider", "ollama"))
-        object.__setattr__(self, "ollama_url", get_setting("ollama_url", DEFAULT_OLLAMA_URL))
+        object.__setattr__(self, "provider", get_setting("provider", ""))
+        object.__setattr__(self, "ollama_url", get_setting("ollama_url", ""))
         object.__setattr__(self, "api_key", get_setting("api_key", ""))
         object.__setattr__(self, "api_base", get_setting("api_base", ""))
-        model = get_setting("model", DEFAULT_MODEL)
-        if not str(model or "").strip():  # a `WISP_MODEL=` line left empty must not hide the model saved in config.json
-            model = load_config().get("model") or DEFAULT_MODEL
-        object.__setattr__(self, "model", model)
+        object.__setattr__(self, "model", get_setting("model", DEFAULT_MODEL))
         object.__setattr__(self, "temperature", float(get_setting("temperature", "0.2")))
         raw_max_tokens = get_setting("max_tokens", 131072)
         object.__setattr__(self, "max_tokens",
@@ -1412,9 +1429,8 @@ class WispConfig:
                 f"permission_mode: '{self.permission_mode}' is not one of {[m.value for m in PermissionMode]}"
             )
 
-        # Provider
-        if not self.provider:
-            errors.append("provider: cannot be empty")
+        # Provider: EMPTY IS LEGAL here. There is no default provider, so "none chosen yet" is a state a config can be in (a fresh install, `wisp setup` not run);
+        # it is refused at the point of use (the provider factory, the selection resolver, the boot path), where the message can say what to do.
 
         # Model: EMPTY IS LEGAL here — the selection contract
         # (provider_catalog.resolve_selection) fills it from the live

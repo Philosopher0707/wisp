@@ -92,14 +92,18 @@ class ProviderFactory:
         (per-provider env var first, shared WISP_API_KEY fallback) — it is
         never re-derived here.
         """
-        name = getattr(config, "provider", "ollama")
-        if not isinstance(name, str):
-            name = "ollama"
+        from wisp.provider_select import no_provider_message, provider_name_of
+
+        name = provider_name_of(config)
+        if not name:
+            raise ValueError(no_provider_message())
         if name not in self._providers:
             raise ValueError(f"Unknown provider: {name}. Available: {list(self._providers.keys())}")
 
         if name == "ollama":
-            raw_url = getattr(config, "ollama_url", "http://localhost:11434")
+            from wisp.config import ollama_endpoint
+
+            raw_url = ollama_endpoint(getattr(config, "ollama_url", ""))
             base_url = self._validate_ollama_url(raw_url)
             return self.create(
                 "ollama",

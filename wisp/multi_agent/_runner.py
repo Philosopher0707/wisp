@@ -251,7 +251,7 @@ class SubagentRunner:
         # a missing model may auto-pull on first request, while tests and
         # mocked cores don't need a live provider at all. The actual run +
         # contract timeout bound any genuinely unreachable provider.
-        provider_name = getattr(child_cfg, "provider", "ollama")
+        provider_name = getattr(child_cfg, "provider", "")
         cache_key = f"{provider_name}:{child_cfg.model}"
         cached_provider = self._provider_cache.get(cache_key)
         if cached_provider is not None:
@@ -544,7 +544,7 @@ class SubagentRunner:
 
         provider_name = getattr(config, "provider", None)
         if not isinstance(provider_name, str):
-            provider_name = "ollama"
+            provider_name = ""
 
         # Reuse cached provider when model + provider match (warm pool optimization).
         # Provider creation may establish HTTP connections; caching avoids this overhead.

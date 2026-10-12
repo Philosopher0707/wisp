@@ -45,9 +45,9 @@ def provider_completions(prefix: str) -> list[str]:
 def _current_provider() -> str:
     try:
         from wisp.config import get_setting
-        return str(get_setting("provider", "ollama") or "ollama")
+        return str(get_setting("provider", "") or "")
     except Exception:
-        return "ollama"
+        return ""
 
 
 def _safe_models(provider: str, prefix: str = "") -> list[str]:

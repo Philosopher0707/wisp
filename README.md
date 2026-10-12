@@ -92,7 +92,7 @@ wisp -S <session-id> "now cover it with tests"
 wisp --print "summarize uncommitted changes" --output-format json
 ```
 
-`wisp setup` offers Ollama (local default), OpenAI, NVIDIA, and OpenRouter — frontier models such as Claude 3.7 Sonnet, DeepSeek R1, and GPT-4o are reachable through OpenRouter or direct endpoints. Typed keys are stored via the OS-appropriate vault path with `0o600` files; keys already in the environment are used, never re-written to disk. No usable provider at boot on an interactive terminal offers the wizard instead of crashing the REPL.
+`wisp setup` offers Ollama, OpenAI, NVIDIA, and OpenRouter; none is preselected and Wisp never assumes one — frontier models such as Claude 3.7 Sonnet, DeepSeek R1, and GPT-4o are reachable through OpenRouter or direct endpoints. Typed keys are stored via the OS-appropriate vault path with `0o600` files; keys already in the environment are used, never re-written to disk. No usable provider at boot on an interactive terminal offers the wizard instead of crashing the REPL. The chosen provider, model and endpoint are saved in `~/.config/wisp/config.json`; API keys live in `~/.config/wisp/.env`. `wisp config env check` lists what is wrong or untidy in that file (key names and line numbers, never values), and `wisp config env fix --apply` tidies it after a private backup.
 
 Common operations:
 

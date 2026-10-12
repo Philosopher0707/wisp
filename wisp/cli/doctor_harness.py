@@ -323,6 +323,32 @@ def _check_fleet() -> CheckResult:
                    **details)
 
 
+def _check_user_env() -> CheckResult:
+    """`~/.config/wisp/.env` is for keys and switches; a selection kept there overrides config.json and goes stale. Read-only; reports key names and line numbers, never a value."""
+    t0, name, commit = time.monotonic(), "user_env", "env-ownership"
+    try:
+        from wisp.env_file import check_path
+        from wisp.user_env import user_env_path
+    except ImportError as exc:
+        return _result(name, commit, t0, CheckStatus.WARN, f"not in this checkout: {exc}")
+    path = user_env_path()
+    if not path.exists():
+        return _result(name, commit, t0, CheckStatus.OK, f"no {path}: nothing to check")
+    try:
+        findings = check_path()
+    except (ValueError, OSError) as exc:
+        return _result(name, commit, t0, CheckStatus.WARN, f"could not check {path}: {exc}")
+    problems = [f for f in findings if f.severity == "problem"]
+    details = {"problems": len(problems), "advice": len(findings) - len(problems)}
+    if problems:
+        shown = ", ".join(f"{f.code} {f.key or 'file'}" + (f" (line {f.line})" if f.line else "") for f in problems[:4])
+        return _result(name, commit, t0, CheckStatus.WARN,
+                       f"{len(problems)} problem(s) in {path}: {shown}; run `wisp config env check`, then `wisp config env fix`", **details)
+    if findings:
+        return _result(name, commit, t0, CheckStatus.OK, f"{path} works; {len(findings)} tidy-up suggestion(s): `wisp config env check`", **details)
+    return _result(name, commit, t0, CheckStatus.OK, f"{path} is tidy", **details)
+
+
 _CHECKS: Final[tuple[tuple[str, Callable[[], CheckResult]], ...]] = (
     ("tool_profile", _check_tool_profile),
     ("subagent_surface", _check_subagent_surface),
@@ -333,6 +359,7 @@ _CHECKS: Final[tuple[tuple[str, Callable[[], CheckResult]], ...]] = (
     ("audit_chain", _check_audit_chain),
     ("repl_input", _check_repl_input),
     ("fleet", _check_fleet),
+    ("user_env", _check_user_env),
 )
 
 HARNESS_CHECK_NAMES: Final[tuple[str, ...]] = tuple(n for n, _ in _CHECKS)
