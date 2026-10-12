@@ -42,7 +42,7 @@ async def list_models(request: Request) -> dict[str, Any]:
 
     root = _root(request)
     cfg = getattr(getattr(root, "runtime", None), "config", None) or root.config
-    active_provider = str(getattr(cfg, "provider", "") or "").strip().lower() or "ollama"
+    active_provider = str(getattr(cfg, "provider", "") or "").strip().lower()
     active_model = str(getattr(cfg, "model", "") or "")
 
     providers_out: list[dict[str, Any]] = []

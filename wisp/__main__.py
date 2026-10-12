@@ -332,8 +332,13 @@ def cmd_print(prompt, model=None, session_id=None, output_format="json", quiet=F
 
 
 def cmd_check(model=None):
-    """Check if Ollama is available and the model is usable."""
+    """Check that the configured provider is available and the model is usable."""
     config = WispConfig()
+    from wisp.provider_select import no_provider_message, provider_configured
+
+    if not provider_configured(config):
+        print(error(no_provider_message()))
+        sys.exit(2)
     if model:
         config = config.replace(model=model)
     if not config.model:
@@ -355,15 +360,22 @@ def cmd_check(model=None):
     if ok:
         print(success(f"✓ Provider '{config.provider}' is available"))
         if config.provider == "ollama":
-            print(success(f"✓ Ollama is running at {config.ollama_url}"))
+            from wisp.config import ollama_endpoint
+
+            print(success(f"✓ Ollama is running at {ollama_endpoint(config.ollama_url)}"))
         print(success(f"✓ Model '{config.model}' is available"))
     else:
         sys.exit(1)
 
 
 def cmd_models():
-    """List all models available in Ollama."""
+    """List the models the configured provider serves."""
     config = WispConfig()
+    from wisp.provider_select import no_provider_message, provider_configured
+
+    if not provider_configured(config):
+        print(error(no_provider_message()))
+        sys.exit(2)
     client = get_provider(config)
     try:
         models = client.list_models()

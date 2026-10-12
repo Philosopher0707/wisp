@@ -190,7 +190,9 @@ def list_providers() -> list[ProviderInfo]:
 
 
 def _ollama_base(cfg: Any) -> str:
-    return str(getattr(cfg, "ollama_url", "") or "http://localhost:11434")
+    from wisp.config import ollama_endpoint
+
+    return ollama_endpoint(getattr(cfg, "ollama_url", ""))
 
 
 def _is_base_reachable(provider: str, cfg: Any, timeout: float = 2.0) -> bool:
@@ -258,6 +260,7 @@ class Resolution:
                       empty when unreachable — then this is unverifiable,
                       and detail says so rather than lying)
       unreachable   — provider listing unavailable AND no model configured
+      no_provider   — no provider is configured at all (there is no default one)
     """
 
     provider: str
@@ -321,10 +324,12 @@ def resolve_selection(cfg: Any) -> Resolution:
     build) should call before serving turns, so a stale or absent model
     surfaces ONCE, clearly, instead of as a mid-turn provider 404.
     """
-    from wisp.provider_select import KNOWN_PROVIDERS
+    from wisp.provider_select import KNOWN_PROVIDERS, no_provider_message, provider_name_of
 
-    provider = str(getattr(cfg, "provider", "") or "").strip().lower() or "ollama"
+    provider = provider_name_of(cfg)
     model = str(getattr(cfg, "model", "") or "").strip()
+    if not provider:
+        return Resolution(provider="", model=model, status="no_provider", detail=no_provider_message(), alternatives=sorted(KNOWN_PROVIDERS))
     if provider not in KNOWN_PROVIDERS:
         return Resolution(
             provider=provider, model=model, status="unknown_model",

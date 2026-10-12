@@ -394,6 +394,8 @@ class CompositionRoot:
 
         cfg = getattr(getattr(self, "runtime", None), "config", None) or self.config
         resolution = resolve_selection(cfg)
+        if resolution.status == "no_provider":
+            raise ValueError(resolution.detail)
         # Helper to handle both real WispConfig (has replace) and test
         # doubles like _TestConfig in test_integration_e2e.py.
         def _replace_cfg(c, **kw):

@@ -164,7 +164,9 @@ class OllamaClient:
     """Minimal client for Ollama's API, optimized for tool-calling models."""
 
     def __init__(self, config: WispConfig, session: Optional[requests.Session] = None):
-        self.base_url = config.ollama_url.rstrip("/")
+        from wisp.config import ollama_endpoint
+
+        self.base_url = ollama_endpoint(config.ollama_url).rstrip("/")
         self.model = config.model
         self.temperature = config.temperature
         self.max_tokens = config.max_tokens

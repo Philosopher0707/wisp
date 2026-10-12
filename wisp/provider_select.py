@@ -46,6 +46,22 @@ KNOWN_PROVIDERS: "dict[str, dict[str, Any]]" = {
 }
 
 
+def provider_name_of(cfg: Any) -> str:
+    """The configured provider's name, normalised; "" when there is none (unset, blank, or not a string). There is no default provider: callers that need one
+    check `provider_configured` and say `NO_PROVIDER_MESSAGE`, they do not substitute a name."""
+    name = getattr(cfg, "provider", "")
+    return name.strip().lower() if isinstance(name, str) else ""
+
+
+def provider_configured(cfg: Any) -> bool:
+    return bool(provider_name_of(cfg))
+
+
+def no_provider_message() -> str:
+    return ("No model provider is configured. Run `wisp setup` to choose one, or set WISP_PROVIDER "
+            f"(one of: {', '.join(sorted(KNOWN_PROVIDERS))}).")
+
+
 def parse_target(arg: str) -> dict[str, str | None]:
     """Parse '/provider <arg>' or '/model <arg>' input into components.
 

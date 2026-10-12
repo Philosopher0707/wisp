@@ -208,6 +208,15 @@ def _run_cli(root: CompositionRoot, prompt: str | None = None, **kwargs) -> None
         sys.stdout.flush()
         return
 
+    # There is no default provider. A one-shot prompt has nothing to answer with, so it stops here; the REPL stays up (`/provider` and `/setup` work, and a turn says
+    # what is missing) so the person can choose one without restarting.
+    from wisp.provider_select import no_provider_message, provider_configured
+    if not provider_configured(config):
+        sys.stderr.write(error(no_provider_message()) + "\n")
+        sys.stderr.flush()
+        if prompt:
+            raise SystemExit(2)
+
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     root.bind_loop(loop)

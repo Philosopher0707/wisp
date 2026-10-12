@@ -1837,7 +1837,9 @@ class SubagentOrchestrator:
             return cache["models"]
         try:
             import aiohttp
-            url = getattr(self.config, "ollama_url", "http://localhost:11434")
+            from wisp.config import ollama_endpoint
+
+            url = ollama_endpoint(getattr(self.config, "ollama_url", ""))
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as session:
                 async with session.get(f"{url}/api/tags") as resp:
                     if resp.status == 200:
