@@ -57,6 +57,13 @@ class TUIApprovalController:
         return name, args_text
 
     async def approve(self, tool_call: dict) -> bool:
+        return await self._ask(tool_call)
+
+    async def approve_for_subagent(self, tool_call: dict) -> bool:
+        """A child of the running turn asks the person at this screen, as itself: the prompt names the child, the answer keys and the session memory are the parent's."""
+        return await self._ask(tool_call, child=str(tool_call.get("subagent") or "subagent")[:128])
+
+    async def _ask(self, tool_call: dict, child: str = "") -> bool:
         name, _ = self._preview(tool_call)
         # Session memory first — same precedence as CLITransport.approve:
         # policy short-circuits before per-tool sets; should_ask's BLOCK
@@ -75,7 +82,7 @@ class TUIApprovalController:
         self._event.clear()
         if self._notify is not None:
             try:
-                self._notify(ApprovalRequested(name, args_text))
+                self._notify(ApprovalRequested(f"{name} (subagent '{child}')" if child else name, args_text))
             except Exception:
                 logger.warning("approval notify failed", exc_info=True)
         await self._event.wait()

@@ -166,7 +166,15 @@ def decide_strategy(ctx: TaskContext, policy: Any = None) -> StrategyDecision:
     return StrategyDecision(SINGLE_AGENT, (f"complexity score {score} below {GRAPH_THRESHOLD}",))
 
 
+def graph_routing_enabled(environ: Any = None) -> bool:
+    """Prompts are routed to a graph template unless `WISP_REPL_GRAPH=off` (an operator's kill switch; `/graph run` still runs a graph on purpose)."""
+    env = os.environ if environ is None else environ
+    return str(env.get("WISP_REPL_GRAPH", "auto")).strip().lower() not in ("off", "0", "false", "no")
+
+
 def _graph_allowed(policy: Any) -> tuple[bool, str]:
+    if not graph_routing_enabled():
+        return False, "graph routing is off (WISP_REPL_GRAPH)"
     if policy is None:
         return True, ""
     try:
