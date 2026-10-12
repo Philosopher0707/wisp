@@ -34,7 +34,7 @@
 | `ApprovalCancelled` | `Exception` | verdict | approval | `wisp/exceptions.py:17` | 1 | `wisp/transport/cli.py:960` | `wisp/core/approval_gate.py:117`, `wisp/core/approval_gate.py:146`, `wisp/multi_agent/approval_relay.py:66`, `wisp/tool_executor.py:882` | — |
 | `ApprovalTimeout` | `Exception` | verdict | approval | `wisp/exceptions.py:33` | 1 | `wisp/transport/cli.py:923` | `wisp/core/approval_gate.py:127`, `wisp/multi_agent/approval_relay.py:66`, `wisp/tool_executor.py:895` | — |
 | `_TransientOpenError` | `Exception` | recoverable | provider | `wisp/core/provider_stream.py:40` | 1 | `wisp/core/provider_stream.py:174` | `wisp/core/provider_stream.py:278` | — |
-| `FirstTokenTimeout` | `asyncio.TimeoutError` | recoverable | subagent | `wisp/multi_agent/_runner.py:169` | 1 | `wisp/multi_agent/_runner.py:666` | `wisp/multi_agent/_runner.py:436`, `wisp/multi_agent/_runner.py:741`, `wisp/multi_agent/_runner.py:911` | — |
+| `FirstTokenTimeout` | `asyncio.TimeoutError` | recoverable | subagent | `wisp/multi_agent/_runner.py:169` | 1 | `wisp/multi_agent/_runner.py:668` | `wisp/multi_agent/_runner.py:438`, `wisp/multi_agent/_runner.py:743`, `wisp/multi_agent/_runner.py:913` | — |
 | `CircuitOpenError` | `Exception` | recoverable | provider | `wisp/infra/circuit_breaker.py:175` | 2 | `wisp/infra/circuit_breaker.py:93` | `wisp/core/stateless.py:1363` | — |
 | `CircuitBreakerOpenError` | `Exception` | recoverable | subagent | `wisp/multi_agent/_circuit_breaker.py:102` | 1 | `wisp/multi_agent/_circuit_breaker.py:44` | — | — |
 | `_Exit` | `Exception` | recoverable | cli | `wisp/review/cli.py:32` | 1 | `wisp/review/cli.py:48` | `wisp/review/cli.py:141`, `wisp/review/cli.py:202` | — |
@@ -63,7 +63,7 @@
 | `SourceError` | `Exception` | fault | cli | `wisp/review/source.py:39` | 15 | `wisp/review/source.py:59` | `wisp/review/cli.py:152`, `wisp/review/source.py:202`, `wisp/review/source.py:235` | — |
 | `TriageError` | `Exception` | fault | cli | `wisp/review/triage.py:58` | 5 | `wisp/review/triage.py:277` | `wisp/review/cli.py:212` | — |
 | `ToolError` | `Exception` | fault | tool | `wisp/tools/errors.py:8` | 87 | `agent/fast_tools.py:47` | `agent/tools/batch_reader.py:386`, `agent/tools/batch_reader.py:629`, `wisp/cli/dispatcher.py:398`, `wisp/jobs/supervisor.py:102`, `wisp/tool_executor.py:279`, `wisp/tool_executor.py:1409`, `wisp/tool_executor.py:1522`, `wisp/tools/bash.py:211`, `wisp/tools/registry.py:1309`, `wisp/tools/registry.py:1451` | — |
-| `PlanError` | `Exception` | fault | plan | `wisp/graph/planner.py:72` | 28 | `wisp/graph/planner.py:87` | `wisp/graph/cli.py:347`, `wisp/graph/cli.py:389`, `wisp/graph/planner.py:314`, `wisp/graph/planner.py:396` | — |
+| `PlanError` | `Exception` | fault | plan | `wisp/graph/planner.py:72` | 28 | `wisp/graph/planner.py:87` | `wisp/graph/cli.py:333`, `wisp/graph/cli.py:375`, `wisp/graph/planner.py:314`, `wisp/graph/planner.py:396` | — |
 | `LSPServerError` | `Exception` | fault | tool | `wisp/lsp/client.py:24` | 16 | `wisp/lsp/client.py:78` | `wisp/lsp/client.py:529`, `wisp/lsp/manager.py:174`, `wisp/lsp/manager.py:188` | — |
 | `SearchReplaceError` | `ValueError` | fault | tool | `wisp/core/mutator/search_replace.py:38` | 3 | `wisp/core/mutator/search_replace.py:59` | — | — |
 | `JsonExtractionError` | `RuntimeError` | fault | provider | `wisp/structured_output.py:28` | 3 | `wisp/structured_output.py:160` | — | — |

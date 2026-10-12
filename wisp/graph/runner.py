@@ -147,12 +147,16 @@ class SubagentNodeRunner:
         patch = getattr(result, "worktree_patch", "")
         if isinstance(patch, str) and patch and len(patch) < 4_000_000:
             output = {**output, "worktree_patch": patch}
+        ran_with = str(getattr(result, "model", "") or getattr(result, "model_used", "") or model or self._session_model())[:256]
+        input_tokens = _nonneg(getattr(result, "input_tokens", 0))
+        output_tokens = _nonneg(getattr(result, "output_tokens", 0))
+        cost, unpriced = _cost_of(result, ran_with, input_tokens, output_tokens)
         return NodeResult(node.id, status, output=output,
-                          model=str(getattr(result, "model", "") or getattr(result, "model_used", "") or model or self._session_model())[:256],
+                          model=ran_with,
                           provider=str(getattr(result, "provider", ""))[:128],
-                          input_tokens=_nonneg(getattr(result, "input_tokens", 0)),
-                          output_tokens=_nonneg(getattr(result, "output_tokens", 0)),
-                          cost_usd=_nonneg_f(getattr(result, "cost_usd", 0.0)),
+                          input_tokens=input_tokens,
+                          output_tokens=output_tokens,
+                          cost_usd=cost, unpriced=unpriced,
                           duration_s=_nonneg_f(getattr(result, "elapsed_seconds", 0.0)),
                           error_code="" if result.success else "NODE_FAILED",
                           message="" if result.success
@@ -166,6 +170,20 @@ def _compact(inputs: dict[str, Any], limit: int = 4000) -> str:
     except (TypeError, ValueError):
         return "(unserializable inputs omitted)"
     return raw if len(raw) <= limit else raw[:limit] + "…(truncated; see artifacts)"
+
+
+def _cost_of(result: Any, model: str, input_tokens: int, output_tokens: int) -> tuple[float, bool]:
+    """(cost in dollars, unpriced). A cost the child's own result reports stands; otherwise it is tokens x the table's price for the model it ran with. A model with
+    no price has NO cost: the answer is (0.0, True) when tokens were spent, never a bare $0 that reads as free."""
+    reported = getattr(result, "cost_usd", None)
+    if isinstance(reported, (int, float)) and not isinstance(reported, bool) and math.isfinite(reported) and reported >= 0:
+        return float(reported), False
+    from wisp.runtime.cost import price_of_call
+
+    priced = price_of_call(model, input_tokens=input_tokens, output_tokens=output_tokens)
+    if priced is not None:
+        return priced, False
+    return 0.0, (input_tokens + output_tokens) > 0
 
 
 def _nonneg(v: Any) -> int:

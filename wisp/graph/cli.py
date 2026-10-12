@@ -21,7 +21,7 @@ from wisp.graph.dsl import MAX_YAML_BYTES, graph_from_yaml
 from wisp.graph.executor import GraphExecutor
 from wisp.graph.reference import REFERENCE_YAML, coding_agent_graph
 from wisp.graph.store import GraphStore
-from wisp.graph.trace import quality_metrics, render_ascii, render_dot, render_json
+from wisp.graph.trace import quality_metrics, render_ascii, render_dot, render_json, trace_from_store
 from wisp.graph.validator import validate_graph
 from wisp.pathsec import resolve_contained
 
@@ -259,23 +259,9 @@ def _main(verb: str, args: list[str], workspace: str, model: str = "",
     if verb in ("trace", "inspect", "metrics"):
         if not args:
             print(f"Usage: wisp graph {verb} <run-id>"); return 1
-        row = store.get_run(args[0])
-        if row is None:
+        trace = trace_from_store(store, args[0])
+        if trace is None:
             print(f"✗ unknown run {args[0]}"); return 1
-        nodes = {}
-        for n in store.node_runs(args[0]):
-            try:
-                payload = json.loads(n["result"] or "{}")
-            except (ValueError, TypeError):
-                payload = {"status": "corrupt"}
-            if not isinstance(payload, dict):
-                payload = {"value": payload}
-            # Stored outputs win over row columns on conflict.
-            nodes[n["node_id"]] = {"status": n["status"], "attempt": n["attempt"],
-                                   **payload}
-        trace = {"graph_id": row["graph_id"], "run_id": row["run_id"],
-                 "status": row["status"], "results_by_node": nodes,
-                 "wall_s": 0, "tokens": {}, "cost_usd": 0}
         if verb == "trace":
             print(render_ascii(trace))
         elif verb == "metrics":

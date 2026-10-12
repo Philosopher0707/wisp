@@ -401,7 +401,7 @@ class GraphExecutor:
                                          reason="operator cancel")
                 self._event(store, rid, "graph.cancelled", {"audit_hash": audit_hash})
                 return _final(graph, rid, RunStatus.CANCELLED, results, "cancelled", started)
-            if _over_budget(budget, _tokens(results), _cost(results), time.time() - started):
+            if _over_budget(budget, _tokens(results), _cost(results), time.time() - started, bool(_unpriced(results))):
                 for t in in_flight:
                     t.cancel()
                 with contextlib.suppress(Exception):
@@ -411,7 +411,8 @@ class GraphExecutor:
                 audit_hash = self._audit("graph.budget_exceeded", graph, rid,
                                          allowed=False, reason="graph budget exceeded",
                                          evidence={"tokens": _tokens(results),
-                                                   "cost_usd": _cost(results)})
+                                                   "cost_usd": _cost(results),
+                                                   "unpriced_nodes": _unpriced(results)})
                 self._event(store, rid, "graph.failed", {"error": "budget_exceeded",
                                                          "audit_hash": audit_hash})
                 return _final(graph, rid, RunStatus.FAILED, results,
@@ -1057,7 +1058,8 @@ def _final(graph: Graph, rid: str, status: RunStatus, results: dict[str, NodeRes
             "results_by_node": {k: _result_to_dict(v) for k, v in results.items()},
             "tokens": {"input": sum(r.input_tokens for r in results.values()),
                        "output": sum(r.output_tokens for r in results.values())},
-            "cost_usd": round(sum(r.cost_usd for r in results.values()), 6)}
+            "cost_usd": round(sum(r.cost_usd for r in results.values()), 6),
+            "unpriced_nodes": _unpriced(results)}
 
 
 def _tokens(results: dict[str, NodeResult]) -> int:
@@ -1068,10 +1070,15 @@ def _cost(results: dict[str, NodeResult]) -> float:
     return sum(r.cost_usd for r in results.values())
 
 
-def _over_budget(budget, tokens: int, cost: float, elapsed: float) -> bool:
+def _unpriced(results: dict[str, NodeResult]) -> list[str]:
+    return [nid for nid, r in results.items() if r.unpriced]
+
+
+def _over_budget(budget, tokens: int, cost: float, elapsed: float, unpriced: bool = False) -> bool:
     if budget.max_tokens is not None and tokens > budget.max_tokens:
         return True
-    if budget.max_cost_usd is not None and cost > budget.max_cost_usd:
+    # A cap needs a cost to compare: spend that cannot be priced cannot be bounded, and counting it as $0 would make the cap look enforced while it never fires.
+    if budget.max_cost_usd is not None and (cost > budget.max_cost_usd or unpriced):
         return True
     if budget.max_runtime_s is not None and elapsed > budget.max_runtime_s:
         return True
@@ -1142,7 +1149,7 @@ def _graph_def(graph: Graph) -> dict:
 def _result_to_dict(r: NodeResult) -> dict:
     return {"status": r.status.value, "output": r.output, "artifacts": r.artifact_ids,
             "model": r.model, "provider": r.provider, "input_tokens": r.input_tokens,
-            "output_tokens": r.output_tokens, "cost_usd": r.cost_usd,
+            "output_tokens": r.output_tokens, "cost_usd": r.cost_usd, "unpriced": r.unpriced,
             "duration_s": r.duration_s, "attempt": r.attempt,
             "error_code": r.error_code, "message": r.message}
 
@@ -1177,6 +1184,7 @@ def _result_from_dict(nid: str, d: dict) -> NodeResult:
                    input_tokens=max(0, int(_num(d.get("input_tokens", 0)))),
                    output_tokens=max(0, int(_num(d.get("output_tokens", 0)))),
                    cost_usd=max(0.0, float(_num(d.get("cost_usd", 0.0)))),
+                   unpriced=d.get("unpriced") is True,
                    duration_s=max(0.0, float(_num(d.get("duration_s", 0.0)))),
                    attempt=max(0, int(_num(d.get("attempt", 1), 1))),
                    error_code=str(d.get("error_code", ""))[:64],

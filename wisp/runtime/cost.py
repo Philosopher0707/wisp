@@ -209,5 +209,29 @@ class CostMeter:
                 "uncharged_models": list(self.uncharged_models)}
 
 
-__all__ = ["PRICE_TABLE", "PRICE_TABLE_VERSION", "PRICE_TABLE_AS_OF", "Price",
+def _count(value: object) -> int:
+    """A token count: a non-negative whole number, else 0. Never credit, never a crash."""
+    import math
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        return 0
+    return max(0, int(value))
+
+
+def price_of_call(model: object, *, input_tokens: object, output_tokens: object) -> float | None:
+    """What one call cost under the table, or None when the model has no price. Never 0 for "unknown": a model that is not in the table is not free.
+
+    Reads `PRICE_TABLE` when called (a deployment replaces the placeholder prices by rebinding it) and does not touch any meter's running total: the turn that made the
+    call was already charged by the telemetry that ran it. Matching is exact, as in `CostMeter.price_for`; guessing at a model's family is a pricing decision, and
+    the table is the owner's.
+    """
+    if not isinstance(model, str):
+        return None
+    price = PRICE_TABLE.get(model)
+    if price is None:
+        return None
+    return price.cost(input_tokens=_count(input_tokens), output_tokens=_count(output_tokens))
+
+
+__all__ = ["PRICE_TABLE", "PRICE_TABLE_VERSION", "PRICE_TABLE_AS_OF", "Price", "price_of_call",
            "CostMeter", "CostError", "UnknownModel", "UnknownPolicy"]

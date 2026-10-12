@@ -256,6 +256,8 @@ class NodeResult:
     input_tokens: int = 0
     output_tokens: int = 0
     cost_usd: float = 0.0
+    #: Tokens were spent but the model has no price, so `cost_usd` (0.0) is not a cost. A cap on cost cannot bound this node (the executor stops the graph).
+    unpriced: bool = False
     duration_s: float = 0.0
     attempt: int = 1
     error_code: str = ""

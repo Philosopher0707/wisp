@@ -345,21 +345,11 @@ def status_line(store: Any, run_id: str) -> str:
 
 
 def trace_text(store: Any, run_id: str) -> str:
-    from wisp.graph.trace import render_ascii
-    import json
-    row = store.get_run(run_id)
-    if row is None:
+    from wisp.graph.trace import render_ascii, trace_from_store
+    trace = trace_from_store(store, run_id)
+    if trace is None:
         return f"unknown run {run_id}"
-    nodes = {}
-    for n in store.node_runs(run_id):
-        try:
-            payload = json.loads(n["result"] or "{}")
-        except (ValueError, TypeError):
-            payload = {"status": "corrupt"}
-        nodes[n["node_id"]] = {"status": n["status"], **(payload if isinstance(payload, dict) else {})}
-    return render_ascii({"graph_id": row["graph_id"], "run_id": run_id,
-                         "status": row["status"], "results_by_node": nodes,
-                         "wall_s": 0, "tokens": {}, "cost_usd": 0})
+    return render_ascii(trace)
 
 
 # ── progress model (11I): structured events → terminal lines ──────────
