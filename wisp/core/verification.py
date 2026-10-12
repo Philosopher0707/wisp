@@ -84,15 +84,27 @@ _VERIFY_TOOLS = frozenset({"run_bash", "exec_sandbox"})
 _TEST_RESULTS_RE = re.compile(
     r"\A\s*## Test Results \((\d+)/(\d+) passed\)\n"
     r"(?:- Duration: [^\n]*\n)?"
-    r"- Failed: 0, Errors: 0(?!\d)")
+    r"- Failed: (\d+), Errors: (\d+)(?!\d)")
+
+
+def run_tests_outcome(result_text: object) -> str | None:
+    """What a `run_tests` result says, read only from the harness's own summary at the start: "green" (at least one test passed, none failed or
+    errored), "red" (any failed or errored), "vacuous" (nothing passed: no tests, or only skipped ones), or None (not the harness's summary).
+    The one reader for the verification floor, the compaction record and the reasoning ledger."""
+    if not isinstance(result_text, str):
+        return None
+    m = _TEST_RESULTS_RE.match(result_text)
+    if not m:
+        return None
+    passed, total, failed, errors = (int(g) for g in m.groups())
+    if failed or errors:
+        return "red"
+    return "green" if passed >= 1 and total >= 1 else "vacuous"
 
 
 def _run_tests_is_evidence(result_text: str) -> bool:
     """True when result_text is the harness's own report of a real green suite (at least one test passed, none failed or errored)."""
-    if not isinstance(result_text, str):
-        return False
-    m = _TEST_RESULTS_RE.match(result_text)
-    return bool(m) and int(m.group(1)) >= 1 and int(m.group(2)) >= 1
+    return run_tests_outcome(result_text) == "green"
 
 
 # The shell-result success encoding, owned jointly by this gate and
