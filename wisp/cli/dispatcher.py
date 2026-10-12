@@ -485,7 +485,7 @@ class Dispatcher:
                 return CommandResult.CONSUMED
             buf = StringIO()
             with _cl.redirect_stdout(buf):
-                code = graph_main(parts, workspace=workspace)
+                code = graph_main(parts, workspace=workspace, orchestrator=getattr(ctx.runtime, "orchestrator", None))
             ctx.emit(buf.getvalue().strip() or f"(exit {code})")
             return CommandResult.CONSUMED
 

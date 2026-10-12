@@ -233,7 +233,7 @@ def repo_context(workspace: str, query: str = "", files: tuple[str, ...] = (),
 
 def run_coding_template(template: str, ctx: TaskContext,
                         emit: Any = None, max_concurrency: int = 8,
-                        config: Any = None) -> dict:
+                        config: Any = None, orchestrator: Any = None) -> dict:
     """Compile → optimize → execute a host-authored coding template. Blocking.
 
     *config* (a WispConfig) becomes the graph children's provider/identity —
@@ -245,7 +245,7 @@ def run_coding_template(template: str, ctx: TaskContext,
     from wisp.graph.runner import default_executor
     ir = build_template(template, ctx)
     graph, diags, meta, _narrowed = compile_optimized(ir, None)
-    ex = default_executor(ctx.workspace, max_concurrency, emit=emit, config=config)
+    ex = default_executor(ctx.workspace, max_concurrency, emit=emit, config=config, orchestrator=orchestrator)
     run_inputs = {"objective": ctx.objective, "files": list(ctx.facts)}
     run_inputs.update(TEMPLATE_RUN_INPUTS.get(template, {}))
     result = asyncio.run(ex.run(graph, run_inputs))
@@ -460,7 +460,8 @@ def _run_graph_turn(runner: Any, ctx: TaskContext, decision: StrategyDecision,
         cfg = getattr(runner, "config", None)
         from wisp.config import WispConfig
         live_config = cfg if isinstance(cfg, WispConfig) else None
-        final = run_coding_template(template, ctx, emit=emit, config=live_config)
+        orchestrator = getattr(getattr(runner, "runtime", None), "orchestrator", None)  # the wired one: tools, runtime, store and the person's approver
+        final = run_coding_template(template, ctx, emit=emit, config=live_config, orchestrator=orchestrator)
     except KeyboardInterrupt:
         # The REPL's SIGINT handler raises this from inside the signal handler when no engine turn task exists, which is always the case
         # here (the graph runs under its own asyncio.run). Uncaught it ends the REPL; the engine path reports an interrupted turn and goes on.

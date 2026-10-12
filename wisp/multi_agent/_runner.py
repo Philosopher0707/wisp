@@ -217,6 +217,7 @@ class SubagentRunner:
         self._store = store or UnifiedStore(default_db)
         self._tool_executor = tool_executor
         self._agent_runtime = agent_runtime
+        self._approvals: Any = None  # ApprovalBroker when the host has a person to ask (the CLI); None = a child has nobody to ask
         # Warm cache: reuse provider/security/extensions across subagent runs
         # to avoid re-creating HTTP connections and re-loading config on every spawn.
         self._provider_cache: dict[str, Any] = {}
@@ -649,7 +650,7 @@ class SubagentRunner:
                     # authorisation explicitly instead of inheriting a fall-through.
                     # A contract with `auto_approve=False` now gets DENIED for a
                     # write, which is the correct reading: it was never authorised.
-                    stream = core.turn(session_dict, contract.task)
+                    stream = core.turn(session_dict, contract.task, **self._approval_kwargs(contract))
                     try:
                         # First-token deadline: wait_for cancels the pending
                         # __anext__ on stall; the generator is closed below so
@@ -851,7 +852,7 @@ class SubagentRunner:
         timed_out_mid_run = False
         try:
             async with asyncio.timeout(remaining):
-                async for event in self._agent_runtime.run_turn(runtime_session, contract.task):
+                async for event in self._agent_runtime.run_turn(runtime_session, contract.task, **self._approval_kwargs(contract)):
                     etype = event.get("type")
                     if etype == "content":
                         # Streaming providers emit many small deltas; the
@@ -985,6 +986,19 @@ class SubagentRunner:
             profile=str(getattr(self.parent_config, "profile", None)
                         or "default"))
         return child_principal(parent, contract, capabilities=effective_tools)
+
+    def set_approval_handler(self, handler: Any) -> None:
+        """Give children somebody to ask (the CLI's approver), or take it away with None. See `approval_relay`."""
+        from wisp.multi_agent.approval_relay import ApprovalBroker
+
+        self._approvals = ApprovalBroker(handler) if handler is not None else None
+
+    def _approval_kwargs(self, contract: SubagentContract) -> dict[str, Any]:
+        """`approval_handler=` for this child's turn, or nothing: a child with no approver is refused, which is also what its contract's `auto_approve` is for."""
+        broker = self._approvals
+        if broker is None or getattr(contract, "background", False):
+            return {}
+        return {"approval_handler": broker.for_child(contract.name)}
 
     def _served_model(self) -> str:
         """The model the parent turn serves when its setting is empty ("the first model the provider serves"): `_create_core` resolves it for the parent

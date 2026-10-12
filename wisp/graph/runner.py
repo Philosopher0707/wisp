@@ -142,13 +142,17 @@ def _configured_tiers(config: Any) -> dict[str, str]:
 
 
 def default_executor(workspace: str = ".", max_concurrency: int = 8,
-                     store: Any = None, emit: Any = None, config: Any = None) -> Any:
+                     store: Any = None, emit: Any = None, config: Any = None, orchestrator: Any = None) -> Any:
     """Stock executor: SubagentOrchestrator runner + reference functions.
 
     Single construction point shared by CLI `graph run/resume/execute` and
     the SDK, so planner-approved graphs execute through the same governed
     runner as manually authored ones. *config* (a WispConfig) is the
     workers' provider/identity; None keeps the legacy default config.
+
+    *orchestrator* is the host's own, the one the composition root wired (tool executor, runtime, store, and in the CLI the person's approver). Without it the
+    workers get a bare orchestrator, which has no ToolExecutor: every non-read tool answers "[Denied: ... requires a wired ToolExecutor]" and a graph node can
+    only read.
     """
     from wisp.graph.executor import GraphExecutor
     from wisp.graph.reference import default_functions
@@ -156,11 +160,11 @@ def default_executor(workspace: str = ".", max_concurrency: int = 8,
                        store=store, emit=emit or (lambda e: None))
     try:
         from wisp.multi_agent import SubagentOrchestrator
-        ex._runner = SubagentNodeRunner(
-            SubagentOrchestrator(config=config) if config is not None
-            else SubagentOrchestrator(), workspace, model_tiers=_configured_tiers(config))
+        if orchestrator is None:
+            orchestrator = SubagentOrchestrator(config=config) if config is not None else SubagentOrchestrator()
+        ex._runner = SubagentNodeRunner(orchestrator, workspace, model_tiers=_configured_tiers(config if config is not None else getattr(orchestrator, "config", None)))
     except Exception:
-        pass
+        logger.warning("graph workers are not available: the default node runner could not be built", exc_info=True)
     for name, fn in default_functions().items():
         ex.register_function(name, fn)
     try:

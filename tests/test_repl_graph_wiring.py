@@ -107,7 +107,7 @@ def run_fan_out(monkeypatch, tmp_path, failing=(), findings="found three things"
     async def no_sleep(seconds):
         pass
 
-    def executor(workspace, max_concurrency=8, emit=None, config=None):
+    def executor(workspace, max_concurrency=8, emit=None, config=None, orchestrator=None):
         ex = GraphExecutor(runner=run, workspace=workspace, store=GraphStore(workspace=workspace), sleep=no_sleep)
         ex.register_function("split_work", lambda inputs: {"ok": True})
         return ex

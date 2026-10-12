@@ -159,6 +159,10 @@ class SubagentContract:
     context_files: list[str] = field(default_factory=list)
     """Specific file paths to mention in the subagent's context."""
 
+    background: bool = False
+    """Run by the BackgroundAgentManager while the person may be typing at the REPL's own prompt. Such a child never asks for a yes: the prompt would fight the
+    input line for the keyboard (see ``approval_relay``)."""
+
     _subagent_depth: int = 0
     """Current nesting depth. Prevents recursive subagent spawning beyond max_depth."""
 
