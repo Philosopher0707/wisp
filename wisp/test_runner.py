@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Optional
 
 from wisp.core.workspace_walk import is_home_directory
-from wisp.import_graph import ImportGraphTooLarge, build_import_graph, find_affected_tests
+from wisp.import_graph import ImportGraphTooLarge, build_import_graph, find_affected_tests, find_named_tests
 from wisp.test_distill import distill_traceback
 
 _FALLBACK_TAIL_CHARS = 3000
@@ -336,10 +336,12 @@ def run_affected_tests(
     changed_files: list[str | Path],
     workspace: str | Path,
     timeout: int = 120,
+    include_named_tests: bool = False,
 ) -> UnitTestRunSummary:
     """Build import graph, find affected tests, and run them.
 
-    This is the main entry point for auto-test on change.
+    This is the main entry point for auto-test on change. *include_named_tests*: a test file among *changed_files* is run too (what a person who names a test file
+    to `run_tests` means); the auto-test after a write keeps it off, so writing a test file does not start running it.
     """
     ws = Path(workspace).resolve()
     skipped = _lookup_skipped(ws)
@@ -364,6 +366,8 @@ def run_affected_tests(
         resolved_changes.append(p.resolve())
 
     test_files = find_affected_tests(resolved_changes, graph)
+    if include_named_tests:
+        test_files = sorted(set(test_files) | set(find_named_tests(resolved_changes, graph)))
     if not test_files:
         logger.info("No tests affected by changes")
         return UnitTestRunSummary()

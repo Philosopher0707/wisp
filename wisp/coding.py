@@ -38,6 +38,7 @@ _HINT_PATTERNS = {name: re.compile(pattern) for name, pattern in (
 GRAPH_THRESHOLD = 2
 RECORD_PROMPT_CHARS = 4000
 RECORD_SUMMARY_CHARS = 600
+VERDICT_REASON_CHARS = 400
 RECORD_FILES = 12
 MAX_FACT_FILES = 20
 
@@ -84,6 +85,8 @@ class ExecutionResult:
     evidence: tuple[str, ...] = ()
     execution_id: str = ""
     followup: str = ""
+    #: Why a REJECT/ESCALATE verdict was given: its reason codes and message, one bounded line (the verifier's own, or the harness's: `wisp.graph.evidence`).
+    verification_reason: str = ""
 
 
 def task_context_from_prompt(prompt: str, workspace: str = ".",
@@ -316,16 +319,18 @@ def summarize_graph(template: str, run_id: str, final: dict) -> ExecutionResult:
             summary = (summary[:PARTIAL_PROBLEM_CHARS] + " | " if summary else "") + "finished before it stopped: " + listed
         summary = summary[:2000]
     verification = "unverified"
+    reason = ""
     for r in results.values():
         if isinstance(r, dict) and isinstance(r.get("output"), dict) \
                 and "decision" in r["output"]:
             verification = str(r["output"]["decision"])
+            reason = _verdict_reason(r["output"])
     # The graph's own status says every node ran, not that the work was accepted: a change the reviewer REJECTED or ESCALATED is not a success, and
     # a change nobody reviewed is not either (a run that changed nothing is not blamed for having no review).
     accepted = verification == "ALLOW" or (verification == "unverified" and not changed)
     return ExecutionResult(
         strategy=GRAPH, success=ok and accepted, summary=summary or f"graph {final.get('status')}",
-        changed_files=tuple(changed[:64]), verification=verification,
+        changed_files=tuple(changed[:64]), verification=verification, verification_reason="" if verification == "ALLOW" else reason,
         artifacts=tuple(list(dict.fromkeys(artifacts))[:64]),
         evidence=(f"graph:{run_id}",),
         execution_id=run_id,
@@ -481,9 +486,17 @@ def _run_graph_turn(runner: Any, ctx: TaskContext, decision: StrategyDecision,
     return True
 
 
+def _verdict_reason(output: dict) -> str:
+    """The reason codes and message of a verdict as one bounded line."""
+    codes = ",".join(str(c) for c in (output.get("reason_codes") or [])[:8] if isinstance(c, (str, int)))
+    message = " ".join(str(output.get("message") or "").split())
+    return (f"{codes}: {message}" if codes and message else codes or message)[:VERDICT_REASON_CHARS]
+
+
 def _verification_caveat(result: ExecutionResult) -> str:
     if result.verification in ("REJECT", "ESCALATE"):
-        return " (not verified: the change was not accepted)"
+        why = f" ({result.verification_reason})" if result.verification_reason else ""
+        return f" (not verified: the change was not accepted){why}"
     if result.verification == "unverified" and result.changed_files:
         return " (changes were not reviewed)"
     return ""

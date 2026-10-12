@@ -2,12 +2,14 @@
 
 from pathlib import Path
 
+import pytest
 
 from wisp.import_graph import (
     _extract_imports_from_file,
     _resolve_import,
     build_import_graph,
     find_affected_tests,
+    find_named_tests,
     find_tests_for_file,
 )
 
@@ -164,3 +166,83 @@ class TestFindTestsForFile:
         graph = build_import_graph(tmp_path)
         affected = find_tests_for_file(str(tmp_path / "src.py"), graph)
         assert len(affected) == 1
+
+
+class TestANamedTestFileIsRunByTheToolOnly:
+    """`run_tests(files=["tests/test_x.py"])` ran nothing and answered `0/0 passed`: only tests that IMPORT a named file counted, never the named test file. The 0/0 is
+    not evidence, so a verifier that asked for exactly the test it meant to judge by could not produce any (seen with the real model, 2026-10-12). The explicit tool now
+    runs it. The automatic test after a write does not: writing a test file must not start running it (that is a different change, with its own cost of up to 60 s a write)."""
+
+    def _project(self, tmp_path: Path) -> Path:
+        (tmp_path / "app.py").write_text("x = 1\n")
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_app.py").write_text("import app\n\ndef test_app():\n    assert app.x == 1\n")
+        return tmp_path
+
+    def test_a_named_test_file_is_found(self, tmp_path: Path):
+        (tmp_path / "src.py").write_text("")
+        (tmp_path / "test_src.py").write_text("import src\n")
+        graph = build_import_graph(tmp_path)
+        assert [p.name for p in find_named_tests([str(tmp_path / "test_src.py")], graph)] == ["test_src.py"]
+
+    def test_the_other_naming_convention_too(self, tmp_path: Path):
+        (tmp_path / "src_test.py").write_text("")
+        graph = build_import_graph(tmp_path)
+        assert [p.name for p in find_named_tests([str(tmp_path / "src_test.py")], graph)] == ["src_test.py"]
+
+    def test_it_is_listed_once(self, tmp_path: Path):
+        (tmp_path / "test_src.py").write_text("")
+        graph = build_import_graph(tmp_path)
+        assert len(find_named_tests([str(tmp_path / "test_src.py")] * 3, graph)) == 1
+
+    def test_only_files_of_the_workspace_graph_count(self, tmp_path: Path):
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        (ws / "src.py").write_text("")
+        outside = tmp_path / "test_outside.py"
+        outside.write_text("def test_x():\n    pass\n")
+        graph = build_import_graph(ws)
+        assert find_named_tests([str(outside), str(ws / "test_missing.py")], graph) == []
+
+    def test_a_named_file_that_is_not_a_test_is_not_one(self, tmp_path: Path):
+        (tmp_path / "src.py").write_text("")
+        graph = build_import_graph(tmp_path)
+        assert find_named_tests([str(tmp_path / "src.py")], graph) == []
+
+    def test_what_a_change_affects_is_as_before(self, tmp_path: Path):
+        (tmp_path / "src.py").write_text("")
+        (tmp_path / "test_src.py").write_text("import src\n")
+        graph = build_import_graph(tmp_path)
+        assert find_affected_tests([str(tmp_path / "test_src.py")], graph) == []
+
+    def test_the_run_tests_tool_runs_the_test_it_was_given(self, tmp_path: Path):
+        from wisp.tools.tests import tool_run_tests
+
+        report = tool_run_tests(files=["tests/test_app.py"], workspace=str(self._project(tmp_path)))
+        assert report.startswith("## Test Results (1/1 passed)"), report
+
+    def test_it_still_runs_the_tests_of_a_named_source_file(self, tmp_path: Path):
+        from wisp.tools.tests import tool_run_tests
+
+        report = tool_run_tests(files=["app.py"], workspace=str(self._project(tmp_path)))
+        assert report.startswith("## Test Results (1/1 passed)"), report
+
+    def test_the_switch_turns_it_off(self, tmp_path: Path):
+        from wisp.tools.tests import tool_run_tests
+
+        report = tool_run_tests(files=["tests/test_app.py"], workspace=str(self._project(tmp_path)), include_named_tests=False)
+        assert report.startswith("## Test Results (0/0 passed)"), report
+
+    @pytest.mark.asyncio
+    async def test_writing_a_test_file_does_not_start_running_it(self, tmp_path: Path):
+        """The automatic test after a write (`_run_write_verify`) keeps its old behaviour: through the real executor and the real tool."""
+        from unittest.mock import MagicMock, patch
+
+        from wisp.config import WispConfig
+        from wisp.tool_executor import ToolExecutor
+
+        ws = self._project(tmp_path)
+        executor = ToolExecutor(config=WispConfig().replace(workspace=str(ws), auto_approve=True), hook_manager=MagicMock())
+        with patch("wisp.tools.lsp.tool_lsp_diagnostics", return_value="✓ No issues found."):
+            assert await executor._run_write_verify("tests/test_app.py", str(ws)) == ""
+            assert "[Tests: ## Test Results (1/1 passed)" in await executor._run_write_verify("app.py", str(ws))  # a source file's tests still run

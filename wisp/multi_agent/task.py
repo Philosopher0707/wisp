@@ -258,6 +258,10 @@ class SubagentResult:
     tool_calls: list[dict] = field(default_factory=list)
     """Summary of tool calls made (name + arg preview per call)."""
 
+    observations: list[dict] = field(default_factory=list)
+    """What the harness saw each tool return, in order (`wisp.multi_agent.observations`): the tool's name and, for `run_tests`, whether it was a real green suite.
+    The executor writes it, the child cannot; a verdict is checked against it."""
+
     # ── Token usage ──
     tokens_used: int = 0
     """Total tokens consumed (input + output)."""

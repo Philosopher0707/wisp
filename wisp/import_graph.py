@@ -168,11 +168,18 @@ def find_affected_tests(
         frontier = next_frontier
 
     # Filter to test files
-    test_files = [
-        p for p in affected
-        if p.name.startswith("test_") or p.name.endswith("_test.py")
-    ]
+    test_files = [p for p in affected if is_test_file(p)]
     return sorted(test_files)
+
+
+def is_test_file(path: Path) -> bool:
+    return path.name.startswith("test_") or path.name.endswith("_test.py")
+
+
+def find_named_tests(named_files: list[str | Path], graph: dict[Path, set[Path]]) -> list[Path]:
+    """The test files among *named_files* themselves. Only a file the workspace scan found counts: the graph is the containment, so a path outside the workspace, or
+    one that does not exist, never becomes a test to run."""
+    return sorted({p for p in (Path(f).resolve() for f in named_files) if p in graph and is_test_file(p)})
 
 
 def find_tests_for_file(
