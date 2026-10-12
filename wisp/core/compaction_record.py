@@ -11,7 +11,7 @@ import json
 from typing import Any
 
 from wisp.core.gates.verify import classify
-from wisp.core.verification import _run_tests_is_evidence, _verify_result_is_success  # one reading of "did it pass", shared with the completion gate
+from wisp.core.verification import _verify_result_is_success, run_tests_outcome  # one reading of "did it pass", shared with the completion gate
 
 MAX_FILES = 40
 MAX_RUNS = 12
@@ -88,10 +88,9 @@ def build_record(messages: list[dict[str, Any]]) -> str:
                 verdict = classify(args["command"])
                 if verdict.ok:
                     runs.append({"what": _trim(args["command"], COMMAND_CHARS), "passed": _verify_result_is_success(content), "edits_before": edits_seen})
-            elif name == "run_tests" and _run_tests_is_evidence(content):
-                runs.append({"what": "run_tests " + _trim(" ".join(str(v) for v in args.values()), 80), "passed": True, "edits_before": edits_seen})
-            elif name == "run_tests" and "## Test Results (" in content and "- Failed: 0, Errors: 0" not in content:
-                runs.append({"what": "run_tests " + _trim(" ".join(str(v) for v in args.values()), 80), "passed": False, "edits_before": edits_seen})
+            elif name == "run_tests" and run_tests_outcome(content) in ("green", "red"):
+                runs.append({"what": "run_tests " + _trim(" ".join(str(v) for v in args.values()), 80), "passed": run_tests_outcome(content) == "green",
+                             "edits_before": edits_seen})
     if not (asks or files or runs):
         return ""
     lines = ["[Harness record of the messages compacted away. Written from the tool calls, not by a model; it lists what happened, not whether it was right.]"]

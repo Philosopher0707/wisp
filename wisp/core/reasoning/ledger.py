@@ -17,12 +17,9 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from wisp.core.gates.verify import classify
-from wisp.core.verification import _MUTATING_TOOLS, _VERIFY_TOOLS, _run_tests_is_evidence, _verify_result_is_success
+from wisp.core.verification import _MUTATING_TOOLS, _VERIFY_TOOLS, _verify_result_is_success, run_tests_outcome
 
 _MINT = object()  # only Ledger.observe holds this; a Fact cannot claim to be OBSERVED without it (RC8)
-
-_RUN_TESTS_SUMMARY = "## Test Results ("
-
 
 class FactKind(StrEnum):
     TOOL_RESULT = "tool_result"
@@ -93,11 +90,7 @@ def _digest(text: str) -> str:
 
 def _run_tests_ok(text: str) -> bool | None:
     """True for a real green suite, False for a real red one, None for a vacuous or unreadable run."""
-    if _RUN_TESTS_SUMMARY not in text:
-        return None
-    if _run_tests_is_evidence(text):
-        return True
-    return None if "(0/0 passed)" in text else False
+    return {"green": True, "red": False}.get(run_tests_outcome(text) or "")
 
 
 @dataclass
