@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import re
 import shutil
 import time
 import uuid
+import weakref
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -20,6 +23,22 @@ class WorktreeManager:
         self.workspace = workspace
         self._worktrees_root = workspace / ".wisp" / "worktrees"
         self._git_available: bool | None = None
+        self._admin_locks: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = weakref.WeakKeyDictionary()
+
+    @contextlib.asynccontextmanager
+    async def _admin(self) -> AsyncIterator[None]:
+        """One `git worktree add|remove|prune` at a time.
+
+        These rewrite `.git/worktrees/`, and git does not tolerate two of them at once: a concurrent `add` listing the admin directories while a `remove` deletes
+        one failed with `fatal: failed to read .git/worktrees/<name>/commondir`, which failed CI three times. One lock per event loop, because the orchestrator is
+        used from the REPL's loop and from the graph's own `asyncio.run`.
+        """
+        loop = asyncio.get_running_loop()
+        lock = self._admin_locks.get(loop)
+        if lock is None:
+            lock = self._admin_locks[loop] = asyncio.Lock()
+        async with lock:
+            yield
 
     async def _check_git_repo(self) -> bool:
         """Verify workspace is inside a git repository."""
@@ -69,13 +88,14 @@ class WorktreeManager:
 
         logger.info("Creating worktree: path=%s branch=%s", worktree_path, branch_name)
 
-        proc = await asyncio.create_subprocess_exec(
-            "git", "worktree", "add", str(worktree_path), "-b", branch_name,
-            cwd=str(self.workspace),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
+        async with self._admin():
+            proc = await asyncio.create_subprocess_exec(
+                "git", "worktree", "add", str(worktree_path), "-b", branch_name,
+                cwd=str(self.workspace),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
 
         if proc.returncode != 0:
             err_text = stderr.decode("utf-8", errors="replace").strip()
@@ -321,13 +341,14 @@ class WorktreeManager:
         max_attempts = 5
         backoff = 0.05  # Start with 50ms
         for attempt in range(max_attempts):
-            proc = await asyncio.create_subprocess_exec(
-                "git", "worktree", "remove", str(worktree_path), "--force",
-                cwd=str(self.workspace),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await proc.communicate()
+            async with self._admin():
+                proc = await asyncio.create_subprocess_exec(
+                    "git", "worktree", "remove", str(worktree_path), "--force",
+                    cwd=str(self.workspace),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, stderr = await proc.communicate()
 
             if proc.returncode == 0:
                 break
@@ -366,13 +387,14 @@ class WorktreeManager:
                 logger.debug("Branch delete failed (non-critical): %s", exc)
 
         try:
-            prune_proc = await asyncio.create_subprocess_exec(
-                "git", "worktree", "prune",
-                cwd=str(self.workspace),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            await prune_proc.communicate()
+            async with self._admin():
+                prune_proc = await asyncio.create_subprocess_exec(
+                    "git", "worktree", "prune",
+                    cwd=str(self.workspace),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await prune_proc.communicate()
         except Exception as exc:
             logger.debug("Worktree prune failed (non-critical): %s", exc)
 
@@ -422,13 +444,14 @@ class WorktreeManager:
 
         if removed:
             try:
-                prune_proc = await asyncio.create_subprocess_exec(
-                    "git", "worktree", "prune",
-                    cwd=str(self.workspace),
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                await prune_proc.communicate()
+                async with self._admin():
+                    prune_proc = await asyncio.create_subprocess_exec(
+                        "git", "worktree", "prune",
+                        cwd=str(self.workspace),
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    await prune_proc.communicate()
             except Exception as exc:
                 logger.debug("Worktree prune failed (non-critical): %s", exc)
         return removed
