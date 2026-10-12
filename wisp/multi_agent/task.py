@@ -275,6 +275,9 @@ class SubagentResult:
     model_used: str = ""
     """Model identifier used for this task."""
 
+    provider: str = ""
+    """Provider the child ran against (its config's, which a contract's model override does not change)."""
+
     # ── Structured output ──
     validated_output: Optional[Any] = None
     """Parsed JSON object if output_schema was provided and validation succeeded."""

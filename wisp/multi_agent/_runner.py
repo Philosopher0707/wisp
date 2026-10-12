@@ -378,6 +378,8 @@ class SubagentRunner:
                 files_changed=result_dict.get("files_changed", []),
                 iterations_used=result_dict.get("iterations_used", 0),
                 observations=list(result_dict.get("observations", []) or []),
+                model_used=str(getattr(child_cfg, "model", "") or ""),
+                provider=str(getattr(child_cfg, "provider", "") or ""),
                 # A mid-run deadline keeps its retryable meaning even though
                 # the partial round now survives inside output.
                 timed_out=result_dict.get("timed_out", False),
