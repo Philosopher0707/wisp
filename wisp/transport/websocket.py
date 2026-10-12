@@ -65,6 +65,7 @@ class WebSocketTransport(Transport):
         self._session_ws: dict[str, Any] = {}
         self._approvals: dict[str, dict] = {}
         self._approval_counter = 0
+        self._child_approval_counter = 0
 
     @staticmethod
     @contextmanager
@@ -177,6 +178,7 @@ class WebSocketTransport(Transport):
             "ws": ws,
             "sid": sid,
             "tool_name": name,
+            "subagent": bool(tool_call.get("subagent")),
         }
         try:
             # ADR-0061 R1/R2 — the CLIENTS' vocabulary, correlated on `call_id`.
@@ -199,6 +201,7 @@ class WebSocketTransport(Transport):
                 "name": name,
                 "arguments": tool_call.get("arguments") or {},
                 "reason": str(tool_call.get("reason") or ""),
+                **({"subagent": str(tool_call["subagent"])[:128]} if tool_call.get("subagent") else {}),
             })
             return await asyncio.wait_for(future, timeout=_APPROVAL_TIMEOUT)
         except asyncio.TimeoutError:
@@ -209,6 +212,29 @@ class WebSocketTransport(Transport):
             return False
         finally:
             self._approvals.pop(approval_id, None)
+
+    async def approve_for_subagent(self, tool_call: dict) -> bool:
+        """A child of the running turn asks the same client, as itself.
+
+        Reached through ``turn_approver`` (see ``wisp.multi_agent.approval_relay``), so the connection asked is the one whose turn started the child. Two things are
+        written here, not taken from the child: the correlation id (a child's own tool-call id is whatever its model wrote and could equal a pending parent id) and the
+        reason (the child's name; clients that predate the ``subagent`` field still show the reason, so the person is never shown an anonymous tool call).
+        """
+        child = str(tool_call.get("subagent") or "subagent")[:128]
+        name = str(tool_call.get("name", "unknown"))[:128]
+        self._child_approval_counter += 1
+        call = {**tool_call, "id": f"subagent-{self._child_approval_counter}", "subagent": child, "reason": f"subagent '{child}' asks to use {name}"}
+        return await self.approve(call)
+
+    @staticmethod
+    def _is_child_id(approval_id: Any) -> bool:
+        """Whether *approval_id* is one `approve_for_subagent` issued (`<session>:subagent-<n>`)."""
+        return isinstance(approval_id, str) and approval_id.rsplit(":", 1)[-1].startswith("subagent-")
+
+    def _fallback_pool(self) -> list[dict]:
+        """The pending requests an answer with an unknown (or no) id may fall back to: a parent's, never a child's. The fallback exists for clients that do not echo
+        the id; it must not let a late answer to an old, timed-out prompt approve a DIFFERENT request a child has since asked for."""
+        return [e for e in self._approvals.values() if not e["future"].done() and not e.get("subagent")]
 
     def resolve_approval(self, approved: bool, approval_id: str | None = None) -> bool:
         """Resolve a pending approval request.
@@ -226,19 +252,17 @@ class WebSocketTransport(Transport):
                 return True
             # Unknown id (old-protocol client or non-echoed id): fall back
             # to single-unresolved-entry behavior so the gate does not
-            # stay shut until the 60s timeout.
-            pending = [
-                e for e in self._approvals.values()
-                if not e["future"].done()
-            ]
+            # stay shut until the 60s timeout. Not for a child's id (it is
+            # ours, so an unknown one is a stale answer) and never onto a
+            # child's pending request (`_fallback_pool`).
+            if self._is_child_id(approval_id):
+                return False
+            pending = self._fallback_pool()
             if len(pending) == 1:
                 pending[0]["future"].set_result(approved)
                 return True
             return False
-        pending = [
-            entry for entry in self._approvals.values()
-            if not entry["future"].done()
-        ]
+        pending = self._fallback_pool()
         if len(pending) == 1:
             pending[0]["future"].set_result(approved)
             return True
@@ -256,11 +280,11 @@ class WebSocketTransport(Transport):
             entry = self._approvals.get(approval_id)
             if entry is None or entry["future"].done():
                 # Unknown id: fall back to single-unresolved entry so
-                # old-protocol clients still resolve the gate.
-                pending = [
-                    e for e in self._approvals.values()
-                    if not e["future"].done()
-                ]
+                # old-protocol clients still resolve the gate (not for a
+                # child's id or onto a child's request: see `_fallback_pool`).
+                if self._is_child_id(approval_id):
+                    return False
+                pending = self._fallback_pool()
                 if len(pending) != 1:
                     return False
                 entry = pending[0]
@@ -269,10 +293,7 @@ class WebSocketTransport(Transport):
             approved = self.runtime.apply_approval_decision(sid, tool, key)
             entry["future"].set_result(approved)
             return True
-        pending = [
-            entry for entry in self._approvals.values()
-            if not entry["future"].done()
-        ]
+        pending = self._fallback_pool()
         if len(pending) != 1:
             return False
         entry = pending[0]
@@ -360,7 +381,9 @@ class WebSocketTransport(Transport):
             sid = session.get("id", self._session_id)
         else:
             sid = self._session_id
-        with self._turn_context(sid, ws):
+        from wisp.multi_agent.approval_relay import turn_approver
+
+        with self._turn_context(sid, ws), turn_approver(self.approve_for_subagent):
             try:
                 async for event in self.runtime.run_turn(
                     session, prompt, approval_handler=self.approve,

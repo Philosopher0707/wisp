@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 
 from wisp.tui.task_owner import OwnedTasks
@@ -34,6 +35,7 @@ from wisp.tui.widgets.status_bar import StatusBar
 from wisp.tui.widgets.title_bar import TitleBar
 from wisp.tui.data.ws_client import WispWSClient
 from wisp.approval_state import ApprovalSessionState
+from wisp.multi_agent.approval_relay import turn_approver
 from wisp.transport.tui import ApprovalRequested, TUIApprovalController
 
 
@@ -132,7 +134,7 @@ class WorkspaceScreen(Screen):
         self._pending_approval_call_id: str | None = None
         self._auto_approve: bool = False
         self.approval_state = ApprovalSessionState()
-        self._approval = TUIApprovalController(state=self.approval_state)
+        self._approval = TUIApprovalController(notify=self.post_message, state=self.approval_state)  # the screen is told when a prompt is pending
         self._local_session: dict | None = None
         self._local_task: asyncio.Task | None = None
         self._approval_modal_open = False
@@ -217,7 +219,9 @@ class WorkspaceScreen(Screen):
 
     async def _on_approval_request(self, call_id: str, name: str, args: dict, reason: str) -> None:
         self._pending_approval_call_id = call_id
-        self._show_approval(name, ", ".join(f"{k}={v!r}" for k, v in list(args.items())[:3]))
+        # A child of the server's turn: the server writes whose request it is into `reason` ("subagent 'x' asks to use y"); show it with the tool.
+        shown = f"{name} ({reason})" if reason.startswith("subagent ") else name
+        self._show_approval(shown, ", ".join(f"{k}={v!r}" for k, v in list(args.items())[:3]))
 
     def on_approval_requested(self, message: ApprovalRequested) -> None:
         """Local engine approval request."""
@@ -292,6 +296,9 @@ class WorkspaceScreen(Screen):
             if log is not None:
                 log.append(line)
 
+        # The children this turn starts ask the person at this screen (the same keys and memory as the parent's own prompts); released with the turn.
+        turn_scope = contextlib.ExitStack()
+        turn_scope.enter_context(turn_approver(self._approval.approve_for_subagent))
         try:
             session = await self._ensure_local_session()
             async for ev in self.runtime.run_turn(
@@ -333,6 +340,7 @@ class WorkspaceScreen(Screen):
         except Exception as exc:
             status.connection_state = f"error: {exc}"
         finally:
+            turn_scope.close()
             status.is_streaming = False
 
     async def _on_token(self, phase: str, text: str) -> None:
