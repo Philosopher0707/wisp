@@ -116,7 +116,7 @@ COMMAND_COMPLETERS: dict[str, Callable[[str], list[str]]] = {
     "model": model_completions,
     "agents": subcommand_completions("cancel", "send"),
     "skill": subcommand_completions("suggest", "save"),
-    "multiline": subcommand_completions("on", "off"),
+    "multiline": subcommand_completions("single", "multi"),
     "ls": path_completions,
     "read": path_completions,
     "workspace": path_completions,
