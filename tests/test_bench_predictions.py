@@ -130,7 +130,7 @@ class TestTheHarnessCanActuallyExecute:
         from wisp.config import WispConfig
         from wisp.benchmark.runner import make_ollama_core_factory
 
-        cfg = WispConfig().replace(ollama_url="http://127.0.0.1:11434")
+        cfg = WispConfig().replace(provider="ollama", ollama_url="http://127.0.0.1:11434")
         core = make_ollama_core_factory(cfg)("test-model")
         assert core.tool_executor is not None, (
             "the benchmark core has no tool_executor — every mutation will be "
@@ -169,7 +169,7 @@ class TestTheHarnessCanActuallyExecute:
         """Control: the scanner must FIND an unwired core that is really there."""
         from wisp.config import WispConfig
 
-        cfg = WispConfig().replace(ollama_url="http://127.0.0.1:11434")
+        cfg = WispConfig().replace(provider="ollama", ollama_url="http://127.0.0.1:11434")
         core = _build_core_without_executor(cfg)
         assert core.tool_executor is None, (
             "the control did not produce an unwired core, so the scan above "

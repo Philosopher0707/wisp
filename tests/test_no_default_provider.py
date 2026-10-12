@@ -152,12 +152,23 @@ class TestTheSelectionResolverSaysSo:
         monkeypatch.setattr(pc, "list_models", boom)
         assert pc.resolve_selection(SimpleNamespace(provider="", model="x")).status == "no_provider"
 
-    def test_the_composition_root_refuses_to_build_a_core_without_a_provider(self, isolated_wisp_env):
+    def test_the_composition_root_builds_a_core_that_says_what_is_missing(self, isolated_wisp_env, monkeypatch):
+        """The REPL, the server and the desktop app build a core per turn; raising here would kill them before `/provider` or `/setup` could fix the choice.
+        The core answers every turn with the fix and constructs no provider (so dials nothing)."""
+        import wisp.providers.factory as factory_mod
         from wisp.composition import CompositionRoot
 
+        def boom(*args, **kwargs):
+            raise AssertionError("built a provider with none configured")
+
+        monkeypatch.setattr(factory_mod.ProviderFactory, "from_config", boom)
         root = CompositionRoot(WispConfig())
-        with pytest.raises(ValueError, match="wisp setup"):
-            root._create_core()
+        try:
+            core = root._create_core()
+            events = list(core.provider.generate_stream_events(messages=[]))
+        finally:
+            root.shutdown()
+        assert [e["type"] for e in events] == ["error"] and "wisp setup" in events[0]["text"]
 
 
 class TestNothingElseAssumesOllama:

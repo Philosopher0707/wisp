@@ -1042,7 +1042,7 @@ async def test_run_schema_jsonschema_not_installed(monkeypatch):
     """Schema validation works without jsonschema (built-in validator)."""
     from wisp.config import WispConfig
     cfg = WispConfig()
-    cfg = cfg.replace(model="test-model")
+    cfg = cfg.replace(provider="mock", model="test-model")
     fresh_orch = SubagentOrchestrator(config=cfg)
 
     class JSONAgent(FakeWispAgentCore):
@@ -1561,7 +1561,7 @@ class TestStreamingOutputAccumulation:
 
         workspace = tmp_path / "ws"
         workspace.mkdir(exist_ok=True)
-        cfg = WispConfig().replace(workspace=str(workspace))
+        cfg = WispConfig().replace(provider="mock", workspace=str(workspace))
         o = SubagentOrchestrator(config=cfg, workspace=workspace)
 
         contract = SubagentContract(
@@ -1636,7 +1636,7 @@ class TestTimeoutRetry:
         from wisp.config import WispConfig
         from wisp.multi_agent.task import SubagentContract
 
-        cfg = WispConfig().replace(workspace=str(tmp_path))
+        cfg = WispConfig().replace(provider="mock", workspace=str(tmp_path))
         o = SubagentOrchestrator(config=cfg, workspace=tmp_path)
 
         timeouts_seen = []
@@ -1673,7 +1673,7 @@ class TestTimeoutRetry:
         from wisp.config import WispConfig
         from wisp.multi_agent.task import SubagentContract
 
-        cfg = WispConfig().replace(workspace=str(tmp_path))
+        cfg = WispConfig().replace(provider="mock", workspace=str(tmp_path))
         o = SubagentOrchestrator(config=cfg, workspace=tmp_path)
 
         calls = []
@@ -1703,7 +1703,7 @@ class TestTimeoutRetry:
         from wisp.config import WispConfig
         from wisp.multi_agent.task import SubagentContract, SubagentResult
 
-        cfg = WispConfig().replace(workspace=str(tmp_path))
+        cfg = WispConfig().replace(provider="mock", workspace=str(tmp_path))
         o = SubagentOrchestrator(config=cfg, workspace=tmp_path)
 
         calls = []
@@ -1816,7 +1816,7 @@ class TestFirstTokenDeadline:
         from wisp.config import WispConfig
         from wisp.multi_agent.task import SubagentContract
 
-        cfg = WispConfig().replace(workspace=str(tmp_path))
+        cfg = WispConfig().replace(provider="mock", workspace=str(tmp_path))
         o = SubagentOrchestrator(config=cfg, workspace=tmp_path)
         monkeypatch.setattr(o._runner.__class__, "FIRST_TOKEN_DEADLINE_S", 1.0)
 
@@ -1858,7 +1858,7 @@ class TestFirstTokenDeadline:
         from wisp.config import WispConfig
         from wisp.multi_agent.task import SubagentContract
 
-        cfg = WispConfig().replace(workspace=str(tmp_path))
+        cfg = WispConfig().replace(provider="mock", workspace=str(tmp_path))
         o = SubagentOrchestrator(config=cfg, workspace=tmp_path)
         monkeypatch.setattr(o._runner.__class__, "FIRST_TOKEN_DEADLINE_S", 0.5)
 
@@ -1890,7 +1890,7 @@ class TestFirstTokenDeadline:
         from wisp.config import WispConfig
         from wisp.multi_agent.task import SubagentContract
 
-        cfg = WispConfig().replace(workspace=str(tmp_path))
+        cfg = WispConfig().replace(provider="mock", workspace=str(tmp_path))
         o = SubagentOrchestrator(config=cfg, workspace=tmp_path)
 
         class _FastCore:

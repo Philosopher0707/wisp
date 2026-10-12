@@ -37,8 +37,9 @@ class TestWispConfig:
 
     def test_defaults_are_sane(self, isolated_wisp_env):
         cfg = WispConfig()
-        assert cfg.ollama_url == "http://localhost:11434"
-        assert cfg.provider == "ollama"
+        # No provider is assumed (tests/test_no_default_provider.py); Ollama's own URL applies only once Ollama is chosen.
+        assert cfg.ollama_url == ""
+        assert cfg.provider == ""
         assert cfg.temperature == 0.2
         assert cfg.max_tokens == 131072  # Raised to match industry-grade coding agent limits
         assert cfg.max_context_tokens == 256000

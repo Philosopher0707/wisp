@@ -15,6 +15,7 @@ from wisp.exceptions import ExitREPL
 
 class MockConfig:
     def __init__(self):
+        self.provider = "ollama"  # explicit: there is no default provider any more
         self.model = "test-model"
         self.workspace = "/tmp/wisp-test"
         self.auto_approve = False

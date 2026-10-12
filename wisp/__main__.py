@@ -179,7 +179,16 @@ def cmd_config(set_kv=None, validate=False):
         config = load_config()
         config[key.strip()] = value.strip()
         try:
-            save_config(config)
+            from wisp.env_file import SELECTION_KEYS
+
+            if key.strip() in SELECTION_KEYS.values():
+                # A selection is saved the way /provider and /model save it: config.json, and no copy left in ~/.config/wisp/.env to override it.
+                from wisp.provider_select import persist
+
+                if not persist({key.strip(): value.strip()}):
+                    raise ValueError(f"could not save {key.strip()}")
+            else:
+                save_config(config)
             print(success(f"✓ Set {key.strip()} = {value.strip()}"))
         except ValueError as e:
             print(error(f"✗ {e}"))
@@ -1254,11 +1263,25 @@ def _run_with_config_error_handling(fn, *args, **kwargs):
         raise SystemExit(2)
 
 
+def _note_stale_env_selection() -> None:
+    """One stderr line per `.env` selection that overrides a different one saved in config.json (the maintenance tool is `wisp config env`). Silent when tidy; never raises."""
+    if sys.argv[1:3] == ["config", "env"]:
+        return
+    try:
+        from wisp.env_file import boot_notes
+
+        for note in boot_notes():
+            sys.stderr.write(note + "\n")
+    except Exception:
+        pass
+
+
 def main():
     # F57: `~/.config/wisp/.env` is written by `provider_select.store_key()`; load it FIRST, before
     # any `WispConfig` or provider reads the environment. Exported variables win; an absent file
     # is a no-op. The one load site — `tests/test_dotenv_is_read.py` pins it.
     load_user_env()
+    _note_stale_env_selection()
     _register_stack_dumper()
     _convert_sigterm_to_interrupt()
     argv = list(sys.argv[1:])
@@ -1407,6 +1430,10 @@ def main():
         def _do_setup():
             sys.exit(cmd_setup())
         def _do_config():
+            if rest and rest[0] == "env":
+                from wisp.env_file import cli_main as env_cli
+
+                sys.exit(env_cli(rest[1:]))
             set_kv = None
             validate = False
             i = 0

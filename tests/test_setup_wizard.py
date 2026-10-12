@@ -70,7 +70,7 @@ class TestWizardFlow:
         import wisp.cli.setup as setup_mod
 
         monkeypatch.setattr(setup_mod, "_ollama_models", lambda base: [])
-        s = Script(inputs=["", "1", "qwen2.5-coder:latest", ""])
+        s = Script(inputs=["1", "1", "qwen2.5-coder:latest", ""])  # the provider is chosen explicitly: no provider is preselected any more
         result = run_setup(s.input, s.password, s.write, probe_fn=_ok_probe)
         assert result == {"provider": "ollama", "model": "qwen2.5-coder:latest",
                           "validated": True, "saved": True}

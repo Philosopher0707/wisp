@@ -62,9 +62,24 @@ def _persist(tmp_path: pathlib.Path, code: str, *, cwd: pathlib.Path,
 
 
 def _user_env_keys(home: pathlib.Path) -> set[str]:
+    """Variable names in the operator's own ~/.config/wisp/.env (empty when there is none). Since 2026-10-12 that file holds KEYS only: a selection (provider, model,
+    api_base, ollama_url) is saved in config.json, so a stale `.env` copy cannot override it (`wisp.env_file`, tests/test_env_file.py)."""
     path = home / ".config" / "wisp" / ".env"
-    assert path.exists(), "floor: persist() must still write the operator's own ~/.config/wisp/.env"
+    if not path.exists():
+        return set()
     return {ln.split("=", 1)[0] for ln in path.read_text().splitlines() if "=" in ln}
+
+
+def _operator_config(home: pathlib.Path) -> dict:
+    """The operator's own ~/.config/wisp/config.json. The floor of every test here: persist() must still write the OPERATOR's files, so "the workspace got nothing" is not vacuous."""
+    import json
+
+    path = home / ".config" / "wisp" / "config.json"
+    assert path.exists(), "floor: persist() must still write the operator's own ~/.config/wisp/config.json"
+    return json.loads(path.read_text())
+
+
+_SELECTION_VARS = {"WISP_PROVIDER", "WISP_MODEL", "WISP_API_BASE", "WISP_OLLAMA_URL"}
 
 
 class TestTheWriterDoesNotTouchTheWorkspace:
@@ -76,8 +91,8 @@ class TestTheWriterDoesNotTouchTheWorkspace:
                         f"persist({{**{_ALL_KEYS}, 'workspace': {str(ws)!r}}})", cwd=cwd)
         assert not (ws / ".env").exists()
         assert not (cwd / ".env").exists()
-        assert {"WISP_PROVIDER", "WISP_MODEL", "WISP_API_BASE", "WISP_OLLAMA_URL",
-                "WISP_API_KEY"} <= _user_env_keys(home)
+        assert {"provider", "model", "api_base", "ollama_url"} <= set(_operator_config(home))
+        assert not (_SELECTION_VARS | {"WISP_API_KEY"}) & _user_env_keys(home)
 
     def test_the_workspace_from_the_environment_gets_no_env(self, tmp_path: pathlib.Path) -> None:
         ws = tmp_path / "ws"
@@ -86,7 +101,7 @@ class TestTheWriterDoesNotTouchTheWorkspace:
                         "persist({'provider': 'openrouter', 'model': 'x/y'})",
                         cwd=ws, workspace_env=ws)
         assert not (ws / ".env").exists()
-        assert {"WISP_PROVIDER", "WISP_MODEL"} <= _user_env_keys(home)
+        assert {"provider", "model"} <= set(_operator_config(home))
 
     def test_a_projects_own_env_is_left_byte_identical(self, tmp_path: pathlib.Path) -> None:
         project = tmp_path / "project"
@@ -100,7 +115,7 @@ class TestTheWriterDoesNotTouchTheWorkspace:
                         f"'workspace': {str(project)!r}}})", cwd=project)
         assert own.read_bytes() == before
         assert stat.S_IMODE(own.stat().st_mode) == 0o644
-        assert {"WISP_PROVIDER", "WISP_MODEL"} <= _user_env_keys(home)
+        assert {"provider", "model"} <= set(_operator_config(home))
 
     def test_store_key_writes_only_the_operators_file(self, tmp_path: pathlib.Path) -> None:
         cwd = tmp_path / "cwd"
@@ -108,7 +123,7 @@ class TestTheWriterDoesNotTouchTheWorkspace:
         home = _persist(tmp_path, "from wisp.provider_select import store_key\n"
                         "store_key('openrouter', 'kr-1')", cwd=cwd)
         assert not (cwd / ".env").exists()
-        assert {"WISP_API_KEY", "OPENROUTER_API_KEY"} <= _user_env_keys(home)
+        assert "OPENROUTER_API_KEY" in _user_env_keys(home) and "WISP_API_KEY" not in _user_env_keys(home)  # the key under its own name, not the shared fallback
 
     def test_no_file_is_created_outside_the_operators_config(self, tmp_path: pathlib.Path) -> None:
         """The whole tree, not a list of expected paths: a new write site anywhere is caught."""
@@ -120,7 +135,7 @@ class TestTheWriterDoesNotTouchTheWorkspace:
         stray = [p for p in tmp_path.rglob("*")
                  if p.is_file() and config_dir not in p.parents]
         assert stray == []
-        assert _user_env_keys(home)
+        assert _operator_config(home)
 
 
 def _load_user_env_calls() -> list[ast.Call]:

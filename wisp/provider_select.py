@@ -203,6 +203,8 @@ def store_key(provider_name: str, key: str) -> None:
     os.environ["WISP_API_KEY"] = key
     if primary and primary != "WISP_API_KEY":
         os.environ[primary] = key
+    # `persist` saves only the per-provider slot to .env (under the provider's own variable) and ignores the shared `api_key`: written to disk it would be sent to any provider
+    # that has no key of its own. (In THIS process the shared variable is still set, as before; see AGENTS_LEARNING.md.)
     update: dict[str, str] = {"api_key": key}
     if primary:
         update[f"key_{name}"] = key  # per-provider slot in persisted config
@@ -320,24 +322,60 @@ def apply_switch(runtime: Any, session: "dict[str, Any]", config: Any,
     return new_cfg
 
 
+#: Per-provider key slots (`store_key` writes `key_<provider>`) and the variable the provider itself reads. Keys go to the operator's `.env`, under their own name, and nowhere else.
+_KEY_SLOTS: "dict[str, str]" = {"key_openai": "OPENAI_API_KEY", "key_nvidia": "NVIDIA_API_KEY", "key_openrouter": "OPENROUTER_API_KEY"}
+
+
 def persist(update: dict[str, str]) -> bool:
-    """Merge keys into ~/.config/wisp/config.json and ~/.config/wisp/.env. Best-effort."""
+    """Save a provider/model choice and/or a key. Best-effort.
+
+    **One owner per setting** (see `wisp.env_file`): a SELECTION (provider, model, api_base, ollama_url) is saved in ~/.config/wisp/config.json only, and any copy of it in
+    ~/.config/wisp/.env is removed, because the loader lets the environment win over config.json and a stale `.env` copy silently overrides every later choice. A KEY
+    (`key_<provider>`) is saved in .env only, under the provider's own variable name, never in config.json. The shared `api_key` is not persisted: it would be sent to any
+    provider that has no key of its own. Never the workspace's .env: PHASE_WORKSPACE_DOTENV.md §2.
+    """
+    from wisp.env_file import SELECTION_KEYS
+
+    selection_names = {cfg_key: env_name for env_name, cfg_key in SELECTION_KEYS.items()}
     ok = True
-    try:
-        from wisp.config import load_config, save_config
-        merged = load_config()
-        merged.update(update)
-        save_config(merged)
-    except Exception as exc:
-        logger.warning("Could not persist provider choice: %s", exc)
-        ok = False
-    # The operator's own ~/.config/wisp/.env, which F57's loader reads at startup. Never the
-    # workspace's: PHASE_WORKSPACE_DOTENV.md §2.
-    try:
-        _persist_env(update)
-    except Exception as exc:
-        logger.debug("Could not persist .env: %s", exc)
+    config_part = {k: v for k, v in update.items() if k not in _KEY_SLOTS and k != "api_key"}
+    if config_part:
+        try:
+            from wisp.config import load_config, save_config
+            merged = load_config()
+            merged.update(config_part)
+            save_config(merged)
+        except Exception as exc:
+            logger.warning("Could not persist provider choice: %s", exc)
+            ok = False
+    env_changes: "dict[str, str | None]" = {selection_names[k]: None for k in config_part if k in selection_names}
+    if not ok:
+        env_changes = {}  # config.json was not written: do not remove the only copy of the choice
+    for slot, value in update.items():
+        if slot in _KEY_SLOTS and isinstance(value, str) and value:
+            env_changes[_KEY_SLOTS[slot]] = value
+    if env_changes:
+        _write_env_changes(env_changes)
     return ok
+
+
+def _write_env_changes(changes: "dict[str, str | None]") -> None:
+    """Apply set/remove changes to the operator's .env (atomic, 0600, comments and order kept). A removal that cannot be made is a warning: the stale line still overrides."""
+    from wisp.env_file import _atomic_write, upsert
+    from wisp.user_env import user_env_path
+
+    path = user_env_path()
+    removing = any(v is None for v in changes.values())
+    try:
+        if path.is_symlink():
+            raise OSError(f"{path} is a symbolic link")
+        text = path.read_text(encoding="utf-8") if path.exists() else ""
+        new = upsert(text, changes)
+        if new != text:
+            _atomic_write(path, new)
+    except Exception as exc:
+        (logger.warning if removing else logger.debug)("Could not update %s (%s)%s", path, type(exc).__name__,
+                                                       "; a selection kept there still overrides config.json" if removing else "")
 
 
 def _persist_env(update: dict[str, str]) -> None:
@@ -381,40 +419,13 @@ def _persist_env(update: dict[str, str]) -> None:
 
 
 def _upsert_env_file(path: "pathlib.Path", update: dict[str, str]) -> None:
-    """Create or update a .env file with KEY=VALUE lines."""
+    """Create or update a .env file with KEY=VALUE lines (replace in place or append; comments and order kept; atomic, 0600). Best-effort: never raises."""
+    from wisp.env_file import _atomic_write, upsert
+
     path = pathlib.Path(path)
-    existing: dict[str, str] = {}
-    lines: list[str] = []
-    if path.exists():
-        try:
-            for line in path.read_text(encoding="utf-8").splitlines():
-                stripped = line.strip()
-                if not stripped or stripped.startswith("#") or "=" not in stripped:
-                    lines.append(line)
-                    continue
-                k, v = stripped.split("=", 1)
-                existing[k.strip()] = v.strip()
-                lines.append(line)
-        except Exception:
-            lines = []
-    # Upsert
-    for k, v in update.items():
-        if k in existing:
-            # Replace existing line
-            for i, line in enumerate(lines):
-                if line.strip().startswith(f"{k}="):
-                    lines[i] = f"{k}={v}"
-                    break
-        else:
-            lines.append(f"{k}={v}")
-    # Ensure parent exists
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        try:
-            os.chmod(path, 0o600)  # .env files carry API keys
-        except Exception:
-            pass
+        text = path.read_text(encoding="utf-8") if path.exists() else ""
+        _atomic_write(path, upsert(text, update))
     except Exception:
         pass
 

@@ -17,6 +17,32 @@ os.environ.pop("COLORTERM", None)
 os.environ.pop("FORCE_COLOR", None)
 os.environ.setdefault("TERM", "xterm")
 
+# ── A private HOME for the whole test process (tests/_home_guard.py) ─────
+# Before anything imports `wisp`: module-level constants such as `WISP_CONFIG_DIR = Path.home() / ...` are evaluated at import. The real home's operator files are
+# fingerprinted now and compared in `pytest_sessionfinish`; a run that changed them fails.
+from tests import _home_guard  # noqa: E402
+
+_REAL_HOME = os.environ.get("HOME", "")
+_PRIVATE_HOME, _REAL_FILES_BEFORE = _home_guard.enter(_REAL_HOME)
+
+
+def pytest_report_header(config):
+    if _PRIVATE_HOME is None:
+        return "home: REAL (WISP_TEST_REAL_HOME=1); the operator files are still watched"
+    return f"home: private {_PRIVATE_HOME}; the real {_REAL_HOME}/.config/wisp files are watched"
+
+
+def pytest_sessionfinish(session, exitstatus):
+    touched = _home_guard.changed(_REAL_FILES_BEFORE, _home_guard.snapshot(_REAL_HOME)) if _REAL_HOME else []
+    if touched and _PRIVATE_HOME is not None:
+        reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+        message = ("\n!! THE TEST RUN CHANGED THE REAL OPERATOR FILES: " + ", ".join(touched) +
+                   "\n!! A test is writing outside its private HOME. Find it before trusting this run; the files are not restored.")
+        if reporter is not None:
+            reporter.write_line(message, red=True)
+        session.exitstatus = 1
+    _home_guard.leave(_PRIVATE_HOME)
+
 
 
 @pytest.fixture

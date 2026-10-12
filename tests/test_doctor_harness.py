@@ -63,7 +63,7 @@ def _run(check) -> tuple[CheckStatus, str]:
 def test_names_are_pinned():
     assert dh.HARNESS_CHECK_NAMES == (
         "tool_profile", "subagent_surface", "spend_accounting", "context_budget",
-        "global_skills", "skill_capture", "audit_chain", "repl_input", "fleet",
+        "global_skills", "skill_capture", "audit_chain", "repl_input", "fleet", "user_env",
     )
 
 

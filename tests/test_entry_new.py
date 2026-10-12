@@ -24,6 +24,7 @@ class TestNewEntryPoint:
         from wisp.entry import run_mode
         with patch("wisp.entry.CompositionRoot") as mock_root:
             mock_instance = MagicMock()
+            mock_instance.config.provider = "mock"  # a one-shot prompt with no provider stops before the loop
             mock_root.return_value = mock_instance
             run_mode("cli", "test prompt")
             mock_root.assert_called_once()
@@ -32,6 +33,7 @@ class TestNewEntryPoint:
         from wisp.entry import run_mode
         with patch("wisp.entry.CompositionRoot") as mock_root:
             mock_instance = MagicMock()
+            mock_instance.config.provider = "mock"  # a one-shot prompt with no provider stops before the loop
             mock_root.return_value = mock_instance
             run_mode("cli", "test prompt")
             mock_instance.start.assert_called_once()
@@ -40,6 +42,7 @@ class TestNewEntryPoint:
         from wisp.entry import run_mode
         with patch("wisp.entry.CompositionRoot") as mock_root:
             mock_instance = MagicMock()
+            mock_instance.config.provider = "mock"  # a one-shot prompt with no provider stops before the loop
             mock_root.return_value = mock_instance
             run_mode("cli", "test prompt")
             mock_instance.shutdown.assert_called_once()
@@ -49,6 +52,7 @@ class TestNewEntryPoint:
         with patch("wisp.entry.CompositionRoot") as mock_root:
             with patch("wisp.entry.CLITransport") as mock_transport_class:
                 mock_instance = MagicMock()
+                mock_instance.config.provider = "mock"
                 mock_root.return_value = mock_instance
                 run_mode("cli", "test prompt")
                 mock_transport_class.assert_called_once()
