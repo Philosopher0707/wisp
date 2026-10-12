@@ -21,6 +21,7 @@ import os
 from collections.abc import Mapping
 from typing import Any
 
+from wisp.graph.evidence import check_verdict
 from wisp.graph.security import scrub_text as redact
 from wisp.graph.types import GraphNode, NodeResult, NodeStatus, NodeType
 
@@ -141,7 +142,8 @@ class SubagentNodeRunner:
         else:
             output = {"text": str(result.output)}
         if verifier:
-            output = {**output, **verdict_from_reply(output.get("text", ""))}
+            claimed = verdict_from_reply(output.get("text", ""))
+            output = {**output, **check_verdict(claimed, contract.allowed_tools, getattr(result, "observations", None), node.config.get("evidence"))}
         patch = getattr(result, "worktree_patch", "")
         if isinstance(patch, str) and patch and len(patch) < 4_000_000:
             output = {**output, "worktree_patch": patch}

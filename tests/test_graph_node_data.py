@@ -21,10 +21,13 @@ from wisp.multi_agent._runner import SubagentRunner
 from wisp.multi_agent.task import SubagentContract, SubagentResult
 
 SENT = "SENTINEL-OBJECTIVE"
+#: What the harness saw a verifier do when it really ran the suite and it was green (`SubagentResult.observations`). An ALLOW stands only with this behind it.
+GREEN_RUN = [{"tool": "run_tests", "green": True}]
 
 
-def run_template(monkeypatch, tmp_path, template: str, reply):
-    """Run `template`; `reply(contract, n)` is what the n-th worker call (counting from 1) answers. Returns (run result, contracts in call order)."""
+def run_template(monkeypatch, tmp_path, template: str, reply, verifier_saw=()):
+    """Run `template`; `reply(contract, n)` is what the n-th worker call (counting from 1) answers. `verifier_saw` is what the harness recorded of the `verify`
+    node's tool results. Returns (run result, contracts in call order)."""
     calls: list[SubagentContract] = []
 
     async def fake(self, contract, *args, **kwargs):
@@ -32,7 +35,7 @@ def run_template(monkeypatch, tmp_path, template: str, reply):
         answer = reply(contract, len(calls))
         if isinstance(answer, SubagentResult):
             return answer
-        return SubagentResult(task_id=contract.name, success=True, output=answer)
+        return SubagentResult(task_id=contract.name, success=True, output=answer, observations=list(verifier_saw) if contract.name == "verify" else [])
 
     monkeypatch.setattr(SubagentRunner, "run", fake)
     config = WispConfig().replace(provider="mock", model="mock-model", workspace=str(tmp_path))
@@ -83,9 +86,16 @@ class TestAVerifierCanSayYes:
         return result["results_by_node"]["verify"]["output"].get("decision") == "ALLOW"
 
     def test_a_reply_that_ends_in_an_allow_with_evidence_is_accepted_and_nothing_is_redone(self, monkeypatch, tmp_path):
-        result, calls = run_template(monkeypatch, tmp_path, "repair", lambda c, n: verdict("ALLOW", evidence=["pytest: 1 passed"]) if c.name == "verify" else "fixed")
+        result, calls = run_template(monkeypatch, tmp_path, "repair", lambda c, n: verdict("ALLOW", evidence=["pytest: 1 passed"]) if c.name == "verify" else "fixed",
+                                     verifier_saw=GREEN_RUN)
         assert self.accepted(result)
         assert [c.name for c in calls] == ["implement", "verify", "done"]  # one attempt, then the summary node
+
+    def test_the_same_reply_with_no_test_run_behind_it_is_not(self, monkeypatch, tmp_path):
+        """The evidence list is the model's own text. Only what the harness saw (`verifier_saw`) lets an ALLOW stand (details: tests/test_graph_harness_evidence.py)."""
+        result, _ = run_template(monkeypatch, tmp_path, "repair", lambda c, n: verdict("ALLOW", evidence=["pytest: 1 passed"]) if c.name == "verify" else "fixed")
+        out = result["results_by_node"]["verify"]["output"]
+        assert out["decision"] == "REJECT" and "NO_TEST_RUN" in out["reason_codes"]
 
     def test_prose_with_no_verdict_is_a_reject_that_says_why(self, monkeypatch, tmp_path):
         result, _ = run_template(monkeypatch, tmp_path, "repair", lambda c, n: "Looks good to me." if c.name == "verify" else "fixed")
@@ -135,7 +145,7 @@ class TestACorrectionReallyRunsTheWorkerAgain:
         return "fixed"
 
     def test_the_worker_runs_a_second_time_and_is_told_what_was_wrong(self, monkeypatch, tmp_path):
-        result, calls = run_template(monkeypatch, tmp_path, "repair", self.reply)
+        result, calls = run_template(monkeypatch, tmp_path, "repair", self.reply, verifier_saw=GREEN_RUN)
         names = [c.name for c in calls]
         assert names[:4] == ["implement", "verify", "implement", "verify"], names
         assert "totals.py still subtracts one" in calls[2].task
@@ -151,7 +161,7 @@ class TestACorrectionReallyRunsTheWorkerAgain:
                 return "fixed"
             return verdict("REJECT") if len(n_implement) < 2 else verdict("ALLOW", evidence=["x"])
 
-        run_template(monkeypatch, tmp_path, "repair", reply)
+        run_template(monkeypatch, tmp_path, "repair", reply, verifier_saw=GREEN_RUN)
         assert len(n_implement) == 2
 
 
