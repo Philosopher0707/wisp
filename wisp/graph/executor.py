@@ -218,6 +218,10 @@ class GraphExecutor:
                     statuses[nid] = NodeStatus.PENDING
                 else:
                     statuses[nid] = NodeStatus.CANCELLED
+        for nid, marked_at in _cycle_bound_markers(store.node_runs(run_id)).items():
+            if nid in statuses and statuses[nid] == NodeStatus.SUCCESS and _last_success_at(store.node_runs(run_id), nid) <= marked_at:
+                statuses.pop(nid)
+                results.pop(nid, None)
         for n in graph.nodes:
             if n.id not in statuses:
                 statuses[n.id] = NodeStatus.PENDING
@@ -526,6 +530,11 @@ class GraphExecutor:
             out = getattr(results.get(s), "output", None)
             if isinstance(out, dict) and out.get("timed_out") is True:
                 failed.append(s)
+        # An exhausted correction cycle is a failure even though no sink failed: the target is marked CYCLE_BOUND and the accept lane's sink is skipped
+        # as untaken, which alone reads as benign, so a run that never converged was recorded as succeeded.
+        for nid, res in results.items():
+            if res.error_code == "CYCLE_BOUND" and nid not in failed:
+                failed.append(nid)
         benign = _benign_set(graph, sched, results)
         incomplete = [s for s in sinks
                       if sched.statuses.get(s, NodeStatus.PENDING)
@@ -710,6 +719,13 @@ class GraphExecutor:
                     results[e.to_node] = NodeResult(
                         e.to_node, NodeStatus.FAILURE, error_code="CYCLE_BOUND",
                         message="correction cycle exhausted")
+                    # Every member's own row still says success, so without this a resume would find nothing to re-run and finalise the run as
+                    # succeeded. resume() lets this marker cancel the successes that finished before it, so the cycle is retried with a fresh budget.
+                    now = time.time()
+                    for m in sorted(_cycle_replay_set(graph, e.to_node)):
+                        store.put_node_run(f"{rid}:{m}#cycle_bound", rid, m, NodeStatus.FAILURE.value, 0, "",
+                                           {"error_code": "CYCLE_BOUND", "message": "correction cycle exhausted"},
+                                           "", now, now)
                 else:
                     # Replay the loop body: reset the correction target and
                     # everything downstream of it inside the declared cycle
@@ -1003,6 +1019,21 @@ def _snapshot(sched: SchedulerState, results: dict[str, NodeResult]) -> dict:
     return {"statuses": {k: v.value for k, v in sched.statuses.items()},
             "taken": dict(sched.taken),
             "completed": sorted(k for k, r in results.items() if r.ok)}
+
+
+def _cycle_bound_markers(rows: list[dict[str, Any]]) -> dict[str, float]:
+    """node id -> when its correction cycle was last recorded as exhausted."""
+    marked: dict[str, float] = {}
+    for row in rows:
+        if str(row.get("node_run_id", "")).endswith("#cycle_bound") and row.get("status") == NodeStatus.FAILURE.value:
+            nid = str(row["node_id"])
+            marked[nid] = max(marked.get(nid, 0.0), float(row.get("finished_at") or 0.0))
+    return marked
+
+
+def _last_success_at(rows: list[dict[str, Any]], nid: str) -> float:
+    return max((float(r.get("finished_at") or 0.0) for r in rows
+                if r.get("node_id") == nid and r.get("status") == "success"), default=0.0)
 
 
 def _attempt_nrid(rid: str, nid: str, attempt: int) -> str:

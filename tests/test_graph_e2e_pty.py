@@ -162,7 +162,9 @@ def run(tmp_path_factory) -> Run:
 
 class TestTheGraphRuns:
     def test_the_prompt_takes_the_graph_path_and_the_run_ends_with_a_result_and_a_trace(self, run):
-        assert "graph path" in run.graph_text and "graph complete" in run.graph_text
+        # The stub's reviewer rejects every round, so the correction cycle is exhausted and the run has FAILED (tests/test_graph_cycle_exhaustion.py);
+        # this used to read "graph complete", which was the bug.
+        assert "graph path" in run.graph_text and "✗ graph failed" in run.graph_text and "graph complete" not in run.graph_text
         assert re.search(r"trace: /graph trace graph-[0-9a-f]+", run.graph_text), run.graph_text[-400:]
         assert "Traceback" not in run.graph_text and "graph run failed" not in run.graph_text
 
@@ -189,8 +191,9 @@ class TestTheAgentCarriesOn:
         assert "auth module" in json.dumps(conversation).lower() or len(conversation) >= 3
 
     def test_the_headline_is_not_a_success_mark_when_verification_rejected(self, run):
-        """O-20, fixed: the line under `graph complete` carries the failure mark when the graph's own verification says REJECT."""
+        """O-20, fixed: the headline under the run's status line carries the failure mark when the graph's own verification says REJECT (the status
+        line itself now says `graph failed` for an exhausted cycle, not `graph complete`)."""
         lines = run.graph_text.splitlines()
-        headline = lines[next(i for i, ln in enumerate(lines) if "graph complete" in ln) + 1]
+        headline = lines[next(i for i, ln in enumerate(lines) if "graph failed" in ln) + 1]
         assert "verification: REJECT" in run.graph_text
         assert headline.lstrip().startswith("✗") and "✓" not in headline
