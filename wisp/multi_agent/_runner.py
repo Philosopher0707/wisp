@@ -18,6 +18,7 @@ from wisp.config import WispConfig
 from wisp.core.session import Session
 from wisp.infra.store import UnifiedStore
 
+from .observations import record as _record_observation
 from .task import EventKind, OrchestratorEvent, SubagentContract, SubagentResult
 
 
@@ -376,6 +377,7 @@ class SubagentRunner:
                 session_id=session["id"],
                 files_changed=result_dict.get("files_changed", []),
                 iterations_used=result_dict.get("iterations_used", 0),
+                observations=list(result_dict.get("observations", []) or []),
                 # A mid-run deadline keeps its retryable meaning even though
                 # the partial round now survives inside output.
                 timed_out=result_dict.get("timed_out", False),
@@ -622,6 +624,7 @@ class SubagentRunner:
                 )
 
             output_text = ""
+            observations: list[dict] = []
             engine_iterations = 0
             last_nonempty_round = ""
             saw_done = saw_fatal_error = False
@@ -718,6 +721,7 @@ class SubagentRunner:
                             # round — pre-action narration is not the answer.
                             output_text = ""
                         elif etype == "tool_result":
+                            _record_observation(observations, event)
                             result_data = event.get("result", "")
                             budget_error = _spend(budget, result_data if isinstance(result_data, str) else "")
                             if budget_error:
@@ -766,6 +770,7 @@ class SubagentRunner:
                 "error": error,
                 "files_changed": self._extract_files_changed(output_text) if success else [],
                 "iterations_used": engine_iterations,
+                "observations": observations,
                 "messages": session_dict.get("messages", []),
                 "overhead_chars": self._overhead_chars(core, session_dict),
                 "timed_out": timed_out_mid_run,
@@ -834,6 +839,7 @@ class SubagentRunner:
         runtime_session[MODEL_AUTHORED_PROMPT_KEY] = True
 
         output_text = ""
+        observations: list[dict] = []
         engine_iterations = 0
         last_nonempty_round = ""
         saw_done = saw_fatal_error = False
@@ -885,6 +891,7 @@ class SubagentRunner:
                         # round — pre-action narration is not the answer.
                         output_text = ""
                     elif etype == "tool_result":
+                        _record_observation(observations, event)
                         result_data = event.get("result", "")
                         budget_error = _spend(budget, result_data if isinstance(result_data, str) else "")
                         if budget_error:
@@ -933,6 +940,7 @@ class SubagentRunner:
             "error": error,
             "files_changed": self._extract_files_changed(output_text) if success else [],
             "iterations_used": engine_iterations,
+            "observations": observations,
             "messages": runtime_session.get("messages", []),
             "overhead_chars": self._overhead_chars(self._agent_runtime, runtime_session),
             "timed_out": timed_out_mid_run,

@@ -77,18 +77,22 @@ _MUTATING_TOOLS = frozenset({"write_file", "edit_file", "edit_file_multi", "fs_m
 # Tool names whose exit status counts as verification evidence.
 _VERIFY_TOOLS = frozenset({"run_bash", "exec_sandbox"})
 
-# run_tests summary shape (test_runner.format_for_llm). A vacuous
-# 0/0 run is NOT evidence — otherwise auto_edit turns (run_bash blocked)
-# could "verify" without executing a single test.
-_TEST_RESULTS_RE = re.compile(r"## Test Results \((\d+)/(\d+) passed\)")
+# run_tests summary shape (test_runner.format_for_llm). A vacuous 0/0 run is NOT evidence, and neither is a run that only skipped: otherwise auto_edit turns
+# (run_bash blocked) could "verify" without executing a single test. The verdict is read from the START of the text only: the harness writes its own summary
+# first, and everything after it (a failing test's traceback, the tail of its output, a file it printed) is the project's text. A pattern search over the whole
+# result let a RED run read as green when a test printed the two summary lines.
+_TEST_RESULTS_RE = re.compile(
+    r"\A\s*## Test Results \((\d+)/(\d+) passed\)\n"
+    r"(?:- Duration: [^\n]*\n)?"
+    r"- Failed: 0, Errors: 0(?!\d)")
 
 
 def _run_tests_is_evidence(result_text: str) -> bool:
-    """True when result_text reports a real green suite (≥1 collected, 0 failed)."""
-    m = _TEST_RESULTS_RE.search(result_text or "")
-    if not m or int(m.group(2)) < 1:
+    """True when result_text is the harness's own report of a real green suite (at least one test passed, none failed or errored)."""
+    if not isinstance(result_text, str):
         return False
-    return "- Failed: 0, Errors: 0" in result_text
+    m = _TEST_RESULTS_RE.match(result_text)
+    return bool(m) and int(m.group(1)) >= 1 and int(m.group(2)) >= 1
 
 
 # The shell-result success encoding, owned jointly by this gate and
