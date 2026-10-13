@@ -22,7 +22,7 @@
 > `—` therefore means *no catch inside these roots*, which is **not** the same claim as
 > *unhandled* — see §(c).
 >
-> Generated 2026-09-30 at `984e1dd` · **57 classes** · **320 raise sites** · **67 catch sites** · **9 with no test naming them**.
+> Generated 2026-09-30 at `8b778ed` · **58 classes** · **324 raise sites** · **71 catch sites** · **9 with no test naming them**.
 
 ---
 
@@ -56,13 +56,14 @@
 | `ContextOverflow` | `RuntimeError` | guard | context | `wisp/core/context_trust.py:104` | 1 | `wisp/core/context_trust.py:314` | — | — |
 | `CriteriaDeclarationRejected` | `Exception` | guard | turn | `wisp/core/convergence.py:674` | 9 | `wisp/core/convergence.py:783` | `wisp/autonomous.py:341`, `wisp/autonomous_repl.py:70` | ADR-0050 |
 | `ReplayDivergence` | `RuntimeError` | guard | persist | `wisp/core/replay_digest.py:64` | 2 | `wisp/core/replay_digest.py:125` | `wisp/core/runtime.py:1863` | — |
+| `MemoryStoreError` | `RuntimeError` | guard | persist | `wisp/memory.py:63` | 2 | `wisp/memory.py:210` | `wisp/__main__.py:394`, `wisp/memory.py:256`, `wisp/memory.py:288`, `wisp/tools/memory.py:38` | — |
 | `ImportGraphTooLarge` | `RuntimeError` | guard | tool | `wisp/import_graph.py:25` | 1 | `wisp/import_graph.py:133` | `wisp/test_runner.py:353` | — |
 | `WalkBudgetExceeded` | `RuntimeError` | guard | tool | `wisp/core/workspace_walk.py:39` | 1 | `wisp/core/workspace_walk.py:130` | `wisp/import_graph.py:132` | — |
 | `JobLimitError` | `ToolError` | guard | tool | `wisp/jobs/spawn.py:20` | 2 | `wisp/jobs/spawn.py:41` | — | — |
 | `DiskTooFull` | `RuntimeError` | guard | bench | `wisp/dashboard/bench.py:129` | 1 | `wisp/dashboard/bench.py:168` | `wisp/dashboard/__main__.py:70` | — |
 | `SourceError` | `Exception` | fault | cli | `wisp/review/source.py:39` | 15 | `wisp/review/source.py:59` | `wisp/review/cli.py:152`, `wisp/review/source.py:202`, `wisp/review/source.py:235` | — |
 | `TriageError` | `Exception` | fault | cli | `wisp/review/triage.py:58` | 5 | `wisp/review/triage.py:277` | `wisp/review/cli.py:212` | — |
-| `ToolError` | `Exception` | fault | tool | `wisp/tools/errors.py:8` | 87 | `agent/fast_tools.py:47` | `agent/tools/batch_reader.py:386`, `agent/tools/batch_reader.py:629`, `wisp/cli/dispatcher.py:398`, `wisp/jobs/supervisor.py:102`, `wisp/tool_executor.py:279`, `wisp/tool_executor.py:1409`, `wisp/tool_executor.py:1522`, `wisp/tools/bash.py:211`, `wisp/tools/registry.py:1309`, `wisp/tools/registry.py:1451` | — |
+| `ToolError` | `Exception` | fault | tool | `wisp/tools/errors.py:8` | 89 | `agent/fast_tools.py:47` | `agent/tools/batch_reader.py:386`, `agent/tools/batch_reader.py:629`, `wisp/cli/dispatcher.py:398`, `wisp/jobs/supervisor.py:102`, `wisp/tool_executor.py:279`, `wisp/tool_executor.py:1409`, `wisp/tool_executor.py:1522`, `wisp/tools/bash.py:211`, `wisp/tools/registry.py:1309`, `wisp/tools/registry.py:1451` | — |
 | `PlanError` | `Exception` | fault | plan | `wisp/graph/planner.py:72` | 28 | `wisp/graph/planner.py:87` | `wisp/graph/cli.py:333`, `wisp/graph/cli.py:375`, `wisp/graph/planner.py:314`, `wisp/graph/planner.py:396` | — |
 | `LSPServerError` | `Exception` | fault | tool | `wisp/lsp/client.py:24` | 16 | `wisp/lsp/client.py:78` | `wisp/lsp/client.py:529`, `wisp/lsp/manager.py:174`, `wisp/lsp/manager.py:188` | — |
 | `SearchReplaceError` | `ValueError` | fault | tool | `wisp/core/mutator/search_replace.py:38` | 3 | `wisp/core/mutator/search_replace.py:59` | — | — |
@@ -132,15 +133,15 @@ the derivation refuses if a row's phase is absent here, or a phase here has no r
 
 ## (c) The raise/catch asymmetry
 
-**320 raise sites, 67 catch sites.** The asymmetry is large and it is mostly not a defect: a library-style module raises and lets its caller decide, and the caller is often outside the three roots this page covers.
+**324 raise sites, 71 catch sites.** The asymmetry is large and it is mostly not a defect: a library-style module raises and lets its caller decide, and the caller is often outside the three roots this page covers.
 
 What the asymmetry **does** let this page state precisely is the zero:
 
 | | count |
 |---|---|
-| classes with at least one raise site | 48 |
+| classes with at least one raise site | 49 |
 | classes with **no** raise site | 9 |
-| classes with at least one catch site | 29 |
+| classes with at least one catch site | 30 |
 | classes with **no** catch site | 28 |
 
 **A zero-raise class is the load-bearing number.** `caught_at: —` is weak evidence — it
@@ -148,7 +149,7 @@ may mean the caller is out of scope. `raise_sites: 0` is strong: an AST walk ove
 whole runtime found no `raise` of that name anywhere, so the class cannot fire in this
 tree at all.
 
-**9 distinct names — 9 of 57 rows — are named by no test file.** Derived by
+**9 distinct names — 9 of 58 rows — are named by no test file.** Derived by
 searching `tests/` for each name, so it is a floor and not a proof: a test can exercise a
 path without ever naming the exception. The list is a place to look, not a verdict.
 
@@ -180,7 +181,7 @@ The name and row counts differ because `SchemaValidationError` is defined twice 
 
 - **`adr` is `—` for 45 of 47 rows, and that is a limit, not a claim.** Only two rows carry a decision, and each is cited because the class's **own docstring** names it — `ADR-0038` for `OllamaConfigurationError`, `ADR-0050` for `CriteriaDeclarationRejected`. Most of these exceptions arrived in a phase whose ADR exists but does not name the class. **The provenance was not traced**, and a plausible ADR is worse than a blank — guessing a decision is the defect this corpus exists to prevent. `—` states *not pinned*, not *none exists*.
 
-- **`tripwire` is derived, and a derived tripwire is weaker than a declared one.** The column is the first `tests/` file that names the exception, found by search. It shows what is *referenced*, not what is *asserted*: a test that imports a name and never exercises the raise still counts. It is included because the zero is informative — 9 of 57 classes are named by no test file at all — and it is labelled derived so nobody reads it as a guard. **The number is a floor.** `LSPServerError` has 16 raise sites and no test names it; that is a live path with no assertion on its failure shape, and it is the kind of zero this column exists to surface.
+- **`tripwire` is derived, and a derived tripwire is weaker than a declared one.** The column is the first `tests/` file that names the exception, found by search. It shows what is *referenced*, not what is *asserted*: a test that imports a name and never exercises the raise still counts. It is included because the zero is informative — 9 of 58 classes are named by no test file at all — and it is labelled derived so nobody reads it as a guard. **The number is a floor.** `LSPServerError` has 16 raise sites and no test names it; that is a live path with no assertion on its failure shape, and it is the kind of zero this column exists to surface.
 
 ### What this page did not do
 
