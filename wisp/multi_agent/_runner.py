@@ -856,6 +856,10 @@ class SubagentRunner:
         # `config` (built from the contract) never reaches `run_turn`: the runtime's core has the
         # parent's config, so without this a child ran up to the parent's 200 rounds.
         runtime_session["max_iterations"] = contract.max_iterations
+        # Same for the nesting position: the parent core's config says depth 0, so every
+        # descendant spawned at depth 1 and the depth limit never fired.
+        runtime_session["_subagent_depth"] = int(getattr(contract, "_subagent_depth", 0) or 0)
+        runtime_session["_subagent_branch_count"] = int(getattr(contract, "_subagent_branch_count", 0) or 0)
         # The runtime path builds a SECOND session dict; the principal has to be
         # stamped into it too, or this path authorizes as the local human while
         # the other one does not — the half-fix this migration keeps finding.

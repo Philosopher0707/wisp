@@ -366,6 +366,14 @@ def _tool_schema_name(schema: Any) -> str:
     return ""
 
 
+def _nesting(session: dict[str, Any], config: Any, key: str) -> int:
+    """A subagent's nesting position: the session's (runtime path), else the engine config's."""
+    value = session.get(key)
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return int(getattr(config, key, 0) or 0) if config is not None else 0
+
+
 @dataclass
 class WispAgentCore:
     """Stateless turn engine."""
@@ -430,14 +438,10 @@ class WispAgentCore:
         # without this a child's spawn/fanout would stamp depth from 0. The
         # engine's config is the executing agent's (root or child), so it is
         # the correct source. Overwritten by every turn, like the deadline.
-        _exec_ctx.agent_depth.set(
-            int(getattr(self.config, "_subagent_depth", 0) or 0)
-            if self.config is not None else 0
-        )
-        _exec_ctx.agent_branch.set(
-            int(getattr(self.config, "_subagent_branch_count", 0) or 0)
-            if self.config is not None else 0
-        )
+        # A child routed through the runtime runs on the ROOT's engine, so its position
+        # arrives on the session instead, and wins when present.
+        _exec_ctx.agent_depth.set(_nesting(session, self.config, "_subagent_depth"))
+        _exec_ctx.agent_branch.set(_nesting(session, self.config, "_subagent_branch_count"))
         # Build messages list
         messages = list(session.get("messages", []))
         # Turn-0 boot seed (GH#22): workspace reality as the first message,

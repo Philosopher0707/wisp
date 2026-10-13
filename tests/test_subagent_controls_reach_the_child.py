@@ -60,7 +60,9 @@ class _Stub:
                 self.send_header("Content-Type", "text/event-stream")
                 self.end_headers()
                 answered = any(m.get("role") == "tool" for m in msgs)
-                if kind == "loop" and body.get("tools"):
+                if kind == "recurse" and not answered:
+                    self._tool("spawn", {"task": "SCN{recurse}", "role": "generalist"}, "call_1")
+                elif kind == "loop" and body.get("tools"):
                     n = sum(1 for m in msgs if m.get("role") == "tool")
                     self._tool("read_file", {"path": "README.md"}, f"call_{n}")
                 elif kind == "write" and not answered:
@@ -114,7 +116,7 @@ def _wire(tmp_path, monkeypatch, **overrides):
     _git(ws, "commit", "-qm", "init")  # deliberately no .gitignore: a user project need not ignore .wisp/
     stub = _Stub()
     cfg = WispConfig().replace(provider="openai", api_base=stub.url, api_key="k", model="stub-model",
-                               workspace=str(ws), permission_mode="auto_edit", **overrides)
+                               workspace=str(ws), **{"permission_mode": "auto_edit", **overrides})
     return CompositionRoot(config=cfg), stub, ws
 
 
@@ -155,6 +157,35 @@ class TestIterationLimit:
         root, stub, _ = wired
         asyncio.run(root.subagent_orchestrator.run(_contract("looper", "SCN{loop}", max_iterations=2)))
         assert root.config.max_iterations == 200
+
+
+class TestDepthLimit:
+    def test_a_grandchild_is_stamped_deeper_and_refused_at_the_limit(self, tmp_path, monkeypatch):
+        """Every descendant was stamped depth 1 (the parent core's config), so the limit never
+        fired; recursion stopped only when the 4-slot pool was full of ancestors waiting on their
+        children, a deadlock that held until the contract's timeout."""
+        import time
+
+        monkeypatch.setenv("WISP_TOOL_PROFILE", "full")
+        root, stub, _ = _wire(tmp_path, monkeypatch, permission_mode="full")
+        orch = root.subagent_orchestrator
+        depths: list[int] = []
+        run = orch.run
+
+        async def traced(contract):
+            depths.append(contract._subagent_depth)
+            return await run(contract)
+        orch.run = traced
+        started = time.monotonic()
+        try:
+            r = asyncio.run(orch.run(_contract("r0", "SCN{recurse}", timeout_seconds=30)))
+        finally:
+            stub.server.shutdown()
+            stub.server.server_close()
+        assert depths[:3] == [0, 1, 2], depths
+        assert max(depths) <= root.config.max_subagent_depth, depths
+        assert time.monotonic() - started < 20, "the spawn chain hung instead of being refused"
+        assert r.success, r.output
 
 
 class TestRoleTools:
