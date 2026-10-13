@@ -19,8 +19,13 @@ enforce security boundaries.
 """
 
 import json
+import os
 import shlex
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from unittest.mock import patch
+
 import pytest
 
 from wisp.tools import (
@@ -211,10 +216,92 @@ class TestIntegrationListFiles:
 
 # ── Integration: web_fetch ───────────────────────────────────────────
 
+_FETCH_TOKEN = "wisp-hermetic-web-fetch-token"
+
+
+class _FetchTarget(BaseHTTPRequestHandler):
+    """Local stand-in for httpbin.org: no robots.txt, a JSON body at /get."""
+
+    def do_GET(self):
+        self.server.paths.append(self.path)
+        if self.path != "/get":
+            self.send_error(404)
+            return
+        body = json.dumps({"url": f"http://{self.headers['Host']}/get",
+                           "token": _FETCH_TOKEN}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.fixture
+def local_fetch_target(monkeypatch):
+    """Serve _FetchTarget on 127.0.0.1; yields the server (``.paths`` = requests seen)."""
+    # A developer's or runner's proxy must not intercept a loopback request.
+    for var in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+                "http_proxy", "https_proxy", "all_proxy"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _FetchTarget)
+    server.paths = []
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 class TestIntegrationWebFetch:
-    def test_web_fetch_success(self, temp_workspace):
-        import pytest
-        # Use httpbin for reliable testing
+    def test_web_fetch_success(self, temp_workspace, local_fetch_target):
+        """The real web_fetch path (robots check, fetch, decode, framing) against a local server.
+
+        The SSRF guard refuses loopback, so the test uses its documented seam:
+        `_assert_public_url` patched to return None ("no pin available"). The guard
+        itself is pinned by the next test and by test_web_guard_contracts.py.
+        """
+        port = local_fetch_target.server_address[1]
+        url = f"http://127.0.0.1:{port}/get"
+        with patch("wisp.tools.web._assert_public_url", return_value=None) as guard:
+            raw = execute_tool("web_fetch", {"url": url, "max_chars": 2000},
+                               str(temp_workspace), _skip_authorize=True)
+        result = parse_tool_result(raw)
+        assert result["status"] == "ok", result["data"]
+        assert _FETCH_TOKEN in result["data"]
+        assert result["metadata"]["url"] == url
+        # Real HTTP happened: robots.txt was asked for (404 = allowed), then the page.
+        assert local_fetch_target.paths == ["/robots.txt", "/get"]
+        # The guard was still consulted for every URL dialed.
+        assert {c.args[0] for c in guard.call_args_list} == {
+            url, f"http://127.0.0.1:{port}/robots.txt"}
+
+    def test_web_fetch_guard_blocks_the_local_target(self, temp_workspace, local_fetch_target):
+        """Unpatched, the SSRF guard refuses the same loopback URL before any request."""
+        port = local_fetch_target.server_address[1]
+        raw = execute_tool("web_fetch", {"url": f"http://127.0.0.1:{port}/get"},
+                           str(temp_workspace), _skip_authorize=True)
+        result = parse_tool_result(raw)
+        assert result["status"] == "error"
+        assert "WEB_FETCH_BLOCKED" in result["data"]
+        assert local_fetch_target.paths == []
+
+    @pytest.mark.live
+    @pytest.mark.skipif(os.environ.get("WISP_E2E_LIVE") != "1",
+                        reason="live network test; set WISP_E2E_LIVE=1")
+    def test_web_fetch_success_live(self, temp_workspace):
+        """Same path against a public host, through the real SSRF guard and DNS pin.
+
+        Opt-in only: QA's pytest fallback does not pass `-m "not live"`, and
+        httpbin.org answered 503 on 2026-10-12, failing PRs #136-#138.
+        """
         raw = execute_tool("web_fetch", {"url": "https://httpbin.org/get", "max_chars": 2000}, str(temp_workspace),
                              _skip_authorize=True)
         result = parse_tool_result(raw)

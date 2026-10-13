@@ -387,7 +387,20 @@ def cmd_models():
 
 def cmd_memory(args: list[str]):
     """Manage cross-session memory (learned preferences, project facts)."""
+    from wisp.memory import MemoryStoreError
+
+    try:
+        _cmd_memory(args)
+    except (MemoryStoreError, OSError) as e:
+        print(error(f"✗ Memory: {e}"))
+        raise SystemExit(1)
+
+
+def _cmd_memory(args: list[str]):
     from wisp.memory import add_fact, remove_fact, list_facts, clear_memory, load_memory
+
+    if not args or args[0] == "list":
+        load_memory(strict=True)
 
     if not args:
         # Show all facts
@@ -436,7 +449,7 @@ def cmd_memory(args: list[str]):
 
     elif sub == "clear":
         clear_memory()
-        print(success("✓ Memory cleared."))
+        print(success("✓ Memory cleared (the cleared facts are kept in memory.json.cleared-<time> next to the store)."))
 
     elif sub == "summaries":
         _cmd_memory_summaries(args[1:])
