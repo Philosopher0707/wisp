@@ -475,6 +475,11 @@ class WispAgentCore:
         tools = self._provider_tools(session)
 
         max_iterations = getattr(self.config, "max_iterations", 30)
+        # A subagent runs on the parent's core (and so the parent's config); its contract's limit
+        # arrives on the session and may only narrow the host's.
+        session_cap = session.get("max_iterations")
+        if isinstance(session_cap, int) and not isinstance(session_cap, bool) and session_cap > 0:
+            max_iterations = min(max_iterations, session_cap)
 
         try:
             async with _asyncio.timeout(turn_timeout):

@@ -278,7 +278,10 @@ class WorktreeManager:
         *exclude* is an optional list of git pathspec patterns omitted
         from the diff (e.g. oracle artifacts like ``__pycache__/`` that
         would otherwise poison the patch with un-appliable binary
-        deltas). None (default) preserves the legacy full diff.
+        deltas). Wisp's own state (``STATE_DIRS``) is always omitted: the
+        child's session store, WAL and audit log are written inside the
+        worktree, and the parent's ``.wisp/wisp.db`` made ``git apply``
+        refuse the whole patch, the child's real changes with it.
         """
         if not worktree_path.exists():
             return ""
@@ -293,13 +296,12 @@ class WorktreeManager:
         await add_proc.communicate()
 
         # Generate a patch of all changes compared to HEAD
-        if exclude:
-            # Long-form :(exclude) — the :! short magic was removed in
-            # newer git (2.53+ rejects it as unimplemented).
-            diff_cmd = ["git", "diff", "HEAD", "--", ".",
-                        *(f":(exclude){pat}" for pat in exclude)]
-        else:
-            diff_cmd = ["git", "diff", "HEAD"]  # legacy argv, untouched
+        from wisp.review.source import STATE_DIRS
+
+        # Long-form :(exclude) — the :! short magic was removed in
+        # newer git (2.53+ rejects it as unimplemented).
+        diff_cmd = ["git", "diff", "HEAD", "--", ".",
+                    *(f":(exclude){pat}" for pat in [*STATE_DIRS, *(exclude or [])])]
         diff_proc = await asyncio.create_subprocess_exec(
             *diff_cmd,
             cwd=str(worktree_path),

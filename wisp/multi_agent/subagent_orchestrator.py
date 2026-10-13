@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import hashlib
 import json
 import logging
@@ -32,6 +33,9 @@ from ._worktree_manager import WorktreeManager
 from .roles import ROLE_CONFIGS
 from .task import EventKind, OrchestratorEvent, SubagentContract, SubagentResult
 from .task import MAX_SUBAGENT_RETRIES
+
+#: Marks a child whose worktree changes never reached the workspace.
+CHANGES_NOT_APPLIED = "[CHANGES NOT APPLIED]"
 from .telemetry import mask_text
 
 logger = logging.getLogger(__name__)
@@ -749,6 +753,7 @@ class SubagentOrchestrator:
             )
             await self._fire_subagent_hook("subagent_fail", contract, result)
             return result
+        contract = self._with_role_tools(contract)
 
         # ── Contract validation ────────────────────────────────────────
         if contract.timeout_seconds <= 0:
@@ -891,19 +896,6 @@ class SubagentOrchestrator:
                     result, contract,
                     isolated_effective=worktree_path is not None)
 
-            # ── Post-run bookkeeping ───────────────────────────────────
-            # Only successes are cached: replaying a failure/timeout as a
-            # short-circuited "complete" result defeats retries.
-            if result.success and contract.cache:
-                self._cache.set(contract, result)
-            self._persistence.save(contract, result)
-            self._budget.record(result.tokens_used)
-            self._telemetry.record(contract.model or self.config.model or "unknown", result)
-
-            # ── Fire complete/fail hook ──────────────────────────
-            hook_event = "subagent_complete" if result.success else "subagent_fail"
-            await self._fire_subagent_hook(hook_event, contract, result)
-
             # ── Capture & apply worktree changes ────────────────────
             if worktree_path:
                 try:
@@ -927,6 +919,28 @@ class SubagentOrchestrator:
                             result.patch_applied = await self._worktree_mgr.apply_patch(result.worktree_patch)
                         except Exception as exc:
                             logger.warning("Failed to apply worktree patch for %s: %s", worktree_path, exc)
+                    if not result.patch_applied:
+                        # The worktree is deleted below, so a success here would report work that
+                        # exists nowhere. The patch stays on the result for whoever can recover it.
+                        note = (f"{CHANGES_NOT_APPLIED} the changes made in the isolated worktree "
+                                "could not be applied to the workspace (git apply failed); nothing was written")
+                        result.success = False
+                        result.error = note
+                        result.output = f"{result.output}\n{note}" if result.output else note
+
+
+            # ── Post-run bookkeeping ───────────────────────────────────
+            # Only successes are cached: replaying a failure/timeout as a
+            # short-circuited "complete" result defeats retries.
+            if result.success and contract.cache:
+                self._cache.set(contract, result)
+            self._persistence.save(contract, result)
+            self._budget.record(result.tokens_used)
+            self._telemetry.record(contract.model or self.config.model or "unknown", result)
+
+            # ── Fire complete/fail hook ──────────────────────────
+            hook_event = "subagent_complete" if result.success else "subagent_fail"
+            await self._fire_subagent_hook(hook_event, contract, result)
 
             # G1E §25: stamp consumed logical budget on the result so callers
             # observe attempt_number/max without a parallel channel.
@@ -1193,12 +1207,13 @@ class SubagentOrchestrator:
             len(resolved),
         )
         # Report patch conflicts from concurrent subagents
-        failed_patches = [r for r in resolved if r.success and r.worktree_patch and not r.patch_applied]
+        failed_patches = [r for r in resolved
+                          if r.worktree_patch and not r.patch_applied and CHANGES_NOT_APPLIED in (r.error or "")]
         if failed_patches:
             logger.warning(
                 "Patch conflicts in parallel run: %d/%d patches failed to apply (%s)",
                 len(failed_patches),
-                sum(1 for r in resolved if r.success and r.worktree_patch),
+                sum(1 for r in resolved if r.worktree_patch),
                 ", ".join(r.task_id for r in failed_patches),
             )
         self.aggregate_telemetry(resolved)
@@ -1384,6 +1399,20 @@ class SubagentOrchestrator:
         if not role_cfg.system_prompt:
             return f"Role '{contract.role}' has no system prompt configured"
         return None
+
+    @staticmethod
+    def _with_role_tools(contract: SubagentContract) -> SubagentContract:
+        """A contract that names a role but no tools gets the role's tool list.
+
+        The `spawn`, `delegate` and `fanout` tools applied it themselves, but `/spawn`, `/swarm` and
+        `wisp swarm` passed only the role's name, so a researcher was offered write tools. An
+        explicit list from the caller still wins.
+        """
+        role_tools = list(ROLE_CONFIGS[contract.role].allowed_tools)
+        requested = [str(t).lower() for t in contract.tools or []]
+        if "all" in [t.lower() for t in role_tools] or (requested and "all" not in requested):
+            return contract
+        return dataclasses.replace(contract, tools=role_tools)
 
     def _default_system_prompt(self, contract: SubagentContract) -> str:
         """Build a concise default system prompt when none is provided."""

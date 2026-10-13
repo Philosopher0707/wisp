@@ -853,6 +853,9 @@ class SubagentRunner:
             runtime_session["workspace"] = ws
         if "allowed_tools" in session_dict:
             runtime_session["allowed_tools"] = session_dict["allowed_tools"]
+        # `config` (built from the contract) never reaches `run_turn`: the runtime's core has the
+        # parent's config, so without this a child ran up to the parent's 200 rounds.
+        runtime_session["max_iterations"] = contract.max_iterations
         # The runtime path builds a SECOND session dict; the principal has to be
         # stamped into it too, or this path authorizes as the local human while
         # the other one does not — the half-fix this migration keeps finding.
