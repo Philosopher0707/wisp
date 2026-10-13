@@ -16,9 +16,13 @@ History this encodes (do not simplify away):
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import contextvars
 import logging
+import os
 import random
-from typing import Any, AsyncIterator, Callable
+import time
+from typing import Any, AsyncIterator, Callable, Iterator
 
 from wisp.core.events import (
     CODE_PROVIDER_STREAM,
@@ -57,6 +61,63 @@ class _TransientOpenError(Exception):
 # unrecognised, payload-less event did the same). Meaningfulness is decided
 # by `_event_has_payload` for every event type instead.
 TERMINAL_TYPES = frozenset({"done", "complete", "stream_complete"})
+
+
+# ── Healthy silence and liveness ─────────────────────────────────────────────
+#
+# A stream can be alive and silent. NVIDIA's endpoint buffers a tool call's arguments and
+# sends the whole call in one chunk when the model finishes writing it: live probe
+# 2026-10-13, nemotron-3-ultra, 13 reasoning chunks in 6 s, then 63 s with no bytes, then a
+# 7,317-character call. A 90 s silence limit cut off every longer call ("provider sent no
+# data for 90s mid-stream"). A provider that does this declares `TOOL_CALL_SILENCE_S`, and
+# every silence limit on its streams (this guard, the HTTP read timeout, the subagent
+# runner's first-event wait) is at least that long. Providers that stream argument deltas
+# yield `stream_progress` while they arrive: the guard counts it as a sign of life and does
+# not forward it.
+
+PROGRESS_TYPE = "stream_progress"
+
+_activity: contextvars.ContextVar["ProviderActivity | None"] = contextvars.ContextVar(
+    "wisp_provider_activity", default=None)
+
+
+class ProviderActivity:
+    """When a provider stream last showed it was alive, for a watcher above the guard."""
+
+    def __init__(self) -> None:
+        self.last = time.monotonic()
+
+
+@contextlib.contextmanager
+def watch_provider_activity() -> Iterator[ProviderActivity]:
+    """Record provider liveness seen by guards running in this context (and tasks it starts)."""
+    clock = ProviderActivity()
+    token = _activity.set(clock)
+    try:
+        yield clock
+    finally:
+        _activity.reset(token)
+
+
+def note_provider_activity() -> None:
+    clock = _activity.get()
+    if clock is not None:
+        clock.last = time.monotonic()
+
+
+def tool_call_silence_s(provider: Any) -> float:
+    """How long *provider* may send nothing on a healthy stream (0 when it never does)."""
+    value = getattr(provider, "TOOL_CALL_SILENCE_S", None)
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+        return float(value)
+    return 0.0
+
+
+def silence_deadline(base_s: float, provider: Any, env_name: str) -> float:
+    """*base_s*, raised to the provider's healthy silence unless *env_name* was set explicitly."""
+    if os.environ.get(env_name, "").strip():
+        return base_s
+    return max(base_s, tool_call_silence_s(provider))
 
 
 def _event_has_payload(normalized: dict[str, Any]) -> bool:
@@ -224,6 +285,9 @@ async def guarded_provider_stream(
                             raise
                     normalized = normalize_event(event)
                     ntype = str(normalized.get("type", ""))
+                    note_provider_activity()
+                    if ntype == PROGRESS_TYPE:
+                        continue  # a sign of life, not part of the response
                     if ntype == "stream_stats":
                         stream_stats = normalized
                     if ntype == "error":

@@ -33,6 +33,12 @@ class NVIDIAProvider(OpenAIProvider):
     """NVIDIA Nemotron provider using OpenAI-compatible API."""
 
     _DEFAULT_API_BASE = "https://integrate.api.nvidia.com/v1"
+
+    # The endpoint buffers a tool call and sends it whole. Live probe 2026-10-13
+    # (nemotron-3-ultra-550b-a55b): 13 reasoning chunks in 6 s, then 63 s with no bytes,
+    # then a 7,317-character call in one chunk, about 116 characters a second. 600 s covers
+    # a call of roughly 70,000 characters at that rate.
+    TOOL_CALL_SILENCE_S = 600.0
     _DEFAULT_MODEL = "nvidia/nemotron-3-ultra-550b-a55b"
 
     # Known context lengths for NVIDIA models (from API)

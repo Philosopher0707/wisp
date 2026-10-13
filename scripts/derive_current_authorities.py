@@ -58,9 +58,9 @@ AUTHORITIES: list[tuple[str, str, str, str, str]] = [
      "`wisp/core/runtime.py:1362`); `terminal_outcome`, `turn_succeeded` — the attempt journal "
      "line `{\"kind\":\"attempt\"}` (`wisp/core/convergence.py:1332`)"),
     ("1.2 stream state",
-     "`guarded_provider_stream` (`wisp/core/provider_stream.py:122`); the two facts are "
-     "`got_meaningful` (`wisp/core/provider_stream.py:150`) and `saw_terminal` "
-     "(`wisp/core/provider_stream.py:151`)",
+     "`guarded_provider_stream` (`wisp/core/provider_stream.py:183`); the two facts are "
+     "`got_meaningful` (`wisp/core/provider_stream.py:211`) and `saw_terminal` "
+     "(`wisp/core/provider_stream.py:212`)",
      "turn success · acceptance · goal state",
      "**ADR-0039** R5 (the guard owns *recovery*, not canonicalization; it reads the "
      "normalization boundary) → **ADR-0041** R3/R7 — **superseded** by **ADR-0043** R1–R7 "

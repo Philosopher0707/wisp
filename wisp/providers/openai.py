@@ -21,11 +21,14 @@ tool_calls arrive as deltas that must be accumulated across chunks.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import os
+import time
 from typing import Any, Iterator, Optional
 
+from ._stream_lines import lines_as_they_arrive
 from .protocol import Provider
 
 logger = logging.getLogger(__name__)
@@ -76,8 +79,23 @@ def _retry_after_seconds(resp: Any) -> float | None:
         return None
 
 
+@dataclasses.dataclass(frozen=True)
+class _FallbackTimeout:
+    """(connect, read) for raw requests when the hardened transport is unavailable."""
+
+    connect: float = 15.0
+    read: float = 120.0
+
+    def as_tuple(self) -> tuple[float, float]:
+        return (self.connect, self.read)
+
+
 class OpenAIProvider(Provider):
     """OpenAI-compatible provider using the Chat Completions API."""
+
+    # How long this endpoint may send nothing on a healthy stream: set by a subclass whose
+    # endpoint buffers a tool call and sends it whole (see wisp.core.provider_stream).
+    TOOL_CALL_SILENCE_S: Optional[float] = None
 
     def __init__(self, config=None, base_url: str = "", model: str = "", api_key: str = ""):
         if config is not None:
@@ -110,6 +128,15 @@ class OpenAIProvider(Provider):
         self._stream_response: Optional[dict] = None
 
     # ── Provider protocol ────────────────────────────────────────────
+
+    def _stream_timeout(self, base: Any) -> Any:
+        """*base* (a HardenedTimeout), with a read timeout longer than this endpoint's healthy silence."""
+        from wisp.core.provider_stream import tool_call_silence_s
+
+        silence = tool_call_silence_s(self)
+        if not silence:
+            return base
+        return dataclasses.replace(base, read=max(base.read, silence + 30.0))
 
     def generate_stream_events(
         self,
@@ -193,7 +220,7 @@ class OpenAIProvider(Provider):
                     json=payload,
                     headers=headers,
                     stream=True,
-                    timeout=HARDENED_TIMEOUT,
+                    timeout=self._stream_timeout(HARDENED_TIMEOUT),
                     max_attempts=3,
                     # Statuses (429/5xx) are retried by the guarded stream, which honours Retry-After and owns the turn. Retrying
                     # them here as well made one message up to nine requests against an endpoint that was already throttling.
@@ -213,7 +240,7 @@ class OpenAIProvider(Provider):
                     # reasoning deltas continuously, so 60s of byte-silence
                     # means the stream is dead, not thinking.
                     # Write timeout is folded into read for requests (60s)
-                    timeout=(15, 120),
+                    timeout=self._stream_timeout(_FallbackTimeout()).as_tuple(),
                 )
             if resp.status_code != 200:
                 body = resp.text[:500]
@@ -270,13 +297,14 @@ class OpenAIProvider(Provider):
             empty_choice_chunks = 0
             tool_call_accum: dict[int, dict] = {}
             tool_calls_yielded = False
+            last_progress = time.monotonic()
             done_reason = "stop"
             # G1B §6: terminal condition is an explicit finish chunk or
             # [DONE] — never bare socket EOF. Without either, the stream
             # was cut: emit stats but NO done (the guard reports truncated).
             saw_finish = False
 
-            for line in resp.iter_lines():
+            for line in lines_as_they_arrive(resp):
                 if not line:
                     continue
                 line_str = line.decode("utf-8", errors="replace") if isinstance(line, bytes) else line
@@ -332,6 +360,11 @@ class OpenAIProvider(Provider):
                             acc["name"] = func["name"]
                         if func.get("arguments"):
                             acc["arguments"] += func["arguments"]
+                    # The call is yielded whole at the end; until then the stall guard would
+                    # see silence while argument deltas arrive. At most four signs of life a second.
+                    if time.monotonic() - last_progress >= 0.25:
+                        last_progress = time.monotonic()
+                        yield {"type": "stream_progress"}
 
                 if finish_reason:
                     done_reason = finish_reason
