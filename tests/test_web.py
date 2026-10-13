@@ -11,6 +11,17 @@ from wisp.tools.errors import ToolError
 class TestWebFetchErrors:
     """Tests that web_fetch returns actionable error messages with [WEB_FETCH_FAILED] prefix."""
 
+    @pytest.fixture(autouse=True)
+    def _no_real_dns(self):
+        """These tests mock `requests.get`; the SSRF preflight before it did a real DNS lookup.
+
+        Without DNS every one of them got "DNS resolution failed" instead of the error it
+        asserts, and the DNS test took a different path depending on whether its host
+        resolved. The guard itself is pinned in test_web_guard_contracts.py.
+        """
+        with patch("wisp.tools.web._assert_public_url", return_value=None):
+            yield
+
     def test_dns_error_returns_actionable_message(self):
         """DNS resolution failures should say 'domain does not exist' and suggest alternatives."""
         with patch("wisp.tools.web.requests.get") as mock_get:

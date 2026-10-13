@@ -79,6 +79,16 @@ class TestCheckRobotsTxt:
     def setup_method(self):
         _robots_cache.clear()
 
+    @pytest.fixture(autouse=True)
+    def _no_real_dns(self):
+        """Skip the SSRF preflight's real DNS lookup so each test reaches the branch it names.
+
+        With a real lookup, a host that did not resolve (missing.example.com, ttl-test.example.com)
+        failed the preflight and was allowed before the mocked response was ever read.
+        """
+        with patch("wisp.tools.web._assert_public_url", return_value=None):
+            yield
+
     def test_invalid_scheme_returns_true(self):
         """URLs with non-HTTP schemes should always be allowed."""
         assert _check_robots_txt("ftp://example.com/") is True
@@ -146,13 +156,23 @@ class TestCheckRobotsTxt:
             assert _check_robots_txt("https://missing.example.com/page") is True
 
 
+    def test_preflight_refusal_means_allow_without_a_fetch(self):
+        """A robots host the SSRF guard refuses is treated as unreachable: allow, and fetch nothing."""
+        with patch("wisp.tools.web._assert_public_url",
+                   side_effect=ToolError("[WEB_FETCH_BLOCKED] internal")), \
+             patch("wisp.tools.web.requests.get") as mock_get:
+            assert _check_robots_txt("https://intranet.example.com/page") is True
+        mock_get.assert_not_called()
+
+
 class TestToolWebFetchRobotsBlocking:
     """Integration tests that tool_web_fetch respects the robots check."""
 
     def test_blocked_by_robots_txt_raises(self, monkeypatch):
         """When robots.txt disallows, tool_web_fetch raises [WEB_FETCH_BLOCKED]."""
         monkeypatch.setenv("WISP_WEB_PROXY", "off")  # direct path only
-        with patch("wisp.tools.web._check_robots_txt", return_value=False):
+        with patch("wisp.tools.web._check_robots_txt", return_value=False), \
+             patch("wisp.tools.web._assert_public_url", return_value=None):
             with pytest.raises(ToolError) as exc_info:
                 tool_web_fetch("https://blocked.com/secret", workspace=".")
             msg = str(exc_info.value)
