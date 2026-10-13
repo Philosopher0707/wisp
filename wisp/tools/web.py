@@ -588,6 +588,7 @@ def tool_web_search(query: str, num_results: int = 5) -> str:
         )
         with resp:
             resp.raise_for_status()
+            status_code = resp.status_code
             html = resp.content.decode("utf-8", errors="replace")
 
         parser = _ResultParser()
@@ -604,6 +605,22 @@ def tool_web_search(query: str, num_results: int = 5) -> str:
                 "title": r.get("title", "Untitled"),
                 "url": r.get("href", ""),
                 "snippet": r.get("snippet", ""),
+            })
+
+        if not formatted and status_code == 202:
+            # DuckDuckGo answers a suspected bot with 202 and a challenge
+            # page. That is a refusal, not "no results": saying ok with zero
+            # results would tell the agent nothing exists.
+            error = (
+                "[WEB_SEARCH_BLOCKED] DuckDuckGo answered HTTP 202 with a bot "
+                "challenge instead of results. This is not an empty result: "
+                "retry later, or fetch a known URL with web_fetch."
+            )
+            return _json.dumps({
+                "status": "error",
+                "data": {"query": query, "results": []},
+                "metadata": {"query": query, "error": error, "backend": "html", "http_status": status_code},
+                "error": error,
             })
 
         if not formatted:

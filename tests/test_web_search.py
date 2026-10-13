@@ -194,6 +194,8 @@ class TestWebSearchLive:
                 pytest.fail(f"web_search failed TLS verification: {error}")
             if any(marker in error for marker in _NETWORK_DOWN_MARKERS):
                 pytest.skip(f"Network unavailable in this environment: {error}")
+            if "[WEB_SEARCH_BLOCKED]" in error:
+                pytest.skip(f"DuckDuckGo refused this client: {error}")
         assert result["status"] == "ok", result.get("error")
         assert result["metadata"]["backend"] in ("html", "ddgs", "duckduckgo_search")
         if result["metadata"].get("num_results", 0) == 0:
@@ -295,8 +297,9 @@ def _pem(cert) -> bytes:
 def local_ddg(tmp_path, monkeypatch):
     """A local HTTPS server answering like DuckDuckGo's HTML endpoint.
 
-    Yields the paths of two CA bundles: ``trusted`` signed the server's
-    certificate, ``untrusted`` did not.
+    Yields the paths of two CA bundles, ``trusted`` (it signed the server's
+    certificate) and ``untrusted``, and ``reply``, the status and body the
+    server answers with (a page of two results unless a test changes it).
     """
     import ssl
     import sys
@@ -324,10 +327,12 @@ def local_ddg(tmp_path, monkeypatch):
         )
     )
 
+    reply = {"status": 200, "body": _DDG_HTML_FIXTURE}
+
     class _Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            body = _DDG_HTML_FIXTURE.encode("utf-8")
-            self.send_response(200)
+            body = reply["body"].encode("utf-8")
+            self.send_response(reply["status"])
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
@@ -356,7 +361,7 @@ def local_ddg(tmp_path, monkeypatch):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
     try:
-        yield {"trusted": str(trusted), "untrusted": str(untrusted)}
+        yield {"trusted": str(trusted), "untrusted": str(untrusted), "reply": reply}
     finally:
         server.shutdown()
         server.server_close()
@@ -412,3 +417,37 @@ class TestWebSearchTLSTrust:
         assert len(calls) == 1
         assert calls[0].get("timeout") == 10
         assert calls[0].get("verify", True) is True
+
+
+class TestWebSearchBotChallenge:
+    """DuckDuckGo answers a suspected bot with HTTP 202 and a challenge page.
+
+    Seen on the owner's machine on 2026-10-13 once TLS worked: GET, POST, the
+    lite endpoint and two user agents all got 202 and no results. The tool
+    reported that as ``status: ok`` with zero results, so the agent was told
+    nothing exists when it had been refused.
+    """
+
+    _CHALLENGE = "<html><body><div class='anomaly-modal'>challenge</div></body></html>"
+
+    def test_a_202_challenge_is_an_error_not_zero_results(self, local_ddg, monkeypatch):
+        from wisp.tools import tool_web_search
+
+        monkeypatch.setenv("REQUESTS_CA_BUNDLE", local_ddg["trusted"])
+        local_ddg["reply"].update(status=202, body=self._CHALLENGE)
+        result = json.loads(tool_web_search("python dataclasses", num_results=3))
+
+        assert result["status"] == "error"
+        assert result["data"]["results"] == []
+        assert "[WEB_SEARCH_BLOCKED]" in result["error"]
+        assert "202" in result["error"]
+
+    def test_a_200_page_without_results_is_still_zero_results(self, local_ddg, monkeypatch):
+        from wisp.tools import tool_web_search
+
+        monkeypatch.setenv("REQUESTS_CA_BUNDLE", local_ddg["trusted"])
+        local_ddg["reply"].update(status=200, body="<html><body>No results.</body></html>")
+        result = json.loads(tool_web_search("an unlikely query", num_results=3))
+
+        assert result["status"] == "ok"
+        assert result["metadata"]["num_results"] == 0
