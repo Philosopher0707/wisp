@@ -5,6 +5,7 @@ fixture so the parser can be verified without making live HTTP calls.
 """
 
 import json
+import os
 import socket
 
 import pytest
@@ -174,9 +175,19 @@ _NETWORK_DOWN_MARKERS = (
 
 
 class TestWebSearchLive:
-    """Optional live test — skipped if no network or DDG blocks request."""
+    """Optional live test — skipped if no network or DDG blocks request.
+
+    Opt-in only: QA's pytest fallback does not pass `-m "not live"`, so the marker
+    alone would send every QA run to DuckDuckGo.
+    """
 
     @pytest.mark.live
+    @pytest.mark.skipif(os.environ.get("WISP_E2E_LIVE") != "1",
+                        reason="live network test; set WISP_E2E_LIVE=1")
+    @pytest.mark.skipif(
+        pytest.importorskip("urllib.request") is None,
+        reason="urllib not available",
+    )
     def test_live_web_search_returns_results(self):
         if not _network_available():
             pytest.skip("Network unavailable in this environment")
