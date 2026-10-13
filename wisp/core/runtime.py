@@ -592,8 +592,13 @@ class AgentRuntime:
                 except Exception:
                     logger.debug("Session %s: turn recovery skipped", sid, exc_info=True)
 
-            # Auto-compact before turn to prevent context overflow
-            await self.maybe_compact(session)
+            # Auto-compact before turn to prevent context overflow. A compaction journals an
+            # event, so this turn's events number after it.
+            if await self.maybe_compact(session) is not None and self.session_repo is not None:
+                try:
+                    seq_num = self.session_repo.get_last_sequence(sid)
+                except Exception:
+                    pass
 
             # Live byte budget: condense historical tool payloads in the
             # in-memory session so provider dispatch cost stays flat between
@@ -1889,6 +1894,10 @@ class AgentRuntime:
 
         old_count = len(session["messages"])
         keep = threshold // 2
+        if force:
+            # `/compact` on a session shorter than the threshold: keeping `threshold // 2` kept
+            # all of it and only added an empty summary ("14 → 15 messages"). Keep the newer half.
+            keep = min(keep, max(2, old_count // 2))
 
         # Preserve existing system messages (persona, delegation context, etc.)
         existing_system = [m for m in session["messages"] if m.get("role") == "system"]
@@ -1906,7 +1915,14 @@ class AgentRuntime:
                 start += 1
             return [m for m in messages[start:] if m.get("role") != "system"]
 
-        summary = ""
+        kept = _snap_kept(session["messages"], keep)
+        # What was dropped is recorded by the harness whether or not a model summarized it (wisp/core/compaction_record.py).
+        kept_ids = {id(m) for m in kept}
+        compacted = [m for m in session["messages"] if id(m) not in kept_ids and m.get("role") != "system"]
+        if not compacted:
+            return None  # nothing older than the kept window: a summary would only add a message
+
+        summary, summarizer_ran = "", False
         if self.compactor is not None:
             try:
                 result = await self.compactor.compact(
@@ -1914,31 +1930,32 @@ class AgentRuntime:
                     keep_recent=keep,
                 )
                 summary = result.summary
-                fallback = result.fallback_truncation
+                summarizer_ran = not result.fallback_truncation
             except Exception:
-                logger.warning("Compactor failed, using truncation fallback")
-                result = None
-                fallback = True
-
-            kept = _snap_kept(session["messages"], keep)
-            summarizer_ran = not (result is None or fallback)
-        else:
-            kept = _snap_kept(session["messages"], keep)
-            summary, summarizer_ran = "", False
-
-        # What was dropped is recorded by the harness whether or not a model summarized it (wisp/core/compaction_record.py).
-        kept_ids = {id(m) for m in kept}
-        compacted = [m for m in session["messages"] if id(m) not in kept_ids and m.get("role") != "system"]
+                logger.warning("Compactor failed, using truncation fallback", exc_info=True)
         summary = attach_record(summary, compacted, summarizer_ran)
 
-        # Build new messages: existing system messages + summary + kept messages
-        session["messages"] = existing_system + [{"role": "system", "content": summary}] + kept
+        # Existing system messages + summary + kept messages, IN PLACE: the REPL's
+        # AgentAdapter.messages is this same list, and a new list left it holding the old history.
+        session["messages"][:] = existing_system + [{"role": "system", "content": summary}] + kept
 
-        session["compaction_history"].append({
+        session.setdefault("compaction_history", []).append({
             "before_count": old_count,
             "after_count": len(session["messages"]),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
+        # Journaled with the transcript it left: without it, replay rebuilt the whole history and
+        # the next turn's digest failed ("replay diverged"), so recovery could not use the journal.
+        sid = session.get("id")
+        if self.session_repo is not None and sid:
+            try:
+                from wisp.core.session import SessionEvent
+                self.session_repo.append_event(sid, SessionEvent.compacted(
+                    self.session_repo.get_last_sequence(sid) + 1, old_count,
+                    len(session["messages"]), summary, messages=session["messages"]))
+            except Exception:
+                logger.warning("Compaction of %s not journaled; replay will not match", sid,
+                               exc_info=True)
         self.store.save_session(session)
         logger.info("Compacted session %s: %d → %d messages",
                     session.get("id"), old_count, len(session["messages"]))

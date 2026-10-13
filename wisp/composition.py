@@ -231,8 +231,10 @@ class CompositionRoot:
                           if self.run_bounds is not None else None),
         )
 
-        # Create Compactor for LLM-powered summarization
-        compaction_model = getattr(self.config, "compaction_model", "") or ""
+        # Create Compactor for LLM-powered summarization. With no `compaction_model` the session's
+        # own model summarizes: before, nothing set it, so every compaction kept only excerpts.
+        compaction_model = (getattr(self.config, "compaction_model", "")
+                            or getattr(self.config, "model", "") or "")
         self.compactor = Compactor(
             provider_factory=self._create_compaction_provider,
             compaction_model=compaction_model,
