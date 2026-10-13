@@ -95,6 +95,7 @@ ROWS: list[tuple[str, str, str, str, str, str]] = [
      "turn", "ADR-0050"),
     ("ReplayDivergence", "wisp/core/replay_digest.py:64", "RuntimeError", "guard",
      "persist", "—"),
+    ("MemoryStoreError", "wisp/memory.py:63", "RuntimeError", "guard", "persist", "—"),
     ("ImportGraphTooLarge", "wisp/import_graph.py:25", "RuntimeError", "guard", "tool", "—"),
     ("WalkBudgetExceeded", "wisp/core/workspace_walk.py:39", "RuntimeError", "guard", "tool", "—"),
     ("JobLimitError", "wisp/jobs/spawn.py:20", "ToolError", "guard", "tool", "—"),

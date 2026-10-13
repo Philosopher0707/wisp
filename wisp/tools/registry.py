@@ -248,7 +248,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "fact": {"type": "string", "description": "The fact to remember. Be specific and concise."},
+                    "fact": {"type": "string", "description": "The fact to remember: one fact, at most 500 characters. Be specific and concise; split a longer note into separate facts."},
                 },
                 "required": ["fact"],
             },
