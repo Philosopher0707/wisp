@@ -59,9 +59,9 @@ ROWS: list[tuple[str, str, str, str, str, str]] = [
     ("ApprovalTimeout", "wisp/exceptions.py:33", "Exception", "verdict", "approval", "—"),
 
     # ── Recoverable: expected transient faults the runtime retries or degrades around. ──
-    ("_TransientOpenError", "wisp/core/provider_stream.py:40", "Exception", "recoverable",
+    ("_TransientOpenError", "wisp/core/provider_stream.py:44", "Exception", "recoverable",
      "provider", "—"),
-    ("FirstTokenTimeout", "wisp/multi_agent/_runner.py:169", "asyncio.TimeoutError",
+    ("FirstTokenTimeout", "wisp/multi_agent/_runner.py:171", "asyncio.TimeoutError",
      "recoverable", "subagent", "—"),
     ("CircuitOpenError", "wisp/infra/circuit_breaker.py:175", "Exception", "recoverable",
      "provider", "—"),
@@ -629,7 +629,7 @@ def _findings(untested: int) -> list[str]:
     "two `CircuitBreaker` classes exist — `wisp/infra/circuit_breaker.py` and "
     "`wisp/multi_agent/_circuit_breaker.py` — with two exception types for one concept, "
     "`CircuitOpenError` and `CircuitBreakerOpenError`. The provider path imports the first "
-    "(`wisp/core/stateless.py:53`); the subagent runner uses the second. Two implementations of "
+    "(`wisp/core/stateless.py:54`); the subagent runner uses the second. Two implementations of "
     "one concern is the shape this corpus has a standing name for, and the two exception names "
     "make it visible from the outside: **a caller cannot write one handler that covers both.** "
     "*Recorded; unifying them is a behaviour change with its own decision.*",
