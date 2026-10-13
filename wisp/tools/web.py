@@ -9,7 +9,6 @@ import os
 import socket
 import threading
 import urllib.parse
-import urllib.request
 from html.parser import HTMLParser
 
 import requests
@@ -36,6 +35,10 @@ _ROBOTS_FETCH_TIMEOUT = 10.0  # seconds
 _USER_AGENT = "Wisp-Agent/0.1.0 (Web Fetch Tool; Respects robots.txt)"
 
 _READER_PROXY_BASE = "https://r.jina.ai/"
+
+# DuckDuckGo's HTML endpoint, used by web_search when no ddgs library is
+# installed. A module constant so tests can point it at a local server.
+_DDG_HTML_URL = "https://html.duckduckgo.com/html/"
 
 # SSRF / fetch caps
 _MAX_REDIRECTS = 5
@@ -571,14 +574,21 @@ def tool_web_search(query: str, num_results: int = 5) -> str:
 
     try:
         qs = urllib.parse.urlencode({"q": query})
-        url = f"https://html.duckduckgo.com/html/?{qs}"
-        req = urllib.request.Request(
-            url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"}
+        url = f"{_DDG_HTML_URL}?{qs}"
+        # requests, like web_fetch: it verifies TLS against certifi (or
+        # REQUESTS_CA_BUNDLE). urllib's default context uses the interpreter's
+        # OpenSSL store, which on a python.org macOS build without "Install
+        # Certificates.command" does not exist, so every search failed TLS.
+        # Never disable verification: a MITM could inject search results
+        # into the agent's context.
+        resp = requests.get(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"},
+            timeout=10,
         )
-        # Default verified TLS context — disabling verification would let a
-        # MITM inject search results into the agent's context.
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            html = resp.read().decode("utf-8", errors="replace")
+        with resp:
+            resp.raise_for_status()
+            html = resp.content.decode("utf-8", errors="replace")
 
         parser = _ResultParser()
         parser.feed(html)
