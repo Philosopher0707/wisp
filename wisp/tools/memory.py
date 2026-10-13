@@ -6,6 +6,7 @@ Uses wisp.memory for persistent facts and wisp.agent_memory for session summarie
 import logging
 from typing import Optional
 
+from wisp.tools.errors import ToolError
 from wisp.tools._utils import (
     _validate_string,
     _relevance_score,
@@ -20,11 +21,22 @@ def tool_remember(fact: str, workspace: Optional[str] = None) -> str:
     The fact will be remembered across ALL conversations and injected into
     the system prompt in future sessions regardless of which directory you are in.
     """
-    _validate_string(fact, "fact", 500)
+    from wisp.memory import MAX_FACT_CHARS, MemoryStoreError, add_fact
 
-    from wisp.memory import add_fact
+    # The limit is in the schema too; the model still wrote 501 to 3,006 characters in the
+    # field (52 of 82 calls refused), so the refusal says what to do instead.
+    if isinstance(fact, str) and len(fact) > MAX_FACT_CHARS:
+        raise ToolError(
+            f"fact too long ({len(fact)} > {MAX_FACT_CHARS} chars); nothing was saved. "
+            f"Save one fact per call, at most {MAX_FACT_CHARS} characters: state it more "
+            f"briefly, or split it into separate facts and call remember once for each."
+        )
+    _validate_string(fact, "fact", MAX_FACT_CHARS)
 
-    added = add_fact(fact, workspace=workspace)
+    try:
+        added = add_fact(fact, workspace=workspace)
+    except (MemoryStoreError, OSError) as e:
+        raise ToolError(f"[MEMORY_NOT_SAVED] The fact was not saved: {e}") from e
     if added:
         return f"✓ Remembered: {fact}"
     else:

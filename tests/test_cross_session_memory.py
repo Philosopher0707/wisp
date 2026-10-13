@@ -236,7 +236,7 @@ class TestFactsAreInjectedWithTheirProvenance:
                                     "added": "2026-01-01T00:00:00+00:00"}],
             },
         })
-        monkeypatch.setattr(mem, "_schedule_save", lambda *a, **k: None)
+        monkeypatch.setattr(mem, "_persist_touches", lambda *a, **k: None)
         return mem
 
     def test_buckets_by_scope(self, memory):

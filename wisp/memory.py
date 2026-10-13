@@ -25,29 +25,44 @@ Structure:
   }
 """
 
+import contextlib
 import json
 import logging
 import os
 import tempfile
 import threading
+import time
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Iterator, Optional, TypeVar
+
+try:
+    import fcntl
+except ImportError:  # Windows: in-process locking only
+    fcntl = None  # type: ignore[assignment]
 
 from wisp.config import WISP_CONFIG_DIR
 
-# ── Write-coalescing state ───────────────────────────────────────────────
-# Every list_all_facts / recall / add_fact used to call _save() synchronously,
-# rewriting memory.json on every access.  With a write-back cache we batch
-# writes that happen within _SAVE_DEBOUNCE_SECONDS.
-_memory_cache: dict | None = None
-_cache_dirty: bool = False
-_save_timer: threading.Timer | None = None
-_SAVE_LOCK = threading.Lock()
 logger = logging.getLogger(__name__)
 
-_SAVE_DEBOUNCE_SECONDS = 2.0
 _MAX_FACTS = 100  # Max total facts before LRU eviction kicks in
+MAX_FACT_CHARS = 500  # Longest fact the `remember` tool accepts; stated in its schema
+_STORE_VERSION = 2
+_LOCK_TIMEOUT_SECONDS = 10.0
+
+# Serializes this process's threads; the file lock serializes processes. One lock file
+# descriptor per process at a time, because flock() conflicts between two descriptors
+# of the same process.
+_THREAD_LOCK = threading.Lock()
+_warned_fallback: set[Path] = set()
+
+_T = TypeVar("_T")
+
+
+class MemoryStoreError(RuntimeError):
+    """The store could not be read or locked safely, so nothing was written."""
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -67,111 +82,211 @@ def _resolve_workspace(workspace: str) -> str:
     return os.path.realpath(workspace)
 
 
+def _empty() -> dict:
+    return {"version": _STORE_VERSION, "global_facts": [], "workspace_facts": {}}
+
+
 # ── File I/O ────────────────────────────────────────────────────────────
+#
+# Every change is a read-modify-write of the file as it is NOW, under a lock, written to a
+# unique temp file that is fsynced and renamed into place. The store used to keep a
+# write-behind copy: a prompt build read the store, and two seconds later wrote that copy
+# back over whatever another call or process had saved in between (six concurrent writers
+# lost 88 of 90 facts). A store that cannot be read is never written over.
 
 
 def _get_memory_file() -> Path:
     try:
         WISP_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        # Verify the directory is actually writable — it may exist but be
-        # read-only in sandboxed/CI environments.
-        probe = WISP_CONFIG_DIR / ".write_probe"
-        probe.write_text("")
-        probe.unlink()
+        # Verify the directory is actually writable — it may exist but be read-only in
+        # sandboxed/CI environments. The probe name is unique: a fixed name raced between
+        # callers (one unlinked the other's probe) and sent the loser to the temp store.
+        fd, probe = tempfile.mkstemp(dir=WISP_CONFIG_DIR, prefix=".write_probe-")
+        os.close(fd)
+        os.unlink(probe)
         return WISP_CONFIG_DIR / "memory.json"
-    except (PermissionError, OSError):
+    except OSError:
         # Fallback to temp directory when ~/.config/wisp is not writable
         # (CI, sandboxes, ephemeral containers).
         fallback = Path(tempfile.gettempdir()) / "wisp_memory" / "memory.json"
         fallback.parent.mkdir(parents=True, exist_ok=True)
+        if fallback not in _warned_fallback:
+            _warned_fallback.add(fallback)
+            logger.warning("memory: %s is not writable; facts go to %s, which a reboot may clear",
+                           WISP_CONFIG_DIR, fallback)
         return fallback
 
 
-def load_memory() -> dict:
-    """Load memory from ~/.config/wisp/memory.json, migrating old formats."""
-    path = _get_memory_file()
-    if not path.exists():
-        return {"version": 2, "global_facts": [], "workspace_facts": {}}
+def _unreadable(path: Path, reason: str) -> MemoryStoreError:
+    return MemoryStoreError(
+        f"memory store {path} is unreadable ({reason}); it was left as it is and nothing was "
+        f"written. Fix it or move it aside, then try again."
+    )
 
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            return {"version": 2, "global_facts": [], "workspace_facts": {}}
-    except (json.JSONDecodeError, OSError) as e:
-        logger.warning("Failed to load memory: %s", e)
-        return {"version": 2, "global_facts": [], "workspace_facts": {}}
 
-    # Migrate from version 1 (lists of strings) to version 2 (lists of dicts)
-    if data.get("version", 1) < 2:
-        data["version"] = 2
-        data["global_facts"] = _migrate_facts(data.get("global_facts", []))
-        ws_facts = {}
-        for ws_path, facts in data.get("workspace_facts", {}).items():
-            ws_facts[ws_path] = _migrate_facts(facts)
-        data["workspace_facts"] = ws_facts
-        try:
-            _flush_save(data)
-        except OSError:
-            pass
-
-    data.setdefault("version", 2)
+def _validated(data: object, path: Path) -> dict:
+    if not isinstance(data, dict):
+        raise _unreadable(path, f"top level is {type(data).__name__}, not an object")
+    version = data.get("version", 1)
+    if not isinstance(version, int) or isinstance(version, bool):
+        raise _unreadable(path, f"version {version!r} is not a number")
+    if version > _STORE_VERSION:
+        raise _unreadable(path, f"version {version} is newer than this Wisp understands "
+                                f"({_STORE_VERSION})")
+    global_facts = data.get("global_facts", [])
+    workspace_facts = data.get("workspace_facts", {})
+    if not isinstance(global_facts, list):
+        raise _unreadable(path, "global_facts is not a list")
+    if not isinstance(workspace_facts, dict) or not all(
+            isinstance(k, str) and isinstance(v, list) for k, v in workspace_facts.items()):
+        raise _unreadable(path, "workspace_facts is not a map of lists")
+    for facts in [global_facts, *workspace_facts.values()]:
+        for fact in facts:
+            # Version 1 stored bare strings; anything else would be dropped on the next save.
+            if isinstance(fact, str):
+                continue
+            if not isinstance(fact, dict) or not isinstance(fact.get("content"), str):
+                raise _unreadable(path, "a fact is not an object with text content")
+    if version < _STORE_VERSION:
+        data["global_facts"] = _migrate_facts(global_facts)
+        data["workspace_facts"] = {ws: _migrate_facts(f) for ws, f in workspace_facts.items()}
+    data["version"] = _STORE_VERSION
     data.setdefault("global_facts", [])
     data.setdefault("workspace_facts", {})
     return data
 
 
-def _save(memory: dict):
-    """Legacy synchronous save — bypasses coalescing.  Use _schedule_save()."""
-    _flush_save(memory)
-
-
-def _schedule_save(memory: dict) -> None:
-    """Schedule a debounced write to disk.
-
-    Multiple calls within _SAVE_DEBOUNCE_SECONDS are coalesced into a
-    single disk write.  The memory dict is kept in _memory_cache so we
-    don't need to keep passing it around.
-
-    When _SAVE_DEBOUNCE_SECONDS is 0 (or negative) we flush
-    synchronously so that tests see a deterministic on-disk state.
-    """
-    global _memory_cache, _cache_dirty, _save_timer
-    with _SAVE_LOCK:
-        _memory_cache = memory
-        _cache_dirty = True
-        if _save_timer is not None:
-            _save_timer.cancel()
-        if _SAVE_DEBOUNCE_SECONDS <= 0:
-            # Synchronous flush avoids race between timer thread and load_memory()
-            try:
-                _flush_save(_memory_cache)
-            except Exception:
-                pass
-            _cache_dirty = False
-        else:
-            _save_timer = threading.Timer(_SAVE_DEBOUNCE_SECONDS, _flush_from_timer)
-            _save_timer.start()
-
-
-def _flush_from_timer() -> None:
-    """Timer callback — writes the cached memory to disk."""
-    global _memory_cache, _cache_dirty, _save_timer
-    with _SAVE_LOCK:
-        if _memory_cache is not None and _cache_dirty:
-            _flush_save(_memory_cache)
-            _cache_dirty = False
-        _save_timer = None
-
-
-def _flush_save(memory: dict) -> None:
-    """Actual synchronous disk write — atomic via temp+rename."""
-    path = _get_memory_file()
-    tmp = path.with_suffix(".tmp")
+def _read(path: Path) -> dict:
+    """The store as it is on disk; MemoryStoreError when the file exists but cannot be trusted."""
     try:
-        tmp.write_text(json.dumps(memory, indent=2, ensure_ascii=False) + "\n")
-        tmp.replace(path)
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        return _empty()
     except OSError as e:
-        logger.error("Failed to save memory: %s", e)
+        raise _unreadable(path, str(e))
+    if not raw.strip():
+        # Zero bytes hold no facts (a `touch`, or a crash between create and write), so
+        # replacing the file loses nothing.
+        return _empty()
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as e:
+        raise _unreadable(path, f"not valid JSON: {e}")
+    return _validated(data, path)
+
+
+def _write_atomic(path: Path, text: str) -> None:
+    """Replace *path* with *text*: unique temp file, fsync, rename, fsync the directory.
+
+    mkstemp creates the file with mode 0600: facts are the owner's private notes.
+    """
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp)
+        raise
+    with contextlib.suppress(OSError):
+        dir_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+
+
+def _dumps(memory: dict) -> str:
+    return json.dumps(memory, indent=2, ensure_ascii=False) + "\n"
+
+
+@contextlib.contextmanager
+def _locked(path: Path) -> Iterator[None]:
+    """Hold this store's lock, waiting at most _LOCK_TIMEOUT_SECONDS."""
+    if not _THREAD_LOCK.acquire(timeout=_LOCK_TIMEOUT_SECONDS):
+        raise MemoryStoreError(f"memory store {path} is busy (waited {_LOCK_TIMEOUT_SECONDS:g}s); "
+                               f"nothing was written")
+    try:
+        fd = os.open(path.with_name(path.name + ".lock"), os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            if fcntl is not None:
+                deadline = time.monotonic() + _LOCK_TIMEOUT_SECONDS
+                while True:
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except BlockingIOError:
+                        if time.monotonic() >= deadline:
+                            raise MemoryStoreError(
+                                f"memory store {path} is locked by another process (waited "
+                                f"{_LOCK_TIMEOUT_SECONDS:g}s); nothing was written")
+                        time.sleep(0.01)
+            yield
+        finally:
+            os.close(fd)  # closing the descriptor releases the flock
+    finally:
+        _THREAD_LOCK.release()
+
+
+def _mutate(change: Callable[[dict], "tuple[_T, bool]"]) -> _T:
+    """Apply *change* to the store as it is now; write only if it reports a change.
+
+    Raises MemoryStoreError when the store is unreadable or busy, OSError when the write
+    fails. Either way the file on disk is unchanged.
+    """
+    path = _get_memory_file()
+    with _locked(path):
+        memory = _read(path)
+        result, changed = change(memory)
+        if changed:
+            _write_atomic(path, _dumps(memory))
+        return result
+
+
+def load_memory(strict: bool = False) -> dict:
+    """The store for reading. An unreadable store reads as empty (and is logged), or raises
+    MemoryStoreError when *strict*: a listing for the owner must not show "no facts" for a
+    store it could not read."""
+    path = _get_memory_file()
+    try:
+        return _read(path)
+    except MemoryStoreError as e:
+        if strict:
+            raise
+        logger.warning("%s", e)
+        return _empty()
+
+
+def _persist_touches(touched: "Counter[tuple[Optional[str], str]]", when: str) -> None:
+    """Record reads in the access stats of the store as it is now (best effort).
+
+    Keys are (workspace key or None for global, lower-cased normalized content). A read
+    must not fail because its bookkeeping could not be saved, and must never write over a
+    store it could not read: _mutate refuses that.
+    """
+    if not touched:
+        return
+
+    def apply(memory: dict) -> "tuple[None, bool]":
+        changed = False
+        scopes: list[tuple[Optional[str], list]] = [(None, memory["global_facts"])]
+        scopes += list(memory["workspace_facts"].items())
+        for scope, facts in scopes:
+            for fact in facts:
+                n = touched.get((scope, _normalize(_fact_content(fact)).lower()), 0)
+                if n:
+                    fact["last_accessed"] = when
+                    fact["access_count"] = fact.get("access_count", 0) + n
+                    changed = True
+        return None, changed
+
+    try:
+        _mutate(apply)
+    except (MemoryStoreError, OSError) as e:
+        logger.debug("memory: access stats not saved: %s", e)
 
 
 def _migrate_facts(old: list) -> list[dict]:
@@ -236,67 +351,73 @@ def add_fact(content: str, workspace: Optional[str] = None,
              important: bool = False) -> bool:
     """Add a fact. Dedup is case-insensitive on normalized text.
 
-    Returns True if added/updated, False if exact duplicate already exists.
-    At capacity, evicts the least-recently-used non-important fact.
+    Returns True if added, False if it already existed (it is refreshed) or every fact is
+    important at capacity. At capacity, evicts the least-recently-used non-important fact.
+    Raises MemoryStoreError or OSError when the fact could not be saved.
     """
-    memory = load_memory()
     norm = _normalize(content)
     if not norm:
         return False
 
-    if workspace:
-        ws_path = _resolve_workspace(workspace)
-        facts = memory.setdefault("workspace_facts", {}).setdefault(ws_path, [])
-    else:
-        facts = memory.setdefault("global_facts", [])
+    def change(memory: dict) -> "tuple[bool, bool]":
+        facts = _get_fact_list(memory, workspace)
+        for f in facts:
+            if _match(f, norm):
+                _touch(f)
+                return False, True  # Not a new fact, but refreshed
 
-    # Check duplicate
-    for f in facts:
-        if _match(f, norm):
-            # Update content if genuinely different (case-insensitive)
-            if _normalize(_fact_content(f)).lower() != norm.lower():
-                f["content"] = norm
-            _touch(f)
-            _save(memory)
-            return False  # Not a new fact, but refreshed
-
-    # At capacity — evict LRU non-important fact
-    total = _count_facts(memory)
-    while total >= _MAX_FACTS:
-        if not _evict_one(memory):
-            logger.warning("Memory at capacity (%d), all facts important", total)
-            return False
+        # At capacity — evict LRU non-important fact
         total = _count_facts(memory)
+        while total >= _MAX_FACTS:
+            if not _evict_one(memory):
+                logger.warning("Memory at capacity (%d), all facts important", total)
+                return False, False
+            total = _count_facts(memory)
+        # Eviction can drop this workspace's last fact and its key with it.
+        facts = _get_fact_list(memory, workspace)
+        facts.append(_make_fact(content, important=important))
+        return True, True
 
-    f = _make_fact(content, important=important)
-    facts.append(f)
-    _save(memory)
-    logger.info("Added fact: %s", content[:80])
-    return True
+    added = _mutate(change)
+    if added:
+        logger.info("Added fact: %s", content[:80])
+    return added
 
 
 def remove_fact(content: str, workspace: Optional[str] = None) -> bool:
     """Remove a fact by content (case-insensitive match)."""
-    memory = load_memory()
     norm = _normalize(content)
 
-    if workspace:
-        ws_path = _resolve_workspace(workspace)
-        ws_facts = memory.get("workspace_facts", {})
-        if ws_path not in ws_facts:
-            return False
-        facts = ws_facts[ws_path]
-    else:
-        facts = memory.get("global_facts", [])
+    def change(memory: dict) -> "tuple[bool, bool]":
+        if workspace:
+            ws_path = _resolve_workspace(workspace)
+            ws_facts = memory["workspace_facts"]
+            if ws_path not in ws_facts:
+                return False, False
+            facts = ws_facts[ws_path]
+        else:
+            facts = memory["global_facts"]
+        for i, f in enumerate(facts):
+            if _match(f, norm):
+                facts.pop(i)
+                if workspace and not facts:
+                    del memory["workspace_facts"][ws_path]
+                return True, True
+        return False, False
 
-    for i, f in enumerate(facts):
-        if _match(f, norm):
-            facts.pop(i)
-            if workspace and not facts:
-                del memory["workspace_facts"][ws_path]
-            _save(memory)
-            return True
-    return False
+    return _mutate(change)
+
+
+def _touch_all(facts: "list[tuple[Optional[str], dict]]") -> list[dict]:
+    """Touch each fact (in the returned copies and on disk) and return them."""
+    when = _now_iso()
+    touched: Counter[tuple[Optional[str], str]] = Counter()
+    for scope, fact in facts:
+        fact["last_accessed"] = when
+        fact["access_count"] = fact.get("access_count", 0) + 1
+        touched[(scope, _normalize(_fact_content(fact)).lower())] += 1
+    _persist_touches(touched, when)
+    return [fact for _, fact in facts]
 
 
 def list_facts(workspace: Optional[str] = None) -> list[dict]:
@@ -305,21 +426,12 @@ def list_facts(workspace: Optional[str] = None) -> list[dict]:
     Updates last_accessed and access_count on read (touch on access).
     """
     memory = load_memory()
-    results: list[dict] = []
-
-    for f in memory.get("global_facts", []):
-        _touch(f)
-        results.append(f)
-
+    scoped: list[tuple[Optional[str], dict]] = [(None, f) for f in memory.get("global_facts", [])]
     if workspace:
         ws_path = _resolve_workspace(workspace)
-        ws_facts = memory.get("workspace_facts", {})
-        for f in ws_facts.get(ws_path, []):
-            _touch(f)
-            results.append(f)
-
+        scoped += [(ws_path, f) for f in memory.get("workspace_facts", {}).get(ws_path, [])]
+    results = _touch_all(scoped)
     results.sort(key=_sort_key, reverse=True)
-    _schedule_save(memory)
     return results
 
 
@@ -330,19 +442,11 @@ def list_all_facts() -> list[dict]:
     is currently running in. Updates last_accessed and access_count on read.
     """
     memory = load_memory()
-    results: list[dict] = []
-
-    for f in memory.get("global_facts", []):
-        _touch(f)
-        results.append(f)
-
+    scoped: list[tuple[Optional[str], dict]] = [(None, f) for f in memory.get("global_facts", [])]
     for ws_path, facts in memory.get("workspace_facts", {}).items():
-        for f in facts:
-            _touch(f)
-            results.append(f)
-
+        scoped += [(ws_path, f) for f in facts]
+    results = _touch_all(scoped)
     results.sort(key=_sort_key, reverse=True)
-    _schedule_save(memory)
     return results
 
 
@@ -367,66 +471,78 @@ def facts_grouped_by_scope(workspace: Optional[str] = None) -> dict[str, list[di
     here_key = _resolve_workspace(workspace) if workspace else None
     out: dict[str, list[dict]] = {"here": [], "global": [], "elsewhere": []}
     seen: set[str] = set()
+    shown: list[tuple[Optional[str], dict]] = []
 
-    def _add(bucket: str, fact: dict) -> None:
+    def _add(bucket: str, scope: Optional[str], fact: dict) -> None:
         key = _normalize(_fact_content(fact)).lower()
         if not key or key in seen:
             return
         seen.add(key)
-        _touch(fact)
+        shown.append((scope, fact))
         out[bucket].append(fact)
 
     for fact in memory.get("global_facts", []):
-        _add("global", fact)
+        _add("global", None, fact)
     for ws_path, facts in memory.get("workspace_facts", {}).items():
         if here_key and os.path.realpath(ws_path) == here_key:
             for fact in facts:
-                _add("here", fact)
+                _add("here", ws_path, fact)
         else:
-            # Carry the origin WITH the fact. A heading saying "these are from elsewhere" is a
-            # caveat the model can read past; `[from /path/to/other-project]` on the line itself is
-            # not, because it names the project the fact is about. Copy rather than mutate — this is
-            # the loaded memory, and `_save` must not persist an `_origin` key.
             for fact in facts:
-                before = len(out["elsewhere"])
-                _add("elsewhere", fact)
-                if len(out["elsewhere"]) > before:
-                    out["elsewhere"][-1] = {**out["elsewhere"][-1], "_origin": ws_path}
+                _add("elsewhere", ws_path, fact)
+    _touch_all(shown)
+    # Carry the origin WITH the fact. A heading saying "these are from elsewhere" is a
+    # caveat the model can read past; `[from /path/to/other-project]` on the line itself is
+    # not, because it names the project the fact is about. A copy, so the key never reaches
+    # the store.
+    origins = {id(fact): scope for scope, fact in shown}
+    out["elsewhere"] = [{**fact, "_origin": origins[id(fact)]} for fact in out["elsewhere"]]
 
     for bucket in out.values():
         bucket.sort(key=_sort_key, reverse=True)
-    _schedule_save(memory)
     return out
 
 
 def set_importance(content: str, important: bool,
                    workspace: Optional[str] = None) -> bool:
     """Mark or unmark a fact as important. Returns True if found."""
-    memory = load_memory()
     norm = _normalize(content)
 
-    facts = _get_fact_list(memory, workspace)
-    for f in facts:
-        if _match(f, norm):
-            f["important"] = important
-            _touch(f)
-            _save(memory)
-            return True
-    return False
+    def change(memory: dict) -> "tuple[bool, bool]":
+        for f in _get_fact_list(memory, workspace):
+            if _match(f, norm):
+                f["important"] = important
+                _touch(f)
+                return True, True
+        return False, False
+
+    return _mutate(change)
 
 
 def clear_memory(workspace: Optional[str] = None):
-    """Clear all facts, optionally for a specific workspace."""
-    memory = load_memory()
+    """Clear all facts, optionally for a specific workspace.
 
-    if workspace:
-        ws_path = _resolve_workspace(workspace)
-        memory.get("workspace_facts", {}).pop(ws_path, None)
-    else:
-        memory["global_facts"] = []
-        memory["workspace_facts"] = {}
+    What is cleared is first saved next to the store as ``memory.json.cleared-<UTC time>``,
+    so a clear can be undone by hand.
+    """
+    path = _get_memory_file()
 
-    _save(memory)
+    def change(memory: dict) -> "tuple[None, bool]":
+        ws_path = _resolve_workspace(workspace) if workspace else None
+        if ws_path is not None and not memory["workspace_facts"].get(ws_path):
+            return None, False
+        if _count_facts(memory) == 0:
+            return None, False
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        _write_atomic(path.with_name(f"{path.name}.cleared-{stamp}"), _dumps(memory))
+        if ws_path is not None:
+            del memory["workspace_facts"][ws_path]
+        else:
+            memory["global_facts"] = []
+            memory["workspace_facts"] = {}
+        return None, True
+
+    _mutate(change)
 
 
 # ── System prompt formatting ────────────────────────────────────────────
