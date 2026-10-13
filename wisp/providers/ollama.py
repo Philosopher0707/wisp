@@ -7,6 +7,7 @@ from typing import Any, Iterator, Optional
 
 from wisp.ollama_client import OllamaClient
 
+from ._stream_lines import lines_as_they_arrive
 from .protocol import Provider
 
 
@@ -220,7 +221,7 @@ class OllamaProvider(Provider):
                 payload["tools"] = tools
 
             resp = self._stream_post("/api/chat", payload)
-            for line in resp.iter_lines():
+            for line in lines_as_they_arrive(resp):
                 if not line:
                     continue
                 try:

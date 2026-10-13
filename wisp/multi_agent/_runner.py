@@ -7,6 +7,7 @@ No nested event loops. No threads. Direct async execution with
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import time
@@ -15,6 +16,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from wisp.config import WispConfig
+from wisp.core.provider_stream import ProviderActivity, silence_deadline, watch_provider_activity
 from wisp.core.session import Session
 from wisp.infra.store import UnifiedStore
 
@@ -203,6 +205,30 @@ class SubagentRunner:
     # abort so the orchestrator's retry lands on a live socket instead of
     # burning the whole budget. Env: WISP_FIRST_TOKEN_DEADLINE.
     FIRST_TOKEN_DEADLINE_S = float(os.environ.get("WISP_FIRST_TOKEN_DEADLINE", "90"))
+
+    @staticmethod
+    async def _first_event(stream: Any, deadline_s: float, activity: ProviderActivity) -> Any:
+        """The child's first event; FirstTokenTimeout after *deadline_s* without one or any
+        sign of life from its provider. The contract's overall timeout bounds the wait."""
+        pending = asyncio.ensure_future(stream.__anext__())
+        try:
+            while True:
+                quiet_s = time.monotonic() - activity.last
+                done, _ = await asyncio.wait({pending}, timeout=max(0.0, deadline_s - quiet_s))
+                if done:
+                    return pending.result()
+                if time.monotonic() - activity.last >= deadline_s:
+                    break
+        except BaseException:
+            pending.cancel()
+            raise
+        # Cancel the pending step, then close the generator so the provider bridge thread
+        # stops with it.
+        pending.cancel()
+        with contextlib.suppress(BaseException):
+            await pending
+        await stream.aclose()
+        raise FirstTokenTimeout(deadline_s)
 
     def __init__(
         self,
@@ -655,17 +681,14 @@ class SubagentRunner:
                     # authorisation explicitly instead of inheriting a fall-through.
                     # A contract with `auto_approve=False` now gets DENIED for a
                     # write, which is the correct reading: it was never authorised.
-                    stream = core.turn(session_dict, contract.task, **self._approval_kwargs(contract))
-                    try:
-                        # First-token deadline: wait_for cancels the pending
-                        # __anext__ on stall; the generator is closed below so
-                        # the provider bridge thread stops with it.
-                        first_event = await asyncio.wait_for(
-                            stream.__anext__(), timeout=self.FIRST_TOKEN_DEADLINE_S
-                        )
-                    except asyncio.TimeoutError as exc:
-                        await stream.aclose()
-                        raise FirstTokenTimeout(self.FIRST_TOKEN_DEADLINE_S) from exc
+                    # First-token deadline, raised to the provider's healthy silence (one
+                    # that sends a tool call whole is silent while the model writes it), and
+                    # extended while the child's provider stream shows it is alive.
+                    first_deadline_s = silence_deadline(
+                        self.FIRST_TOKEN_DEADLINE_S, provider, "WISP_FIRST_TOKEN_DEADLINE")
+                    with watch_provider_activity() as activity:
+                        stream = core.turn(session_dict, contract.task, **self._approval_kwargs(contract))
+                        first_event = await self._first_event(stream, first_deadline_s, activity)
 
                     async def _with_first(first, rest):
                         yield first

@@ -49,6 +49,7 @@ from wisp.core.provider_stream import (
     TERMINAL_TYPES,
     guarded_provider_stream,
     passthrough_if_canonical,
+    silence_deadline,
 )
 from wisp.core.approval_gate import ApprovalGate
 from wisp.infra.circuit_breaker import (
@@ -2476,8 +2477,10 @@ class WispAgentCore:
                 tools=tools,
             ),
             passthrough_if_canonical,
-            first_token_deadline_s=self.FIRST_TOKEN_DEADLINE_S,
-            chunk_deadline_s=self.CHUNK_DEADLINE_S,
+            first_token_deadline_s=silence_deadline(
+                self.FIRST_TOKEN_DEADLINE_S, self.provider, "WISP_FIRST_TOKEN_DEADLINE"),
+            chunk_deadline_s=silence_deadline(
+                self.CHUNK_DEADLINE_S, self.provider, "WISP_CHUNK_DEADLINE"),
             max_attempts=max(1, int(os.environ.get("WISP_STREAM_ATTEMPTS", "3"))),
         ):
             yield event
