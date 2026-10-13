@@ -60,6 +60,10 @@ class Compactor:
     compaction_model: str = ""
     chars_per_token: int = 4
     summarize_timeout: float = 90.0  # seconds; bounded because compaction runs pre-turn
+    # Text sent for each of "kept" and "to compress". A long session's tool results (whole
+    # files) made a prompt the summary deadline could not finish, so it fell back to excerpts.
+    max_summary_input_chars: int = 60_000
+    max_message_chars: int = 1_500
 
     async def compact(
         self,
@@ -228,7 +232,11 @@ Messages to compress:
         )
 
     def _format_messages(self, messages: list[dict]) -> str:
-        """Format messages into a readable text block."""
+        """Format messages into a readable text block of at most `max_summary_input_chars`.
+
+        Each message is clipped to `max_message_chars` (head and tail); when the whole is still
+        too long the oldest lines go first, and the block says how many were left out.
+        """
         lines: list[str] = []
         for msg in messages:
             role = msg.get("role", "unknown")
@@ -237,10 +245,30 @@ Messages to compress:
                 for tc in msg["tool_calls"]:
                     name = tc.get("function", {}).get("name", "unknown")
                     args = tc.get("function", {}).get("arguments", {})
-                    lines.append(f"[{role} → tool_call: {name}({args})]")
+                    lines.append(self._clip(f"[{role} → tool_call: {name}({args})]"))
             elif content.strip():
-                lines.append(f"[{role}]: {content}")
-        return "\n".join(lines)
+                lines.append(self._clip(f"[{role}]: {content}"))
+
+        budget = self.max_summary_input_chars
+        kept: list[str] = []
+        used = 0
+        for line in reversed(lines):
+            if used + len(line) + 1 > budget - 80:
+                break
+            kept.append(line)
+            used += len(line) + 1
+        kept.reverse()
+        omitted = len(lines) - len(kept)
+        if omitted:
+            kept.insert(0, f"[{omitted} older messages omitted]")
+        return "\n".join(kept)
+
+    def _clip(self, text: str) -> str:
+        limit = self.max_message_chars
+        if len(text) <= limit:
+            return text
+        half = (limit - 40) // 2
+        return f"{text[:half]} … [{len(text) - 2 * half} chars cut] … {text[-half:]}"
 
     def _extract_section(self, text: str, label: str) -> list[str]:
         """Extract items from a labeled section in the summary."""

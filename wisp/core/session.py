@@ -309,8 +309,15 @@ class SessionEvent:
                     "content": message.get("content", "")})
 
     @classmethod
-    def compacted(cls, seq: int, before_count: int, after_count: int, summary: str = "") -> SessionEvent:
-        return cls(SessionEventType.COMPACTED, seq, {"before_count": before_count, "after_count": after_count, "summary": summary})
+    def compacted(cls, seq: int, before_count: int, after_count: int, summary: str = "",
+                  messages: list[dict[str, Any]] | None = None) -> SessionEvent:
+        """A compaction. *messages* is the transcript it left: replay installs it, because a
+        compaction replaces history that replaying the earlier events would rebuild in full."""
+        payload: dict[str, Any] = {"before_count": before_count, "after_count": after_count,
+                                   "summary": summary}
+        if messages is not None:
+            payload["messages"] = [dict(m) for m in messages]
+        return cls(SessionEventType.COMPACTED, seq, payload)
 
     @classmethod
     def error(cls, seq: int, message: str, recoverable: bool = True) -> SessionEvent:
@@ -619,7 +626,10 @@ class Session:
                     **dict(event.payload.get("goal_state") or {}),
                 })
 
-            case SessionEventType.COMPACTED:                self.compaction_history.append({
+            case SessionEventType.COMPACTED:
+                if isinstance(event.payload.get("messages"), list):
+                    self.messages = [dict(m) for m in event.payload["messages"]]
+                self.compaction_history.append({
                     "before_count": event.payload["before_count"],
                     "after_count": event.payload["after_count"],
                     "summary": event.payload.get("summary", ""),

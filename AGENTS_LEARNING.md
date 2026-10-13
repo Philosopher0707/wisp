@@ -928,6 +928,18 @@ Field log O-12 and O-13: `remember` failed 52 of 82 calls on the owner's machine
 5. **Process notes.** `python -P` from a worktree imports `wisp` from the venv's editable install (`~/dev/wisp`), not the worktree; pytest does use the worktree, but a test's subprocess needs `PYTHONPATH` set to the repo root. A subprocess test of a store with a temp-dir fallback must also set `TMPDIR`, or a failure writes into the machine's shared temp directory (it did, once, during the red run; the file held one test fact and was removed). An unreadable-store rule must decide zero bytes explicitly: a test that `touch`es the file to bump its mtime made the first version refuse every write in the session.
 6. **Not done:** the backup holding the owner's 63 facts was not restored (the owner's decision). Prompt builds still write the store, to record access counts, so the system prompt cache keyed on its mtime (`stateless.py`) is rebuilt every turn, as before. `remember` is not in the default 11-tool profile.
 
+## Compaction never summarized, /compact did not stick, and replay diverged after every compaction (2026-10-13)
+
+Reported as "auto context compaction in repl is not working, /compact makes no summary and the agent crashes". Reproduced in the real REPL in a pty against a stub that logs each request, and with real NVIDIA.
+
+1. **The summarizer never ran.** `Compactor` summarizes only when `compaction_model` is set, and no config set it, so every compaction kept excerpts. The stub saw zero summarization requests, even after 30 turns of automatic compaction. The session's model is now the default.
+2. **`/compact` on 14 messages printed "14 → 15".** A forced compaction kept `max_messages // 2` = 25, more than the session had, so it summarized nothing and added a message. It now keeps the newer half and does nothing when nothing is older.
+3. **`/compact` did not stick.** It compacted `dict(agent.session)`, and compaction assigned a new list to `session["messages"]` while `AgentAdapter.messages` aliased the old one, so the next turn sent all 16 messages. Compaction now writes in place, on `agent.session`.
+4. **The failure fallback broke the history.** The last 10 messages could start on a tool result whose tool call was cut away, and the system messages were dropped; a missing `compaction_history` key was one way to reach that fallback. The fallback is now boundary-safe, and the key is optional. This is the likely "crash", inferred: no traceback was found in any log.
+5. **Compaction was not journaled.** Replay rebuilt the uncompacted transcript, so the next digest failed (field session 13fb33ef, "replay diverged at sequence 663"). A `compacted` event type existed but nothing emitted it, and applying it did not shorten the transcript. It now carries the transcript it left, replay installs it, and the turn re-reads its sequence number after compacting.
+- **A mutant survived until the test asserted the invariant itself.** Keeping the stale sequence number after compaction wrote two events with one number; the index is not unique, and replay happened to order them correctly. Only `assert seqs == range(...)` caught it.
+- **Remap pins from the diff, not by hand.** A 5-line insertion moved about 20 pins in three derive scripts. A `difflib` old→new line map rewrote them, and refused any pin whose own line changed.
+
 ## A healthy stream can be silent: NVIDIA sends a tool call whole, so a 90 s silence limit cut off every long file write (2026-10-13)
 
 Field: "provider sent no data for 90s mid-stream", right after "Now let me create the model.py file" (nemotron-3-ultra via NVIDIA), twice in one session.
