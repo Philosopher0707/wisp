@@ -56,7 +56,9 @@ class _Stub:
                                         if x.get("role") == "user") if m), None)
                 kind, arg = (hit.group(1), hit.group(2) or "") if hit else ("none", "")
                 results = [str(m.get("content")) for m in msgs if m.get("role") == "tool"]
-                stub.requests.append({"kind": kind, "arg": arg, "tool_results": results,
+                system = "\n".join(str(m.get("content")) for m in msgs if m.get("role") == "system")
+                task = next((str(m.get("content")) for m in msgs if m.get("role") == "user"), "")
+                stub.requests.append({"kind": kind, "arg": arg, "tool_results": results, "system": system, "task": task,
                                       "tools": sorted(t["function"]["name"] for t in body.get("tools") or [])})
                 if kind == "silent":
                     time.sleep(float(arg or 10))

@@ -756,10 +756,13 @@ class TestDefaultSystemPrompt:
             name="auditor", task="audit",
             context_files=["src/main.py", "config.yaml"],
         )
-        prompt = orch._default_system_prompt(contract)
-        assert "Context Files" in prompt
-        assert "src/main.py" in prompt
-        assert "config.yaml" in prompt
+        # Since design S3 context files are data in the child's task message, not its system prompt:
+        # the core's assembler drops an over-budget system section whole, role rules included.
+        task = orch._child_context(contract).task
+        assert "Context Files" in task
+        assert "src/main.py" in task
+        assert "config.yaml" in task
+        assert "Context Files" not in orch._default_system_prompt(contract)
 
     def test_with_system_prompt_extra(self, mock_parent_agent):
         orch = SubagentOrchestrator(parent_agent=mock_parent_agent)

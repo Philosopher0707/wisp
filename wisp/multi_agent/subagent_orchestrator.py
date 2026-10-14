@@ -30,6 +30,7 @@ from wisp.core.recovery import is_systemic_text
 
 from ._runner import SubagentRunner
 from ._worktree_manager import WorktreeManager
+from .child_context import ChildContext, build_child_context
 from .roles import ROLE_CONFIGS
 from wisp.runs import agents as agent_records
 from wisp.tools import context as _exec_ctx
@@ -875,8 +876,12 @@ class SubagentOrchestrator:
         try:
             agent_workspace = str(worktree_path or self.workspace)
 
-            # ── System prompt ──────────────────────────────────────
-            system = contract.system_prompt or self._default_system_prompt(contract)
+            # ── The child's context (design S3) ─────────────────────
+            given = self._child_context(contract)
+            system = given.system_prompt
+            record = dataclasses.replace(record, links={
+                **record.links, "context": json.dumps(given.summary, sort_keys=True)})
+            child_contract = dataclasses.replace(contract, task=given.task)
 
             # ── Spawn limit and ancestor wait (design S2) ──────────
             # No await between these checks and the acquire below, so a slot seen free is taken.
@@ -909,7 +914,7 @@ class SubagentOrchestrator:
                 lineage = _exec_ctx.current_agent_id.set(record.agent_id)
                 try:
                     result = await self._runner.run(
-                        contract=contract,
+                        contract=child_contract,
                         agent_workspace=agent_workspace,
                         system_prompt=system,
                         progress_callback=contract.progress_callback,
@@ -1438,23 +1443,12 @@ class SubagentOrchestrator:
                     if not task.metadata:
                         task.metadata = {}
                     task.metadata["_budget"] = budget
-                # Inject upstream dependency outputs into the prompt so DAG
-                # edges carry dataflow, not just ordering. The contract must
-                # survive the injection — run() dereferences contract fields,
-                # and a bare string here crashes with AttributeError.
+                # Upstream outputs travel as data, so DAG edges carry dataflow, not just ordering;
+                # `child_context` shows them to the child as other agents' unverified reports.
                 dep_results = node.metadata.get("_dep_results")
                 if dep_results:
-                    summary = "\n\n".join(
-                        f"### Upstream result: {k}\n{str(v)[:2000]}"
-                        for k, v in dep_results.items()
-                    )
-                    augmented = (
-                        f"{task.task}\n\n"
-                        "Results from upstream dependencies (already completed — "
-                        f"use them, do not redo this work):\n\n{summary}"
-                    )
-                    from dataclasses import replace as _dc_replace
-                    task = _dc_replace(task, task=augmented)
+                    task = dataclasses.replace(task, metadata={
+                        **(task.metadata or {}), "_upstream": {str(k): str(v) for k, v in dep_results.items()}})
                 return await self.run(task)
 
             # If it's a callable, invoke it
@@ -1484,21 +1478,8 @@ class SubagentOrchestrator:
 
     def _new_agent_record(self, contract: SubagentContract) -> agent_records.AgentRecord:
         """This attempt's record, linked to the agent whose turn is running and its session."""
-        from ._runner import _effective_child_tools, _extension_tool_names, child_may_spawn
-
-        tools = contract.tools
-        if contract.role in ROLE_CONFIGS:
-            tools = self._with_role_tools(contract).tools
-        mode = str(getattr(self.config, "permission_mode", "auto_edit") or "auto_edit")
         metadata = getattr(contract, "metadata", None) or {}
-        try:
-            effective = tuple(_effective_child_tools(
-                tools, mode, _extension_tool_names(getattr(self._runner, "_agent_runtime", None)),
-                can_spawn=child_may_spawn(int(contract._subagent_depth or 0), self._max_depth)))
-        except Exception:
-            # Recording must never stop a child; the record then lists what was asked for.
-            logger.debug("could not resolve %s's effective tools for its record", contract.name, exc_info=True)
-            effective = tuple(str(t) for t in tools or ())
+        effective = self._effective_tools(contract)
         return agent_records.AgentRecord(
             agent_id=agent_records.new_agent_id(), status=agent_records.RUNNING,
             parent_agent_id=_exec_ctx.current_agent_id.get() or "",
@@ -1509,6 +1490,23 @@ class SubagentOrchestrator:
             model=str(contract.model or getattr(self.config, "model", "") or ""),
             task_preview=contract.task or "", started_at=time.time(),
             links={str(k): str(v) for k, v in dict(metadata.get("_links") or {}).items()})
+
+    def _effective_tools(self, contract: SubagentContract) -> tuple[str, ...]:
+        """The tools the child will be offered: its role's list, narrowed by the mode and the depth limit."""
+        from ._runner import _effective_child_tools, _extension_tool_names, child_may_spawn
+
+        tools = contract.tools
+        if contract.role in ROLE_CONFIGS:
+            tools = self._with_role_tools(contract).tools
+        mode = str(getattr(self.config, "permission_mode", "auto_edit") or "auto_edit")
+        try:
+            return tuple(_effective_child_tools(
+                tools, mode, _extension_tool_names(getattr(self._runner, "_agent_runtime", None)),
+                can_spawn=child_may_spawn(int(contract._subagent_depth or 0), self._max_depth)))
+        except Exception:
+            # Recording and prompting must never stop a child; fall back to what was asked for.
+            logger.debug("could not resolve %s's effective tools", contract.name, exc_info=True)
+            return tuple(str(t) for t in tools or ())
 
     async def _refused(self, contract: SubagentContract, record: agent_records.AgentRecord, reason: str,
                        result: SubagentResult) -> SubagentResult:
@@ -1568,99 +1566,12 @@ class SubagentOrchestrator:
         return dataclasses.replace(contract, tools=role_tools)
 
     def _default_system_prompt(self, contract: SubagentContract) -> str:
-        """Build a concise default system prompt when none is provided."""
+        """The child's system prompt; `child_context.build_child_context` is the one builder."""
+        return self._child_context(contract).system_prompt
 
-        role_cfg = ROLE_CONFIGS.get(contract.role)
-        if role_cfg:
-            base = role_cfg.system_prompt
-        else:
-            base = "\n".join([
-                f"You are a specialist subagent: **{contract.name}**.",
-                "You have tools to read, write, and edit files, run bash commands, "
-                "list directories, and fetch URLs.",
-                "",
-                "## Rules",
-                "1. Focus ONLY on your assigned task.",
-                "2. Work efficiently — you have a time budget.",
-                "3. When done, provide a clear summary of what you did.",
-                "4. If you edit files, list the changed paths.",
-                "5. If stuck, explain what blocked you and stop.",
-            ])
-
-        parts = [base]
-
-        # Load skills
-        workspace = str(contract.workspace or self.workspace)
-        try:
-            from wisp.skills import discover_skills
-            skills = discover_skills(workspace)
-            if skills:
-                if contract.allowed_skills:
-                    filtered = [s for s in skills if s.name in contract.allowed_skills]
-                    if filtered:
-                        parts.append("")
-                        parts.append("## Skills")
-                        parts.append("You may use these skills when relevant:")
-                        for s in filtered:
-                            parts.append(f"- **{s.name}**: {s.description}")
-                        for s in filtered:
-                            parts.append("")
-                            parts.append(f"### {s.name}")
-                            parts.append(s.instructions)
-                else:
-                    parts.append("")
-                    parts.append("## Available Skills")
-                    parts.append("You can invoke any of these skills when relevant:")
-                    for s in skills:
-                        parts.append(f"- {s.name}: {s.description}")
-        except Exception as exc:
-            logger.debug("Failed to load skills for subagent: %s", exc)
-
-        if contract.tools != ["all"]:
-            parts.append("")
-            parts.append("## Allowed Tools")
-            parts.append(", ".join(contract.tools))
-
-        if contract.context_files:
-            parts.append("")
-            parts.append("## Context Files")
-            ws_base = Path(contract.workspace or self.workspace)
-            max_chars_per_file = 8000
-            total_chars = 0
-            max_total_chars = 24000
-            for f in contract.context_files:
-                f_path = Path(f)
-                if not f_path.is_absolute():
-                    f_path = ws_base / f_path
-                try:
-                    content = f_path.read_text(encoding="utf-8", errors="replace")
-                    if len(content) > max_chars_per_file:
-                        content = content[:max_chars_per_file] + f"\n... [truncated: {len(content)} total chars]"
-                    parts.append(f"\n### {f}\n```\n{content}\n```")
-                    total_chars += len(content)
-                    if total_chars >= max_total_chars:
-                        parts.append("\n(remaining context files omitted due to size limit)")
-                        break
-                except OSError as exc:
-                    parts.append(f"- {f} (could not read: {exc})")
-
-        if contract.system_prompt_extra:
-            parts.append("")
-            parts.append("## Additional Instructions")
-            parts.append(contract.system_prompt_extra)
-
-        # Inject shared context for parallel subagent communication
-        if contract._shared_context is not None:
-            shared_block = contract._shared_context.format_for_prompt(contract.name)
-            if shared_block:
-                parts.append("")
-                parts.append(shared_block)
-                parts.append(
-                    "\nYou can share findings with sibling agents via the `share_finding` tool. "
-                    "Post key discoveries so siblings can benefit instead of duplicating work."
-                )
-
-        return "\n".join(parts)
+    def _child_context(self, contract: SubagentContract) -> ChildContext:
+        return build_child_context(contract, workspace=str(contract.workspace or self.workspace),
+                                   effective_tools=self._effective_tools(contract))
 
     async def _validate_output(
         self, result: SubagentResult, contract: SubagentContract,
