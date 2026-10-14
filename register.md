@@ -22,7 +22,7 @@
 > `—` therefore means *no catch inside these roots*, which is **not** the same claim as
 > *unhandled* — see §(c).
 >
-> Generated 2026-09-30 at `0d11df3` · **58 classes** · **324 raise sites** · **71 catch sites** · **9 with no test naming them**.
+> Generated 2026-09-30 at `1925248` · **58 classes** · **324 raise sites** · **71 catch sites** · **9 with no test naming them**.
 
 ---
 
@@ -34,8 +34,8 @@
 | `ApprovalCancelled` | `Exception` | verdict | approval | `wisp/exceptions.py:17` | 1 | `wisp/transport/cli.py:960` | `wisp/core/approval_gate.py:117`, `wisp/core/approval_gate.py:146`, `wisp/multi_agent/approval_relay.py:66`, `wisp/tool_executor.py:882` | — |
 | `ApprovalTimeout` | `Exception` | verdict | approval | `wisp/exceptions.py:33` | 1 | `wisp/transport/cli.py:923` | `wisp/core/approval_gate.py:127`, `wisp/multi_agent/approval_relay.py:66`, `wisp/tool_executor.py:895` | — |
 | `_TransientOpenError` | `Exception` | recoverable | provider | `wisp/core/provider_stream.py:44` | 1 | `wisp/core/provider_stream.py:235` | `wisp/core/provider_stream.py:342` | — |
-| `FirstTokenTimeout` | `asyncio.TimeoutError` | recoverable | subagent | `wisp/multi_agent/_runner.py:171` | 1 | `wisp/multi_agent/_runner.py:231` | `wisp/multi_agent/_runner.py:464`, `wisp/multi_agent/_runner.py:766`, `wisp/multi_agent/_runner.py:936` | — |
-| `CircuitOpenError` | `Exception` | recoverable | provider | `wisp/infra/circuit_breaker.py:175` | 2 | `wisp/infra/circuit_breaker.py:93` | `wisp/core/stateless.py:1364` | — |
+| `FirstTokenTimeout` | `asyncio.TimeoutError` | recoverable | subagent | `wisp/multi_agent/_runner.py:171` | 1 | `wisp/multi_agent/_runner.py:231` | `wisp/multi_agent/_runner.py:464`, `wisp/multi_agent/_runner.py:766`, `wisp/multi_agent/_runner.py:943` | — |
+| `CircuitOpenError` | `Exception` | recoverable | provider | `wisp/infra/circuit_breaker.py:175` | 2 | `wisp/infra/circuit_breaker.py:93` | `wisp/core/stateless.py:1373` | — |
 | `CircuitBreakerOpenError` | `Exception` | recoverable | subagent | `wisp/multi_agent/_circuit_breaker.py:102` | 1 | `wisp/multi_agent/_circuit_breaker.py:44` | — | — |
 | `_Exit` | `Exception` | recoverable | cli | `wisp/review/cli.py:32` | 1 | `wisp/review/cli.py:48` | `wisp/review/cli.py:141`, `wisp/review/cli.py:202` | — |
 | `OllamaError` | `Exception` | recoverable | provider | `wisp/ollama_client.py:46` | 10 | `wisp/ollama_client.py:273` | `wisp/ollama_client.py:288`, `wisp/ollama_client.py:427` | — |
