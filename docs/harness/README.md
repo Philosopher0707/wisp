@@ -109,6 +109,10 @@ already on `main`, so a merge commit, a squash and a rebase all leave it an ance
 Squash-merging #85 turned `main` red before that fix; it no longer does. Regenerate pages with the current scripts, and commit a regenerated
 page only when a pinned line really moved (a stamp-only diff conflicts with every other open PR).
 
+## Subagents, DAGs and graphs
+
+Which level to use (subagent, DAG, graph), the one spawner and engine behind them, how children are tracked, given context and controlled, and the slices that get there: [`subagent-orchestration-design.md`](subagent-orchestration-design.md).
+
 ## Review and triage
 
 `wisp review` (and `/review` in the REPL) reviews a change; `wisp triage` (`/triage`) reads the open pull requests. Design, research and what building them found: [`wisp-review-design.md`](wisp-review-design.md).
