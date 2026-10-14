@@ -13,7 +13,7 @@ import json
 
 import pytest
 
-from tests.test_subagent_controls_reach_the_child import _contract, _wire
+from tests.test_subagent_controls_reach_the_child import _contract, _wire  # noqa: F401
 
 
 @pytest.fixture
@@ -88,16 +88,30 @@ class TestLineage:
         assert child.root_session_id == session["id"]
         assert child.parent_agent_id == "" and child.origin == "spawn" and child.status == "succeeded"
 
-    def test_grandchildren_link_to_their_parent_and_the_refusal_too(self, wired_full):
-        root, _, _ = wired_full
-        asyncio.run(root.subagent_orchestrator.run(_contract("r0", "SCN{recurse}", timeout_seconds=30)))
+    def test_grandchildren_link_to_their_parent(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("WISP_TOOL_PROFILE", "full")
+        root, stub, _ = _wire(tmp_path, monkeypatch, permission_mode="full", max_subagent_depth=3)
+        try:
+            asyncio.run(root.subagent_orchestrator.run(_contract("r0", "SCN{recurse}", timeout_seconds=30)))
+        finally:
+            stub.server.shutdown()
+            stub.server.server_close()
         by_depth = sorted(_records(root), key=lambda r: (r.depth, r.started_at))
         assert [r.depth for r in by_depth] == [0, 1, 2], [(r.depth, r.status) for r in by_depth]
-        top, mid, refused = by_depth
-        assert top.parent_agent_id == ""
-        assert mid.parent_agent_id == top.agent_id
-        assert refused.parent_agent_id == mid.agent_id
-        assert refused.status == "refused" and refused.refusal_reason == "depth"
+        top, mid, last = by_depth
+        assert top.parent_agent_id == "" and mid.parent_agent_id == top.agent_id
+        assert last.parent_agent_id == mid.agent_id
+
+    def test_a_refusal_inside_a_child_links_to_that_child(self, wired):
+        root, _, _ = wired
+        from wisp.tools.context import current_agent_id
+
+        async def inside():
+            current_agent_id.set("ag-parent")
+            return await root.subagent_orchestrator.run(_contract("deep", "SCN{say:deep}", _subagent_depth=2))
+        asyncio.run(inside())
+        [rec] = _records(root)
+        assert (rec.status, rec.refusal_reason, rec.parent_agent_id) == ("refused", "depth", "ag-parent")
 
 
 class TestSubagentListShowsTheTree:

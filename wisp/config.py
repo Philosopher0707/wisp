@@ -912,6 +912,7 @@ class WispConfig:
     max_subagent_timeout: int
     max_subagent_depth: int
     max_subagent_branching: int
+    max_spawns_per_session: int
     write_tools: list[str]
     subagent_models: list[str]
     graph_model_tiers: str
@@ -1120,6 +1121,10 @@ class WispConfig:
         ))
         object.__setattr__(self, "max_subagent_branching", _parse_int(
             get_setting("max_subagent_branching", "3"), 3, 1, 20
+        ))
+        # Design S2: about twice the owner's largest real session (33 children, 2026-10-14).
+        object.__setattr__(self, "max_spawns_per_session", _parse_int(
+            get_setting("max_spawns_per_session", "64"), 64, 1, 1000
         ))
         # Write-classification tools requiring approval in restricted modes
         raw_write_tools = get_setting(

@@ -344,7 +344,11 @@ async def test_run_schema_validation_failure_no_retry(orch):
         )
         result = await orch.run(contract)
 
-    assert result.success is True  # agent succeeded, but validation failed
+    # Was `success is True` ("agent succeeded, but validation failed"). Changed by design S2 (owner's
+    # decision, 2026-10-14): a caller that declares a schema asked for that structure, and the spawn
+    # tool returned `"ok": true` beside "Schema validation failed", which the parent read as done.
+    assert result.success is False
+    assert result.output == "not json"  # the child's text is kept
     assert result.validated_output is None
     assert "No valid JSON" in result.error
 
