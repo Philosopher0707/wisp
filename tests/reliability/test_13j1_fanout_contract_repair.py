@@ -13,6 +13,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _offer_the_tools_under_test(monkeypatch):
+    """These tests drive tools outside the default basic profile (run_bash/read_file/edit_file/write_file), and a
+    tool that is not offered is refused since 2026-10-14; offer every built-in."""
+    monkeypatch.setenv("WISP_TOOL_PROFILE", "full")
+
+
 def _mk_config(workspace, **kw):
     from wisp.config import WispConfig
     from wisp.infra.security import PermissionMode

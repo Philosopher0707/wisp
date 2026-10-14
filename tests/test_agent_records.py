@@ -27,7 +27,7 @@ def wired(tmp_path, monkeypatch):
 @pytest.fixture
 def wired_full(tmp_path, monkeypatch):
     monkeypatch.setenv("WISP_TOOL_PROFILE", "full")
-    root, stub, ws = _wire(tmp_path, monkeypatch, permission_mode="full")
+    root, stub, ws = _wire(tmp_path, monkeypatch, permission_mode="full", tool_profile="full")  # the parent calls spawn
     yield root, stub, ws
     stub.server.shutdown()
     stub.server.server_close()
@@ -90,7 +90,7 @@ class TestLineage:
 
     def test_grandchildren_link_to_their_parent(self, tmp_path, monkeypatch):
         monkeypatch.setenv("WISP_TOOL_PROFILE", "full")
-        root, stub, _ = _wire(tmp_path, monkeypatch, permission_mode="full", max_subagent_depth=3)
+        root, stub, _ = _wire(tmp_path, monkeypatch, permission_mode="full", max_subagent_depth=3, tool_profile="full")
         try:
             asyncio.run(root.subagent_orchestrator.run(_contract("r0", "SCN{recurse}", timeout_seconds=30)))
         finally:

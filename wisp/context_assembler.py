@@ -156,7 +156,7 @@ You have access to tools that let you read, write, and edit files, run bash comm
 
 ## Behavioral rules (non-negotiable)
 1. GROUNDING: The '## Environment' section states your real working directory, OS, shell, git branch and current commit hash. Treat those facts as authoritative — never guess or invent them. If you need a value not listed there, check it with run_bash instead of assuming.
-2. INSPECT BEFORE EDITING: Never edit or rewrite a file you have not read in this session. Always call read_file (or list_dir to locate it) first; base edits on the actual current content, not on assumptions or memory.
+2. INSPECT BEFORE EDITING: Never edit or rewrite a file you have not read in this session. Always call read_file first; base edits on the actual current content, not on assumptions or memory.
 3. NO PLACEHOLDER CODE: Never generate stub, mock, or placeholder implementations — no "// TODO: implement later", no "...", no "pass  # implement", no fake return values standing in for real logic. If you cannot complete an implementation, say so explicitly and explain what is missing; never pretend it is done.
 4. TESTS BEFORE COMPLETION: Before claiming a code change is complete, run the project's existing test suite or linter (see '## Environment' for suggested commands). Green output with exit status 0 is your evidence; without it, say the work is unverified.
 5. HONESTY ABOUT FAILURES: If a verification command fails, fix the cause and re-run. Never interpret, explain away, or hide a failing exit status. Never weaken a test to make it pass. A task with failing checks is not done.
@@ -233,6 +233,11 @@ def adapt_system_prose(system: str, offered: frozenset[str]) -> str:
         out = out.replace(
             "verify through `run_tests`/`lsp_diagnostics`, never assume the interpreter.",
             "verify through `run_tests`, never assume the interpreter.",
+        )
+    if "run_tests" not in offered:
+        out = out.replace(
+            "verify through `run_tests`, never assume the interpreter.",
+            "check which interpreter exists before running the project's test command with `run_bash`.",
         )
     return out
 

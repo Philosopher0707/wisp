@@ -118,8 +118,8 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
     },
     "tool_profile": {
         "type": str,
-        "default": "core",
-        "description": "Built-in tools offered to the model: core (8 core tools + grep, glob, rewind) | full (every built-in). Offer only: hidden tools stay callable and role subagents with explicit tool lists are unaffected. Rollback: full.",
+        "default": "basic",
+        "description": "Tools the model is offered, and so may call (a call to any other tool is refused): basic (run_bash, read_file, edit_file, write_file; no MCP or plugin tools) | core (11 built-ins + extension tools) | full (every built-in + extension tools). Role subagents with explicit tool lists are unaffected.",
         "env_var": "WISP_TOOL_PROFILE",
     },
     "invariant_gates": {

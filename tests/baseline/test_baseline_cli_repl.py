@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import pty
+import re
 import select
 import sqlite3
 import subprocess
@@ -78,7 +79,7 @@ def test_b2_a_coding_task_reads_fixes_verifies_and_the_fix_is_real(home, ws):
     model = ScriptedModel({"fix": [
         ("tool", "read_file", {"path": "calc.py"}),
         ("tool", "edit_file", {"path": "calc.py", "old_text": "a - b", "new_text": "a + b"}),
-        ("tool", "run_tests", {}),
+        ("tool", "run_bash", {"command": f"{sys.executable} -m pytest -q -p no:cacheprovider"}),
         ("text", "Fixed add() in calc.py; the test passes."),
     ]})
     try:
@@ -253,18 +254,64 @@ def test_b6_d4_fixed_print_reports_the_iterations_it_ran(home, ws):
 
 # ── B7. What the model is offered by default, and what that leaves out ────────────────────────
 
-def test_b7_the_default_parent_is_offered_the_eleven_core_tools_and_no_spawn(home, ws):
-    from wisp.tools.profile import CORE_TOOLS
+FOUR = {"read_file", "write_file", "edit_file", "run_bash"}
+
+
+def test_b7_the_model_is_offered_exactly_four_tools(home, ws):
+    """Owner decision 2026-10-14: the model gets run_bash, read_file, edit_file and write_file, nothing else
+    (no plugin or MCP tools either)."""
+    model = ScriptedModel({"look": [("text", "ok")]})
+    try:
+        _print("BASELINE{look} hi", home, ws, model)
+    finally:
+        model.close()
+    assert set(model.of("look")[0]["tools"]) == FOUR
+
+
+def test_b7_a_tool_the_model_was_not_offered_is_refused_and_nothing_happens(home, ws):
+    """What is offered is what is allowed. Before, `spawn` and `git_commit` ran although neither was offered (D7)."""
+    model = ScriptedModel({"x": [("tool", "git_commit", {"message": "m"}), ("tool", "spawn", {"task": "BASELINE{kid} hi"}),
+                                 ("tool", "grep", {"pattern": "add"}), ("text", "end")],
+                           "kid": [("text", "child ran")]})
+    try:
+        _print("BASELINE{x} go", home, ws, model)
+    finally:
+        model.close()
+    results = [str(m.get("content")) for m in model.of("x")[-1]["messages"] if m.get("role") == "tool"]
+    assert len(results) == 3 and all("not offered" in r and "POLICY_DENIED" in r for r in results), results
+    assert not model.of("kid"), "a child was spawned"
+    log = subprocess.run(["git", "log", "--oneline"], cwd=ws, capture_output=True, text=True)
+    assert log.returncode != 0 or not log.stdout.strip(), "a commit was made"
+
+
+def test_b7_the_prompt_names_no_tool_the_model_does_not_have(home, ws):
+    from wisp.tools.registry import TOOL_SCHEMAS
 
     model = ScriptedModel({"look": [("text", "ok")]})
     try:
         _print("BASELINE{look} hi", home, ws, model)
     finally:
         model.close()
-    offered = set(model.of("look")[0]["tools"])
-    assert set(CORE_TOOLS) <= offered
-    assert "spawn" not in offered and "fanout" not in offered, (
-        "the default parent can now delegate; update docs/baseline/2026-10-14.md B7")
+    req = model.of("look")[0]
+    text = " ".join(str(m.get("content")) for m in req["messages"] if m["role"] in ("system", "user"))
+    # `diagnose` is also an English verb ("diagnose the error"); every other tool name is unambiguous.
+    others = {s["function"]["name"] for s in TOOL_SCHEMAS} - FOUR - {"diagnose"}
+    named = sorted(n for n in others | {"list_dir", "lsp_diagnostics"} if re.search(rf"(?<![\w/.]){n}(?![\w])", text))
+    assert not named, f"the prompt tells the model about tools it does not have: {named}"
+
+
+def test_b7_verification_with_run_bash_counts(home, ws):
+    model = ScriptedModel({"fix": [
+        ("tool", "edit_file", {"path": "calc.py", "old_text": "a - b", "new_text": "a + b"}),
+        ("tool", "run_bash", {"command": f"{sys.executable} -m pytest -q -p no:cacheprovider"}),
+        ("text", "Fixed; pytest passed."),
+    ]})
+    try:
+        _, result = _print("BASELINE{fix} fix it", home, ws, model)
+    finally:
+        model.close()
+    assert result["ok"] and (ws / "calc.py").read_text() == FIXED
+    assert "UNVERIFIED" not in result["content"] and "not backed" not in result["content"], result["content"]
 
 
 def test_b8_with_the_full_profile_a_child_does_the_work_and_the_parent_gets_evidence(home, ws):

@@ -36,11 +36,11 @@ def _result(name: str, commit: str, t0: float, status: CheckStatus, message: str
 
 
 def _check_tool_profile() -> CheckResult:
-    """The default tool surface: core profile, every core tool implemented and schema'd."""
+    """The configured tool surface: which tools the model is offered (and so may call), each implemented and schema'd."""
     t0, name, commit = time.monotonic(), "tool_profile", "tool-surface"
     try:
         from wisp.config import get_setting
-        from wisp.tools.profile import CORE_TOOLS, parse_profile
+        from wisp.tools.profile import builtin_names_for, offers_extensions, parse_profile
         from wisp.tools.registry import TOOL_IMPLS, TOOL_SCHEMAS
     except ImportError as exc:
         return _result(name, commit, t0, CheckStatus.WARN, f"not in this checkout: {exc}")
@@ -50,21 +50,25 @@ def _check_tool_profile() -> CheckResult:
 
     profile = parse_profile(get_setting("tool_profile", None))
     by_name = {schema_name(s): s for s in TOOL_SCHEMAS}
-    unimplemented = [n for n in CORE_TOOLS if n not in TOOL_IMPLS]
-    unschemad = [n for n in CORE_TOOLS if n not in by_name]
-    core_tokens = sum(len(json.dumps(by_name[n])) for n in CORE_TOOLS if n in by_name) // 4
+    offered = builtin_names_for(profile)
+    tools = sorted(offered) if offered is not None else sorted(by_name)
+    unimplemented = [n for n in tools if n not in TOOL_IMPLS]
+    unschemad = [n for n in tools if n not in by_name]
+    tokens = sum(len(json.dumps(by_name[n])) for n in tools if n in by_name) // 4
     full_tokens = sum(len(json.dumps(s)) for s in TOOL_SCHEMAS) // 4
-    details = {"profile": profile, "core_tools": len(CORE_TOOLS), "core_schema_tokens": core_tokens,
-               "all_builtin_schema_tokens": full_tokens}
+    details = {"profile": profile, "tools": tools, "schema_tokens": tokens, "all_builtin_schema_tokens": full_tokens,
+               "extension_tools": offers_extensions(profile)}
     if unimplemented or unschemad:
         return _result(name, commit, t0, CheckStatus.FAIL,
-                       f"core tools missing: impl={unimplemented} schema={unschemad}", **details)
-    if profile != "core":
+                       f"{profile} tools missing: impl={unimplemented} schema={unschemad}", **details)
+    extensions = "plus extension tools" if offers_extensions(profile) else "no extension tools"
+    if offered is None:
         return _result(name, commit, t0, CheckStatus.WARN,
-                       f"profile={profile}: all {len(TOOL_SCHEMAS)} built-ins offered (~{full_tokens} tokens/call "
-                       f"vs ~{core_tokens} for core)", **details)
+                       f"profile={profile}: all {len(tools)} built-ins offered (~{tokens} tokens/call), {extensions}",
+                       **details)
     return _result(name, commit, t0, CheckStatus.OK,
-                   f"core: {len(CORE_TOOLS)} tools, ~{core_tokens} schema tokens/call", **details)
+                   f"{profile}: {', '.join(tools)} (~{tokens} schema tokens/call), {extensions}; "
+                   f"a call to any other tool is refused", **details)
 
 
 def _check_subagent_surface() -> CheckResult:

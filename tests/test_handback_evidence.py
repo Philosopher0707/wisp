@@ -20,7 +20,7 @@ from tests.test_subagent_controls_reach_the_child import _contract, _wire
 @pytest.fixture
 def full(tmp_path, monkeypatch):
     monkeypatch.setenv("WISP_TOOL_PROFILE", "full")
-    root, stub, ws = _wire(tmp_path, monkeypatch, permission_mode="full")
+    root, stub, ws = _wire(tmp_path, monkeypatch, permission_mode="full", tool_profile="full")  # the parent calls spawn
     yield root, stub, ws
     stub.server.shutdown()
     stub.server.server_close()
