@@ -41,12 +41,28 @@ keep their row, with the tripwire set to `—` and the reason in the source cell
 ("the round-trip is pinned against a stub channel, not a live client") is SUPERSEDED: the path
 it concerned no longer exists.
 
+## The apps and the server deployment (second commit, owner's yes for the CI files)
+
+| Removed | What it was |
+|---|---|
+| `wisp-desktop/` (164 files) | Electron macOS app; it bundled `wisp/server` as its backend |
+| `android/` (40 files) | Android remote-control client of the server |
+| `vscode-extension/` (10), `warp-integration/` (5) | Editor and terminal clients of the server |
+| `Dockerfile`, `docker-compose.yml`, `nginx.conf` | Deployment of `wisp server` (`CMD ["wisp", "server", ...]`) |
+| `.github/workflows/desktop-ci.yml`, the `test-android` job in `ci.yml` | Their CI |
+
+`release.yml` no longer builds an APK or a Docker image; it now installs `.[dev]` with full
+history, as `ci.yml` does (before, it installed without the dev extras on a shallow clone, so its
+test step could not have passed). `docker/wisp-sandbox.Dockerfile` stays: `run_bash` uses it.
+
+Found while removing them: the `subagent_start` event's capability report had one reader, the
+desktop `SubagentPanel`. The REPL does not show it, so it is now built and not read; recorded for
+the dead-code pass.
+
 ## Not in this change
 
-- `wisp-desktop/`, `android/`, `vscode-extension/`, `warp-integration/`: they need CI workflow
-  changes (`desktop-ci.yml`, the `test-android` job, `release.yml`), which need the owner's
-  explicit yes. **The desktop app and the Android app talked to `wisp/server`; after this change
-  they cannot run against this tree.**
 - Modules no entry point reaches that are not front ends (about 5.8k lines, listed by the
   reachability audit): a separate change, each checked on its own.
 - `wisp_net/` (6.7k lines): a separate product in this repo; where it lives is the owner's call.
+- `uv.lock` still lists `fastapi`, `uvicorn` and `websockets`. CI installs with pip and does not
+  read it; regenerating a lockfile needs the owner's yes.

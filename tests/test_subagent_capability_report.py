@@ -1,7 +1,7 @@
 """The `subagent_start` payload must report the child's real authority surface.
 
-The renderer (wisp-desktop `SubagentPanel`) shows what a subagent may actually
-do. If that display is reconstructed from a count or guessed from the contract,
+The renderer shows what a subagent may actually do. (Its one reader, the desktop app's
+`SubagentPanel`, was removed in M0; the REPL does not show it yet.) If that display is reconstructed from a count or guessed from the contract,
 it can tell the user something the executor was never governed by. So these
 tests pin the *shape and the derivation*, not just the plumbing.
 
