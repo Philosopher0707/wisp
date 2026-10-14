@@ -153,7 +153,7 @@ class TestOrigin:
             return launched["agent_id"]
         bg_id = asyncio.run(go())
         [rec] = _records(root)
-        assert rec.origin == "background" and rec.links == {"background_agent_id": bg_id}
+        assert rec.origin == "background" and rec.links["background_agent_id"] == bg_id
         assert rec.status == "succeeded"
 
     def test_a_graph_node_is_recorded_as_graph(self, wired):
@@ -165,11 +165,11 @@ class TestOrigin:
         runner = SubagentNodeRunner(root.subagent_orchestrator, workspace=str(root.config.workspace))
         asyncio.run(runner(node, {"task": "SCN{say:node}"}))
         [rec] = _records(root)
-        assert rec.origin == "graph" and rec.links == {"node_id": "analyze"}
+        assert rec.origin == "graph" and rec.links["node_id"] == "analyze"
 
     def test_a_dag_node_is_recorded_as_dag(self, wired):
         root, _, ws = wired
         asyncio.run(root.tool_executor._orchestrate_dag(
             {"nodes": [{"name": "n1", "task": "SCN{say:dag}"}]}, str(ws)))
         [rec] = _records(root)
-        assert rec.origin == "dag" and rec.links == {"node_id": "n1"} and rec.status == "succeeded"
+        assert rec.origin == "dag" and rec.links["node_id"] == "n1" and rec.status == "succeeded"

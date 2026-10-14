@@ -984,3 +984,14 @@ Slice S2 of `docs/harness/subagent-orchestration-design.md`.
 5. **A failed schema is a failed child.** The `spawn` tool returned `"ok": true` beside "Schema validation failed". `test_run_schema_validation_failure_no_retry` pinned the old behaviour and was changed with the reason in it.
 6. **New code meets old objects.** Two tests build orchestrators and runners without `__init__` or with a `MagicMock` config (`int(MagicMock()) == 1`, so the spawn limit became 1). Read new attributes with `getattr` and accept only real ints.
 - Evidence: 13 red-first tests (7 failed on `main`, 5 controls passed); 16/16 mutation probes caught; gate 4034 passed.
+
+## A child's context: data in the task message, one builder, every part bounded (2026-10-14)
+
+Slice S3 of `docs/harness/subagent-orchestration-design.md`.
+
+1. **An over-budget system section is dropped whole.** The child's system prompt reaches the core as `role_extra`; the assembler budgets the system prompt at 6,000 tokens and drops a section that does not fit, whole. Files were inside that section (up to 24,000 characters), so a child given large files lost its role's rules with them: on the S2 code, a researcher given three 12,000-character files had no "Researcher agent" in its system prompt. Files, shared findings and other agents' results now go in the task message; the system prompt keeps the role, skills (capped), the tools and extra instructions.
+2. **Data is not operator text.** The assembler tags `role_extra` with operator trust. Workspace files and other agents' reports do not deserve it; they now arrive as data, and other agents' results are labelled "another agent's report, unverified" instead of "use them, do not redo this work".
+3. **Contain and scrub before the provider sees it.** Context files were read with any absolute path. They now go through `pathsec.resolve_contained` and `gates.secrets.scrub`.
+4. **A marker that also appears in a heading proves nothing.** The first label test looked for "another agent's report"; the section heading contains it too, so removing every label survived. Assert the exact per-item line.
+5. **Find the end of a method by any definition.** Deleting the old builder up to the next `"\n    def "` skipped the `async def` methods and removed 470 lines. The diff stat (and five missing methods) showed it. Restored from git, then cut at the next `def`, `async def` or decorator.
+- Evidence: 11 red-first tests (3 confirmed red on the S2 code, including the lost role prompt); 11/11 mutation probes caught; gate 4105 passed.

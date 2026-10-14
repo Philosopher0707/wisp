@@ -285,7 +285,7 @@ async def run_chain(
     if max_concurrent != 1:
         logger.warning("run_chain with max_concurrent > 1 breaks sequential context passing")
 
-    context_parts = []
+    context_parts: list[tuple[str, str]] = []
     last_result = None
     all_files_changed = []
     total_elapsed = 0.0
@@ -316,13 +316,10 @@ async def run_chain(
                 copied["workspace"] = str(shared_worktree_path)
 
             if pass_context and context_parts:
-                context_block = "\n\n".join(context_parts[-3:])
-                copied["task"] = (
-                    f"{copied['task']}\n\n"
-                    f"## Previous Steps Context\n"
-                    f"{context_block}"
-                )
-                
+                # The last three steps' outputs, shown to the child by `child_context` as reports.
+                copied["metadata"] = {**(copied.get("metadata") or {}),
+                                      "_upstream": dict(context_parts[-3:])}
+
             contract = SubagentContract(**copied)
 
             result = await orchestrator.run(contract)
@@ -335,10 +332,7 @@ async def run_chain(
             total_tokens += result.tokens_used
 
             if pass_context:
-                context_parts.append(
-                    f"### Step {i+1}: {contract.name}\n"
-                    f"{result.output[:1500]}"
-                )
+                context_parts.append((f"Step {i+1}: {contract.name}", result.output))
 
             if not result.success:
                 failed_steps.append((i + 1, contract.name, result.error))
@@ -348,7 +342,7 @@ async def run_chain(
                         f"**Failed step:** {contract.name}\n"
                         f"**Error:** {result.error or 'unknown error'}\n\n"
                         f"### Completed Steps\n"
-                        + "\n\n".join(context_parts[:-1] if context_parts else [])
+                        + "\n\n".join(f"### {label}\n{text[:1500]}" for label, text in context_parts[:-1])
                     )
                     last_result = SubagentResult(
                         task_id=f"chain-failed-at-{i+1}",
