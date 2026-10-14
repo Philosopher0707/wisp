@@ -129,7 +129,7 @@ def _upstream_block(upstream: dict[str, Any]) -> tuple[str, dict[str, int]]:
 
 def build_child_context(contract: Any, *, workspace: str, effective_tools: Sequence[str]) -> ChildContext:
     """The child's system prompt and task, from its contract and what the orchestrator resolved."""
-    from .roles import ROLE_CONFIGS
+    from wisp.multi_agent.roles import ROLE_CONFIGS
 
     role_cfg = ROLE_CONFIGS.get(contract.role)
     base = contract.system_prompt or (role_cfg.system_prompt if role_cfg else "") \

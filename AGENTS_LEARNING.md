@@ -995,3 +995,14 @@ Slice S3 of `docs/harness/subagent-orchestration-design.md`.
 4. **A marker that also appears in a heading proves nothing.** The first label test looked for "another agent's report"; the section heading contains it too, so removing every label survived. Assert the exact per-item line.
 5. **Find the end of a method by any definition.** Deleting the old builder up to the next `"\n    def "` skipped the `async def` methods and removed 470 lines. The diff stat (and five missing methods) showed it. Restored from git, then cut at the next `def`, `async def` or decorator.
 - Evidence: 11 red-first tests (3 confirmed red on the S2 code, including the lost role prompt); 11/11 mutation probes caught; gate 4105 passed.
+
+## A parent receives the child's claim and, apart from it, what the harness saw (2026-10-14)
+
+Slice S4 of `docs/harness/subagent-orchestration-design.md`.
+
+1. **"Files changed" was the child's own prose.** The runner set `files_changed` with a regex over the child's reply, so "I edited fake.py and ran the tests: all green" came back as a changed `fake.py` from a child that wrote `real.txt` and ran nothing. The files now come from the harness: a file-writing tool's call names the path, and the path counts only if the harness saw that call's result succeed (`observations.note_call` / `record` / `written_paths`).
+2. **One evidence authority.** `tests_state` (none/red/stale/green) moved from `graph/evidence.py` into `multi_agent/observations.py`, beside the observations it reads; graph verifiers and every handback use the same function.
+3. **Claim beside evidence.** `spawn` and background results carry `summary` (the claim), `evidence` (files, the last test run's state, the worktree diff), `claimed_but_not_seen` (files the prose names that the harness did not see written) and a note saying which is which. The regex survives only for that comparison.
+4. **Scan, label, never drop.** The reply passes `core.injection_scan`; a finding is reported in `flags` and the reply is still delivered (design D8).
+5. **A pinned boundary test models relative imports as the package.** ADR-0060's test resolves `from .x import y` to `wisp.multi_agent`, and the package's `__init__` reaches the graph executor, so two new relative imports put the turn engine "in Layer B". Absolute imports name the module. The test says "supersede, do not edit", and the change complied.
+- Evidence: 10 tests, all red on the S3 code (the two files tests do not import the new module, so their failure is the old behaviour); 11/11 mutation probes caught; gate 4155 passed.

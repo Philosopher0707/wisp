@@ -1763,14 +1763,14 @@ class ToolExecutor:
 
             result = await self.subagent_orchestrator._run_with_retry(contract)
 
+            from wisp.multi_agent.handback import handback
+
             return json.dumps({
                 "status": "ok",
                 "tool": "spawn",
                 "data": {
-                    "ok": result.success,
-                    "summary": result.output[:2000] if result.output else "",
-                    "files": result.files_changed or [],
                     "error": result.error,
+                    **handback(result),
                     "elapsed_seconds": round(result.elapsed_seconds, 1),
                     "role": role,
                 },

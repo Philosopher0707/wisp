@@ -20,7 +20,7 @@ from wisp.core.provider_stream import ProviderActivity, silence_deadline, watch_
 from wisp.core.session import Session
 from wisp.infra.store import UnifiedStore
 
-from .observations import record as _record_observation
+from .observations import note_call as _note_call, record as _record_observation, written_paths
 from .task import EventKind, OrchestratorEvent, SubagentContract, SubagentResult
 
 
@@ -670,6 +670,7 @@ class SubagentRunner:
 
             output_text = ""
             observations: list[dict] = []
+            pending_writes: dict[str, list[str]] = {}
             engine_iterations = 0
             last_nonempty_round = ""
             saw_done = saw_fatal_error = False
@@ -746,6 +747,7 @@ class SubagentRunner:
                                 )
                                 break
                         elif etype == "tool_call":
+                            _note_call(pending_writes, event)
                             engine_iterations += 1
                             budget.record_tool_call()
                             name = event.get("name", "")
@@ -763,7 +765,7 @@ class SubagentRunner:
                             # round — pre-action narration is not the answer.
                             output_text = ""
                         elif etype == "tool_result":
-                            _record_observation(observations, event)
+                            _record_observation(observations, event, pending_writes)
                             result_data = event.get("result", "")
                             budget_error = _spend(budget, result_data if isinstance(result_data, str) else "")
                             if budget_error:
@@ -810,7 +812,7 @@ class SubagentRunner:
                 "success": success,
                 "output": output_text,
                 "error": error,
-                "files_changed": self._extract_files_changed(output_text) if success else [],
+                "files_changed": written_paths(observations),
                 "iterations_used": engine_iterations,
                 "observations": observations,
                 "messages": session_dict.get("messages", []),
@@ -890,6 +892,7 @@ class SubagentRunner:
 
         output_text = ""
         observations: list[dict] = []
+        pending_writes: dict[str, list[str]] = {}
         engine_iterations = 0
         last_nonempty_round = ""
         saw_done = saw_fatal_error = False
@@ -924,6 +927,7 @@ class SubagentRunner:
                             )
                             break
                     elif etype == "tool_call":
+                        _note_call(pending_writes, event)
                         engine_iterations += 1
                         budget.record_tool_call()
                         name = event.get("name", "")
@@ -941,7 +945,7 @@ class SubagentRunner:
                         # round — pre-action narration is not the answer.
                         output_text = ""
                     elif etype == "tool_result":
-                        _record_observation(observations, event)
+                        _record_observation(observations, event, pending_writes)
                         result_data = event.get("result", "")
                         budget_error = _spend(budget, result_data if isinstance(result_data, str) else "")
                         if budget_error:
@@ -988,7 +992,7 @@ class SubagentRunner:
             "success": success,
             "output": output_text,
             "error": error,
-            "files_changed": self._extract_files_changed(output_text) if success else [],
+            "files_changed": written_paths(observations),
             "iterations_used": engine_iterations,
             "observations": observations,
             "messages": runtime_session.get("messages", []),
@@ -1314,100 +1318,7 @@ class SubagentRunner:
 
     @staticmethod
     def _extract_files_changed(text: str) -> list[str]:
-        """Best-effort extraction of file paths mentioned in output text.
+        """Paths a child's text names (a claim, not evidence; see `wisp.multi_agent.handback.claimed_files`)."""
+        from wisp.multi_agent.handback import claimed_files
 
-        Three-pass strategy:
-        1. Backtick-quoted tokens — highest confidence.
-        2. Structured multi-line list items after change-verb keywords.
-        3. Bare word tokens that look like plausible file paths.
-
-        Markdown decoration (**bold**, *italic*, _italic_) is stripped in a
-        pre-processing step so that surrounded paths are still found.
-        Paths are accepted if they contain a dot or a slash (covers
-        extensionless files like Makefile / Dockerfile).
-        """
-        import re
-
-        # ── Known-good extensions ────────────────────────────────────────
-        _EXT = (
-            r"py|ts|js|jsx|tsx|mjs|cjs|"
-            r"rs|go|java|rb|sh|bash|zsh|fish|"
-            r"c|cpp|cc|h|hpp|"
-            r"json|yaml|yml|toml|ini|cfg|conf|env|"
-            r"md|rst|txt|csv|"
-            r"html|css|scss|sass|"
-            r"sql|proto|"
-            r"dockerfile|makefile|gemfile|rakefile"
-        )
-        _EXT_RE = re.compile(rf"\.(?:{_EXT})$", re.IGNORECASE)
-
-        # ── Pre-strip markdown decoration (keep backticks for Pass 1) ───
-        clean = text
-        clean = re.sub(r"\*\*([^*\n]+)\*\*", r"\1", clean)   # **bold**
-        clean = re.sub(r"\*([^*\n]+)\*",     r"\1", clean)   # *italic*
-        clean = re.sub(r"(?<!\w)_([^_\n]+)_(?!\w)", r"\1", clean)  # _italic_
-
-        # ── Helpers ──────────────────────────────────────────────────────
-        def _clean_token(raw: str) -> str:
-            s = raw.strip()
-            s = re.sub(r"^[`*_\[(<\"']+|[`*_\])>\"']+$", "", s)
-            return s.strip()
-
-        def _is_plausible(s: str) -> bool:
-            if not s or len(s) < 2 or len(s) > 260:
-                return False
-            if "." not in s and "/" not in s:
-                return False
-            if re.search(r'[<>:"|?*\x00-\x1f]', s):
-                return False
-            if _EXT_RE.search(s):
-                return True
-            if "/" in s:
-                return True
-            basename = s.rsplit("/", 1)[-1].lower()
-            return basename in {
-                "makefile", "dockerfile", "gemfile", "rakefile",
-                "procfile", "vagrantfile", "jenkinsfile", "brewfile",
-            }
-
-        found: list[str] = []
-        seen: set[str] = set()
-
-        def _add(raw: str) -> None:
-            path = _clean_token(raw)
-            if path and path not in seen and _is_plausible(path):
-                seen.add(path)
-                found.append(path)
-
-        # ── Pass 1: backtick-quoted tokens (run on original text) ────────
-        for m in re.finditer(r"`([^`\n]{2,260})`", text):
-            _add(m.group(1))
-
-        # ── Pass 2: multi-line list blocks after change-verb keywords ────
-        # Capture everything after the colon/dash up to the next blank line
-        # or non-list line, then iterate over every bullet item inside.
-        verb_block_re = re.compile(
-            r"(?:changed|modified|touched|wrote|created|updated|deleted|removed)"
-            r"(?:\s+files?)?"
-            r"[:\-]"
-            r"((?:\s*\n\s*[-*•]\s+[^\n]+)+)",
-            re.IGNORECASE,
-        )
-        item_re = re.compile(r"[-*•]\s+([^\n]+)")
-        for block_m in verb_block_re.finditer(clean):
-            for item_m in item_re.finditer(block_m.group(1)):
-                _add(item_m.group(1))
-
-        # ── Pass 3: bare tokens with a known extension ───────────────────
-        bare_re = re.compile(
-            r"(?<![a-zA-Z0-9])"
-            r"((?:[a-zA-Z0-9_\-./]+/)?"
-            r"[a-zA-Z0-9_\-]+"
-            r"\.(?:" + _EXT + r"))"
-            r"(?![a-zA-Z0-9])",
-            re.IGNORECASE,
-        )
-        for m in bare_re.finditer(clean):
-            _add(m.group(1))
-
-        return found[:20]
+        return claimed_files(text)
