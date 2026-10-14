@@ -152,37 +152,6 @@ class TestAuditTrail:
 # ════════════════════════════════════════════════════════════════════════════
 
 
-def test_security_headers_smoke():
-    """Verify the middleware doesn't crash on a basic request."""
-    from fastapi import FastAPI
-    from starlette.middleware.base import BaseHTTPMiddleware
-    from starlette.requests import Request
-
-    class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-        async def dispatch(self, request: Request, call_next):
-            response = await call_next(request)
-            response.headers["X-Content-Type-Options"] = "nosniff"
-            return response
-
-    app = FastAPI()
-    app.add_middleware(SecurityHeadersMiddleware)
-
-    @app.get("/")
-    def read_root():
-        return {"status": "ok"}
-
-    from fastapi.testclient import TestClient
-    with TestClient(app) as client:
-        resp = client.get("/")
-        assert resp.status_code == 200
-        assert resp.headers.get("X-Content-Type-Options") == "nosniff"
-
-
-# ════════════════════════════════════════════════════════════════════════════
-#  7. Ollama URL Allowlist
-# ════════════════════════════════════════════════════════════════════════════
-
-
 class TestOllamaUrlValidation:
     """Verify _validate_ollama_url rejects SSRF targets."""
 
