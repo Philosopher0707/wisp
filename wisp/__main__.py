@@ -246,6 +246,9 @@ def cmd_print(prompt, model=None, session_id=None, output_format="json", quiet=F
     except Exception as e:
         result = {"ok": False, "error": str(e)}
         exit_code = 1
+    if not result.get("ok", False):
+        # A script reads `$?`: a run that failed (a provider error, an incomplete round) exits 1 (baseline D5).
+        exit_code = 1
 
     # Output
     if output_format == "stream-json":

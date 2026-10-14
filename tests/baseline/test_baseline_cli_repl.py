@@ -112,8 +112,7 @@ def test_b3_an_unverified_change_is_named_by_the_harness_not_the_model(home, ws)
         result["content"])
 
 
-@pytest.mark.xfail(strict=True, reason="known defect (baseline 2026-10-14): every withheld draft is kept in the answer")
-def test_b3_known_defect_a_withheld_draft_appears_once(home, ws):
+def test_b3_d1_fixed_a_withheld_draft_appears_once(home, ws):
     model = ScriptedModel({"claim": [
         ("tool", "edit_file", {"path": "calc.py", "old_text": "a - b", "new_text": "a + b"}),
         ("text", "Done. All tests pass."),
@@ -226,21 +225,23 @@ def test_b6_a_named_session_is_continued_with_its_history(home, ws):
     assert any("remember the word heron" in str(m.get("content")) for m in model.of("two")[-1]["messages"])
 
 
-@pytest.mark.xfail(strict=True, reason="known defect (baseline 2026-10-14): every --print run in a workspace "
-                                       "joins one stored session, 'headless'")
-def test_b6_known_defect_unrelated_print_runs_do_not_share_history(home, ws):
+def test_b6_d3_fixed_unrelated_print_runs_do_not_share_history(home, ws):
     model = ScriptedModel({"one": [("text", "noted")], "two": [("text", "ok")]})
     try:
         _print("BASELINE{one} my secret word is heron", home, ws, model)
         _print("BASELINE{two} an unrelated question", home, ws, model)
     finally:
         model.close()
-    seen = " ".join(str(m.get("content")) for m in model.of("two")[0]["messages"])
-    assert "heron" not in seen, "the second one-shot run was sent the first run's prompt"
+    messages = model.of("two")[0]["messages"]
+    conversation = " ".join(str(m.get("content")) for m in messages if m["role"] != "system")
+    assert "heron" not in conversation and not any(m["role"] == "assistant" for m in messages), (
+        "the second one-shot run carried the first run's conversation")
+    # By design, a new session's system prompt carries short summaries of recent sessions
+    # ("Previous Session Context", wisp.agent_memory); that is memory, not a shared conversation.
+    assert "## Previous Session Context" in messages[0]["content"]
 
 
-@pytest.mark.xfail(strict=True, reason="known defect (baseline 2026-10-14): --print reports iterations 0")
-def test_b6_known_defect_print_reports_the_iterations_it_ran(home, ws):
+def test_b6_d4_fixed_print_reports_the_iterations_it_ran(home, ws):
     model = ScriptedModel({"it": [("tool", "read_file", {"path": "calc.py"}), ("text", "read it")]})
     try:
         _, result = _print("BASELINE{it} read calc.py", home, ws, model)
@@ -284,3 +285,101 @@ def test_b8_with_the_full_profile_a_child_does_the_work_and_the_parent_gets_evid
     db = ws / ".wisp" / "wisp.db"
     rows = sqlite3.connect(db).execute("select status from agent_records").fetchall() if db.exists() else []
     assert rows, "the child has no agent record"
+
+
+# ── B9-B12. Provider failures end the run, bounded, with a reason ────────────────────────────
+
+def _failing(home, ws, scripts, fail, **env):
+    model = ScriptedModel(scripts, fail)
+    t0 = time.time()
+    try:
+        proc, result = _print("BASELINE{x} go", home, ws, model, **env)
+    finally:
+        model.close()
+    return proc, result, model, time.time() - t0
+
+
+def test_b9_out_of_credit_stops_at_once_and_says_why(home, ws):
+    proc, result, model, _ = _failing(home, ws, {"x": [("text", "never")]}, {"x": [402]})
+    assert result["ok"] is False and len(model.requests) == 1, "a billing refusal was retried"
+    assert "billing" in result["errors"][0]["message"] and "Retrying will fail" in result["errors"][0]["message"]
+
+
+def test_b10_a_rate_limit_is_retried_and_the_run_succeeds(home, ws):
+    _, result, model, _ = _failing(home, ws, {"x": [("text", "recovered")]}, {"x": [429]})
+    assert result["ok"] is True and result["content"] == "recovered"
+    assert [r.get("status") for r in model.requests] == [429, None]
+
+
+def test_b11_a_persistent_rate_limit_gives_up_bounded(home, ws):
+    _, result, model, secs = _failing(home, ws, {"x": [("text", "never")]}, {"x": [429] * 30})
+    assert result["ok"] is False and len(model.requests) == 3 and secs < 60
+    assert "HTTP 429" in result["errors"][0]["message"]
+
+
+def test_b12_a_stalled_stream_is_abandoned_bounded(home, ws):
+    _, result, model, secs = _failing(home, ws, {"x": [("hang", 120)]}, None, WISP_FIRST_TOKEN_DEADLINE="2",
+                                      WISP_CHUNK_DEADLINE="2", WISP_STREAM_ATTEMPTS="2")
+    assert result["ok"] is False and len(model.requests) == 2 and secs < 60
+    assert "no usable response" in result["errors"][0]["message"]
+
+
+def test_b12_d5_a_failed_print_run_exits_non_zero(home, ws):
+    """A script checks `$?`: a run that failed must not exit 0 (baseline D5, 2026-10-14)."""
+    proc, result, _, _ = _failing(home, ws, {"x": [("text", "never")]}, {"x": [402]})
+    assert result["ok"] is False and proc.returncode == 1
+
+
+# ── B13. Ctrl-C in the REPL cancels the turn, not the session ─────────────────────────────────
+
+def test_b13_ctrl_c_cancels_a_stalled_turn_and_the_repl_carries_on(home, ws):
+    model = ScriptedModel({"slow": [("hang", 120)], "after": [("text", "AFTER-OK")]})
+    pid, fd = _pty(home, ws, model)
+    try:
+        _read_until(fd, "wisp ❯".encode(), 60)
+        os.write(fd, b"BASELINE{slow} take your time\n")
+        time.sleep(3)
+        t0 = time.time()
+        os.write(fd, b"\x03")
+        back = _read_until(fd, "wisp ❯".encode(), 30)
+        assert "wisp ❯".encode() in back and time.time() - t0 < 15, back.decode(errors="replace")[-800:]
+        assert b"Turn interrupted" in back
+        os.write(fd, b"BASELINE{after} still there?\n")
+        assert b"AFTER-OK" in _read_until(fd, b"AFTER-OK", 30)
+        os.write(fd, b"exit\n")
+        end = time.time() + 10
+        while time.time() < end:
+            done, status = os.waitpid(pid, os.WNOHANG)
+            if done:
+                break
+            _read_until(fd, b"\x00", 0.5)
+        else:
+            raise AssertionError("the REPL did not exit within 10 s of `exit`")
+        assert os.waitstatus_to_exitcode(status) == 0
+    finally:
+        try:
+            os.kill(pid, 9)
+            os.waitpid(pid, 0)
+        except (OSError, ChildProcessError):
+            pass
+        os.close(fd)
+        model.close()
+
+
+# ── B14. A long session is compacted and keeps working ───────────────────────────────────────
+
+def test_b14_a_session_past_fifty_messages_is_compacted_and_continues(home, ws):
+    (ws / "a.txt").write_text("alpha\n")
+    model = ScriptedModel({"many": [("tool", "read_file", {"path": "a.txt"})] * 30 + [("text", "MANY-DONE")],
+                           "next": [("text", "NEXT-OK")]})
+    try:
+        _, first = _print("BASELINE{many} read a lot", home, ws, model)
+        proc = subprocess.run([*WISP, "-S", first["session_id"], "--print", "BASELINE{next} go on", "-w", str(ws)],
+                              cwd=ws, env=wisp_env(home, model), capture_output=True, text=True, timeout=TIMEOUT)
+    finally:
+        model.close()
+    second = json.loads(proc.stdout)
+    assert second["ok"] and second["content"] == "NEXT-OK"
+    sent = model.of("next")[0]["messages"]
+    assert len(sent) <= 50 and any(str(m.get("content")).startswith("[Compacted ") for m in sent), (
+        [str(m.get("content"))[:80] for m in sent[:3]])

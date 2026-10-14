@@ -76,7 +76,10 @@ class HeadlessTransport(Transport):
         Returns:
             Dict with keys: content, thinking, tool_calls, errors, iterations
         """
-        content_parts: list[str] = []
+        # The answer is the last round's text: a round the harness rejected is followed by a `system`
+        # event, and text before a tool call is narration. Each segment between those boundaries is
+        # one round's text; the last non-empty one is the answer (baseline D1, 2026-10-14).
+        segments: list[list[str]] = [[]]
         thinking_parts: list[str] = []
         tool_calls: list[dict] = []
         errors: list[dict] = []
@@ -84,8 +87,10 @@ class HeadlessTransport(Transport):
 
         for event in self.events:
             etype = event.get("type")
+            if etype in ("system", "tool_result") and segments[-1]:
+                segments.append([])
             if etype == "content":
-                content_parts.append(event.get("text", ""))
+                segments[-1].append(event.get("text", ""))
             elif etype == "thinking":
                 thinking_parts.append(event.get("text", ""))
             elif etype == "tool_call":
@@ -114,7 +119,7 @@ class HeadlessTransport(Transport):
             # Deltas concatenate with NO separator: some providers stream
             # per-character chunks, and "\n".join exploded them into one
             # char per line (live stealth/ox-alpha E2E, 2026-08-26).
-            "content": "".join(content_parts),
+            "content": "".join(next((s for s in reversed(segments) if "".join(s).strip()), [])),
             "thinking": "".join(thinking_parts),
             "tool_calls": tool_calls,
             "errors": errors,

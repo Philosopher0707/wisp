@@ -1006,7 +1006,7 @@ class WispAgentCore:
                                 session.get("workspace", "."))
                     except Exception:
                         logger.debug("Auto-skill capture failed", exc_info=True)
-                yield _flatten_event(done_event(session.get("id", "")))
+                yield _flatten_event(done_event(session.get("id", ""), turns=iteration + 1))
                 return
 
             # ── Execute tools and feed results back to messages ──
@@ -1229,7 +1229,7 @@ class WispAgentCore:
                 hint="raise `max_iterations` in config; the summary above "
                      "covers what was gathered before the budget ended",
             ))
-        yield _flatten_event(done_event(session.get("id", "")))
+        yield _flatten_event(done_event(session.get("id", ""), turns=max_iterations))
 
     async def _stream_events_async(
         self,

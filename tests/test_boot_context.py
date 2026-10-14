@@ -109,6 +109,21 @@ class TestPosture:
         assert BootContextAssembler(ws).sandbox_posture() in (
             "docker", "host-unconfined", "unknown")
 
+    def test_sandbox_off_is_reported_as_host_unconfined(self, ws, monkeypatch) -> None:
+        """WISP_SANDBOX=off runs every command on the host; the model must not be told it is in Docker
+        because a docker binary is installed (baseline 2026-10-14)."""
+        monkeypatch.setenv("WISP_SANDBOX", "off")
+        monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/docker")
+        assert BootContextAssembler(ws).sandbox_posture() == "host-unconfined"
+
+    def test_docker_without_a_checked_daemon_states_the_fallback(self, ws, monkeypatch) -> None:
+        """The daemon is not probed at boot (a 10 s `docker info`), so the line says what happens without it."""
+        monkeypatch.delenv("WISP_SANDBOX", raising=False)
+        monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/docker")
+        text = BootContextAssembler(ws).assemble().posture
+        line = next(l for l in text.splitlines() if l.startswith("- sandbox:"))
+        assert "host-unconfined" in line and "daemon" in line, line
+
 
 class TestMemoryBullets:
     def test_workspace_before_global_newest_first(self, ws, monkeypatch) -> None:
