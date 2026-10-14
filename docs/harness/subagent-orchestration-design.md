@@ -269,8 +269,59 @@ worse than the router, the hint stays and §3 is revised.
   is not needed. The tools check in S2 is the part of *reauthorize* that applies here.
 - `remote` isolation: out of scope.
 
-## 8. Open questions for the owner
+## 8. Decisions (2026-10-14), with the evidence behind each
 
-1. Spawn limit per session: 64 (the reference) or lower?
-2. S7's default: should the host router become a hint in the same release as `graph_run`, or after S8's numbers?
-3. Is a free OpenRouter model acceptable for S8, or should it use NVIDIA (the owner's daily model)?
+### 8.1 Spawns per session: 64, plus a duplicate guard
+
+Measured on the owner's own `.wisp/subagent_results.jsonl` files (counts only; sessions approximated
+by a 30-minute gap). Test runs were separated out: bursts of 39-78 children that used about 700
+tokens in total and repeated 4 tasks are test suites, not use.
+
+- Real sessions (over 20k tokens): 8 of them, with **5, 10, 14, 16, 17, 17, 30 and 33** children.
+- The largest real session, 33 children, spent **596,506 tokens** (about 18k per child). In it, **one
+  task ran 5 times and succeeded every time**; another ran 6 times, with one timeout among them.
+
+Decisions:
+- `max_spawns_per_session = 64` (`WISP_MAX_SPAWNS_PER_SESSION`). That is about twice the largest real
+  session. At about 18k tokens per child, 64 children are about 1.2M tokens, inside the 2M token
+  budget, so the two limits agree and the budget stays the cost control.
+- From 48 spawns (75%), each spawn result tells the model how many remain.
+- **Duplicate guard:** a spawn whose role and normalized task match a child that already
+  **succeeded** in this session returns that child's `agent_id` and result instead of running
+  again. This matters more than the count: the measured waste was repeats, not breadth. A failed or
+  timed-out child may still be retried.
+
+### 8.2 The host router becomes a hint in the same release as `graph_run`, gated by a decision eval
+
+Field evidence against the router taking turns:
+- O-2: an analysis prompt was routed to the graph;
+- AGENTS_LEARNING 2026-10-11: a multi-part prompt started a graph whose workers could not write;
+- O-3: Ctrl-C in the graph path killed the REPL (since fixed);
+- O-20: a REJECT verdict was shown under a success mark;
+- O-23: every correction cycle multiplies provider calls.
+
+The owner runs with `WISP_REPL_GRAPH` unset, so the router is live for them today.
+
+Decision: S7 ships `graph_run`, the ladder and the router-as-hint together. Its acceptance criterion
+is S8's **decision eval** (below): the default flips only if the model picks the right level at
+least as often as the router on the labelled set. If it does not, the PR ships `graph_run` with the
+router unchanged, and the gap is recorded. Rollback is one variable: `WISP_REPL_GRAPH=force`.
+
+### 8.3 S8 measures the decision on the owner's model, cheaply
+
+The choice is model-dependent, so evidence must come from the model the owner runs
+(`nvidia/nemotron-3-ultra-550b-a55b`). A full run per task is expensive: a measured graph turn used
+about 47k input tokens, and real children about 18k each. NVIDIA rate-limits too (HTTP 429 seen
+2026-10-13). So S8 has three layers:
+
+1. **Mechanics, no model:** the local SSE stub drives every level end to end. This runs in CI.
+2. **Decision eval, NVIDIA:** 20 labelled prompts (5 per level: do-it-yourself, spawn/fanout, DAG,
+   graph), taken from real session prompts. Each run stops at the model's **first** orchestration
+   call or first ordinary tool call; that call is the decision. That is about 20 requests per arm
+   instead of 20 full runs. Both arms run on the same prompts: the router's verdict, and the
+   model's choice with the ladder. 429s are retried with backoff and counted, not scored.
+3. **End-to-end spot check:** 4 tasks (one per level) run fully on NVIDIA, for cost and
+   correctness.
+
+A free OpenRouter model is used only to debug the eval harness (its upstream 429s made earlier
+results invalid evidence), never for the decision.
