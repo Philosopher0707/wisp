@@ -14,18 +14,22 @@ import os
 import re
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 _MARK = re.compile(r"BASELINE\{(\w+)\}")
 
-#: name -> actions. ("tool", name, args) or ("text", reply). Past the end, the last text repeats.
+#: name -> actions. ("tool", name, args), ("text", reply), or ("hang", seconds): send the response
+#: headers, then nothing (a stalled stream). Past the end, the last text repeats.
 Scripts = dict[str, list[tuple]]
 
 
 class ScriptedModel:
-    def __init__(self, scripts: Scripts):
+    def __init__(self, scripts: Scripts, fail_first: dict[str, list[int]] | None = None):
         self.scripts = scripts
+        #: name -> HTTP statuses returned, in order, before the script answers (a 402, a 429, a 503).
+        self.fail_first = {k: list(v) for k, v in (fail_first or {}).items()}
         self.requests: list[dict] = []
         model = self
 
@@ -48,6 +52,19 @@ class ScriptedModel:
                 step = sum(1 for m in msgs[start + 1:] if m.get("role") == "tool")
                 tools = sorted(t["function"]["name"] for t in body.get("tools") or [])
                 model.requests.append({"script": name, "step": step, "tools": tools, "messages": msgs})
+                failures = model.fail_first.get(name)
+                if failures:
+                    code = failures.pop(0)
+                    model.requests[-1]["status"] = code
+                    data = json.dumps({"error": {"message": f"scripted HTTP {code}", "code": code}}).encode()
+                    self.send_response(code)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(data)))
+                    if code == 429:
+                        self.send_header("Retry-After", "1")
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
                 script = model.scripts.get(name, [("text", f"no script {name}")])
                 action = script[step] if step < len(script) else script[-1]
                 if action[0] == "tool" and step >= len(script):
@@ -55,6 +72,10 @@ class ScriptedModel:
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.end_headers()
+                if action[0] == "hang":
+                    self.wfile.flush()
+                    time.sleep(action[1])
+                    return
                 if action[0] == "tool":
                     self._send({"tool_calls": [{"index": 0, "id": f"call_{name}_{step}", "type": "function",
                                                 "function": {"name": action[1], "arguments": json.dumps(action[2])}}]})
