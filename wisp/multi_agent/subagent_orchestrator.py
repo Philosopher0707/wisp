@@ -429,6 +429,13 @@ class SubagentOrchestrator:
         self._live_tasks: set[asyncio.Task[Any]] = set()
         # One durable record per child (design S1); set by the composition root.
         self.agent_registry: agent_records.AgentRegistry | None = None
+        # Design S2: spawns per top-level session, and the tasks that already succeeded in it.
+        # In-process, keyed by the root session id ("" outside a turn); both bounded.
+        configured = getattr(self.config, "max_spawns_per_session", None)
+        self._max_spawns = configured if isinstance(configured, int) and not isinstance(configured, bool) \
+            and configured > 0 else 64
+        self._spawns: dict[str, int] = {}
+        self._succeeded: dict[tuple[str, str, str], SubagentResult] = {}
 
     def _spawn_tracked(self, coro: Coroutine[Any, Any, Any]) -> asyncio.Task[Any]:
         task = asyncio.ensure_future(coro)
@@ -739,7 +746,9 @@ class SubagentOrchestrator:
             result = SubagentResult(
                 task_id=contract.name,
                 success=False,
-                output=f"[DEPTH LIMIT EXCEEDED] Max subagent depth is {self._max_depth}",
+                output=(f"[DEPTH LIMIT EXCEEDED] Subagent nesting limit reached (depth "
+                        f"{contract._subagent_depth} of {self._max_depth}). Do the work yourself with "
+                        f"your own tools. Do not retry."),
                 error=f"Subagent depth {contract._subagent_depth} exceeds max {self._max_depth}",
                 elapsed_seconds=0.0,
             )
@@ -758,6 +767,13 @@ class SubagentOrchestrator:
             )
             return await self._refused(contract, record, "role", result)
         contract = self._with_role_tools(contract)
+        wider = self._tools_outside_role(contract)
+        if wider:
+            message = (f"role {contract.role} does not allow {', '.join(wider)}; spawn with the role's "
+                       f"tools, or pick a role that has them. Do not retry unchanged.")
+            return await self._refused(contract, record, "tools", SubagentResult(
+                task_id=contract.name, success=False, output=f"[TOOLS NOT ALLOWED] {message}",
+                error=message, elapsed_seconds=0.0))
 
         # ── Contract validation ────────────────────────────────────────
         if contract.timeout_seconds <= 0:
@@ -795,6 +811,20 @@ class SubagentOrchestrator:
         if cached is not None:
             await self._fire_subagent_hook("subagent_complete", contract, cached)
             return cached
+
+        # ── Duplicate guard (design S2) ────────────────────────────────
+        # A caller that opts out of reuse (`cache=False`: a graph's correction run) or asks for
+        # independent samples (a vote) gets a fresh run.
+        independent = (not contract.cache
+                       or bool((getattr(contract, "metadata", None) or {}).get("_independent")))
+        done = None if independent else self._succeeded.get(self._task_key(contract))
+        if done is not None:
+            again = dataclasses.replace(done, output=(
+                f"[ALREADY DONE] {done.agent_id or done.task_id} ran this task successfully earlier in "
+                f"this session; its result follows. Use it instead of spawning the same task again.\n"
+                f"{done.output}"))
+            await self._fire_subagent_hook("subagent_complete", contract, again)
+            return again
 
         # ── Token budget check (admission gate) ────────────────────────
         # Refuse when exhausted OR when the remaining headroom cannot
@@ -847,6 +877,28 @@ class SubagentOrchestrator:
 
             # ── System prompt ──────────────────────────────────────
             system = contract.system_prompt or self._default_system_prompt(contract)
+
+            # ── Spawn limit and ancestor wait (design S2) ──────────
+            # No await between these checks and the acquire below, so a slot seen free is taken.
+            session = _exec_ctx.root_session_id.get() or ""
+            spawned = self._spawns.get(session, 0)
+            if spawned >= self._max_spawns:
+                message = (f"spawn limit reached ({spawned} of {self._max_spawns} this session). Finish the "
+                           f"work with your own tools or the results you have. Do not retry; the user can "
+                           f"raise WISP_MAX_SPAWNS_PER_SESSION.")
+                return await self._refused(contract, record, "spawn_limit", SubagentResult(
+                    task_id=contract.name, success=False, output=f"[SPAWN LIMIT] {message}",
+                    error=message, elapsed_seconds=0.0))
+            if _exec_ctx.current_agent_id.get() is not None and self._semaphore.locked():
+                # A child waiting for a slot can wait on its own ancestors, which hold the slots until
+                # it returns: the deadlock seen in PR #146.
+                message = (f"concurrent subagent limit reached ({self._pool_size} running, your own parents "
+                           f"among them). Do the work yourself. Do not retry.")
+                return await self._refused(contract, record, "concurrency", SubagentResult(
+                    task_id=contract.name, success=False, output=f"[CONCURRENCY LIMIT] {message}",
+                    error=message, elapsed_seconds=0.0))
+            self._spawns[session] = spawned + 1
+            self._bound(self._spawns)
 
             # ── Run with concurrency control ───────────────────────
             async with self._semaphore:
@@ -960,6 +1012,14 @@ class SubagentOrchestrator:
             finished = True
             if result is own:
                 result.agent_id = record.agent_id
+                if result.success and contract.cache:
+                    self._succeeded[self._task_key(contract)] = result
+                    self._bound(self._succeeded)
+                if result.success:
+                    used = self._spawns.get(session, 0)
+                    if used * 4 >= self._max_spawns * 3:
+                        result.output = (f"{result.output}\n[spawns: {used} of {self._max_spawns} used this "
+                                         f"session]")
             return result
         except BaseException as exc:
             if started and not finished and self.agent_registry is not None:
@@ -1424,7 +1484,7 @@ class SubagentOrchestrator:
 
     def _new_agent_record(self, contract: SubagentContract) -> agent_records.AgentRecord:
         """This attempt's record, linked to the agent whose turn is running and its session."""
-        from ._runner import _effective_child_tools, _extension_tool_names
+        from ._runner import _effective_child_tools, _extension_tool_names, child_may_spawn
 
         tools = contract.tools
         if contract.role in ROLE_CONFIGS:
@@ -1433,7 +1493,8 @@ class SubagentOrchestrator:
         metadata = getattr(contract, "metadata", None) or {}
         try:
             effective = tuple(_effective_child_tools(
-                tools, mode, _extension_tool_names(getattr(self._runner, "_agent_runtime", None))))
+                tools, mode, _extension_tool_names(getattr(self._runner, "_agent_runtime", None)),
+                can_spawn=child_may_spawn(int(contract._subagent_depth or 0), self._max_depth)))
         except Exception:
             # Recording must never stop a child; the record then lists what was asked for.
             logger.debug("could not resolve %s's effective tools for its record", contract.name, exc_info=True)
@@ -1474,6 +1535,23 @@ class SubagentOrchestrator:
         self.agent_registry.finish(
             record.agent_id, status, error=error, tokens_used=own.tokens_used,
             iterations=own.iterations_used, files_changed=own.files_changed or (), worktree=isolated)
+
+    @staticmethod
+    def _task_key(contract: SubagentContract) -> tuple[str, str, str]:
+        return (_exec_ctx.root_session_id.get() or "", contract.role, " ".join(str(contract.task).lower().split()))
+
+    @staticmethod
+    def _bound(table: dict[Any, Any], cap: int = 1000) -> None:
+        while len(table) > cap:
+            table.pop(next(iter(table)))
+
+    @staticmethod
+    def _tools_outside_role(contract: SubagentContract) -> list[str]:
+        """Requested tools the role does not allow (design S2: a spawn may narrow its role, never widen it)."""
+        role_tools = {str(t) for t in ROLE_CONFIGS[contract.role].allowed_tools}
+        if "all" in {t.lower() for t in role_tools}:
+            return []
+        return sorted({str(t) for t in contract.tools or []} - role_tools - {"all"})
 
     @staticmethod
     def _with_role_tools(contract: SubagentContract) -> SubagentContract:
@@ -1631,6 +1709,9 @@ class SubagentOrchestrator:
                 contract.name)
 
         result.error = f"Schema validation failed: {'; '.join(errors)}"
+        # Whoever declared a schema asked for that structure; text without it is not the asked-for
+        # result (design §4.3, owner's decision 2026-10-14). The text is kept on the result.
+        result.success = False
         return result
 
     async def _fire_subagent_hook(

@@ -75,6 +75,8 @@ class _Stub:
                     self._tool("read_file", {"path": "README.md"}, f"call_{n}")
                 elif kind == "write" and not answered:
                     self._tool("write_file", {"path": arg, "content": "child wrote this\n"}, "call_1")
+                elif kind == "json":
+                    self._text(json.dumps({"verdict": "ok"} if arg == "good" else {"other": 1}))
                 else:
                     self._text(f"ANSWER {kind} {arg}")
 
@@ -171,11 +173,15 @@ class TestDepthLimit:
     def test_a_grandchild_is_stamped_deeper_and_refused_at_the_limit(self, tmp_path, monkeypatch):
         """Every descendant was stamped depth 1 (the parent core's config), so the limit never
         fired; recursion stopped only when the 4-slot pool was full of ancestors waiting on their
-        children, a deadlock that held until the contract's timeout."""
+        children, a deadlock that held until the contract's timeout.
+
+        Since design S2 the last level is not offered `spawn` at all (layer 1), so with a limit of 3
+        the chain is 0, 1, 2 and stops there; the spawn-time refusal (layer 2) has its own test in
+        `tests/test_subagent_control.py`."""
         import time
 
         monkeypatch.setenv("WISP_TOOL_PROFILE", "full")
-        root, stub, _ = _wire(tmp_path, monkeypatch, permission_mode="full")
+        root, stub, _ = _wire(tmp_path, monkeypatch, permission_mode="full", max_subagent_depth=3)
         orch = root.subagent_orchestrator
         depths: list[int] = []
         run = orch.run
@@ -190,8 +196,9 @@ class TestDepthLimit:
         finally:
             stub.server.shutdown()
             stub.server.server_close()
-        assert depths[:3] == [0, 1, 2], depths
-        assert max(depths) <= root.config.max_subagent_depth, depths
+        assert depths == [0, 1, 2], depths
+        firsts = [r for r in stub.of("recurse") if not r["tool_results"]]  # each agent's opening request, by depth
+        assert ["spawn" in r["tools"] for r in firsts] == [True, True, False], "only the last level loses spawn"
         assert time.monotonic() - started < 20, "the spawn chain hung instead of being refused"
         assert r.success, r.output
 

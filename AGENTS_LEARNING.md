@@ -972,3 +972,15 @@ Slice S1 of `docs/harness/subagent-orchestration-design.md`. A child's trace use
 4. **Observability must never fail the observed.** The first version read `self._runner._agent_runtime`; `test_dag_cancel` swaps in a fake runner without it, and the child died of an `AttributeError` in record-keeping. Record creation now falls back instead of raising, and registry writes log and continue (ADR-0004).
 5. **A pin test with a window lets a pin drift.** The `durable_runs` pin named a docstring line on `main`; the test accepts any of 5 lines around the pin, so it passed. Re-anchored to the read.
 - Evidence: 13 red-first tests through the composition root and the local SSE stub; 10/10 mutation probes caught; gate 3878 passed.
+
+## Every subagent limit checked twice; a refusal says what to do; the same task does not run twice (2026-10-14)
+
+Slice S2 of `docs/harness/subagent-orchestration-design.md`.
+
+1. **Remove the verb, then refuse at spawn.** A child at `depth + 1 >= max_subagent_depth` is no longer offered `spawn`, `fanout`, `spawn_background`, `subagent_send` or `orchestrate_*` (`_runner.SPAWNING_TOOLS`); `orchestrator.run` still refuses at spawn time. Tests of depth propagation now need a limit of 3 to see `0, 1, 2`: with layer 1 the last level never tries.
+2. **A child must not queue behind its ancestors.** With the pool full, a top-level caller may wait, but a child is refused (`concurrency`, "Do not retry"): its ancestors hold the slots until it returns.
+3. **The measured waste was repeats, not breadth.** The owner's largest real session ran one task 5 times after it succeeded. A task (role + normalized text) that succeeded in this session is answered with the earlier result (`[ALREADY DONE]`). Callers that ask for fresh runs keep them: `cache=False` (a graph's correction cycle; five `test_graph_node_data` tests caught the first version, which ignored it) and votes, now marked `_independent`. The spawn limit (64, `WISP_MAX_SPAWNS_PER_SESSION`) is a backstop; from 75% each result shows the count.
+4. **Requested tools may narrow a role, never widen it.** `tools` outside the role's list is refused (`tools`), not silently narrowed.
+5. **A failed schema is a failed child.** The `spawn` tool returned `"ok": true` beside "Schema validation failed". `test_run_schema_validation_failure_no_retry` pinned the old behaviour and was changed with the reason in it.
+6. **New code meets old objects.** Two tests build orchestrators and runners without `__init__` or with a `MagicMock` config (`int(MagicMock()) == 1`, so the spawn limit became 1). Read new attributes with `getattr` and accept only real ints.
+- Evidence: 13 red-first tests (7 failed on `main`, 5 controls passed); 16/16 mutation probes caught; gate 4034 passed.

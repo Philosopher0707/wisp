@@ -152,7 +152,10 @@ async def run_vote(
 
     voting_contracts = []
     for agent in agents:
-        c = SubagentContract(**{**agent.__dict__, "task": task})
+        # Votes are independent samples of the same question: the duplicate guard must not answer
+        # the second voter with the first one's result.
+        metadata = {**(getattr(agent, "metadata", None) or {}), "_independent": True}
+        c = SubagentContract(**{**agent.__dict__, "task": task, "metadata": metadata})
         voting_contracts.append(c)
 
     results = await orchestrator.run_parallel(voting_contracts, max_concurrent)

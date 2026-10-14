@@ -24,8 +24,22 @@ from .observations import record as _record_observation
 from .task import EventKind, OrchestratorEvent, SubagentContract, SubagentResult
 
 
+#: Tools that create (or re-run) a subagent. A child that may not nest deeper is not offered them
+#: (design S2, layer 1); `SubagentOrchestrator.run` still refuses at spawn time (layer 2).
+SPAWNING_TOOLS = frozenset({
+    "spawn", "fanout", "spawn_background", "subagent_send",
+    "orchestrate_vote", "orchestrate_map_reduce", "orchestrate_chain", "orchestrate_dag",
+})
+
+
+def child_may_spawn(depth: int, max_depth: int) -> bool:
+    """A child at ``depth`` spawns at ``depth + 1``, which the orchestrator refuses at ``max_depth``."""
+    return depth + 1 < max_depth
+
+
 def _effective_child_tools(
-    contract_tools: list[str] | None, permission_mode: str, extension_tools: Iterable[str] = ()
+    contract_tools: list[str] | None, permission_mode: str, extension_tools: Iterable[str] = (),
+    can_spawn: bool = True,
 ) -> list[str]:
     """Advertise only tools the child's inherited mode can execute.
 
@@ -50,7 +64,8 @@ def _effective_child_tools(
             s.get("function", {}).get("name", "") for s in TOOL_SCHEMAS
         ]
         requested += sorted(inherited_extension_tools(permission_mode, extension_tools) - set(requested))
-    return filter_allowed_for_mode(permission_mode, requested)
+    allowed = filter_allowed_for_mode(permission_mode, requested)
+    return allowed if can_spawn else [t for t in allowed if t not in SPAWNING_TOOLS]
 
 
 def _extension_tool_names(runtime: Any) -> list[str]:
@@ -357,7 +372,8 @@ class SubagentRunner:
                 getattr(child_cfg, "permission_mode", "auto_edit") or "auto_edit"
             )
             _start_capabilities = _effective_child_tools(
-                contract.tools, _start_mode, _extension_tool_names(self._agent_runtime))
+                contract.tools, _start_mode, _extension_tool_names(self._agent_runtime),
+                can_spawn=self._may_spawn(contract))
             _start_unbounded = _start_mode.strip().lower() == "full"
             await self._emit(
                 progress_callback,
@@ -623,6 +639,7 @@ class SubagentRunner:
             _effective = _effective_child_tools(
                 contract.tools,
                 str(getattr(config, "permission_mode", "auto_edit") or "auto_edit"),
+                can_spawn=self._may_spawn(contract),
             )
             session_dict["allowed_tools"] = _effective
             # The child's authorization identity (migration M15). `allowed_tools`
@@ -838,6 +855,7 @@ class SubagentRunner:
             contract.tools,
             str(getattr(config, "permission_mode", "auto_edit") or "auto_edit"),
             _extension_tool_names(self._agent_runtime),
+            can_spawn=self._may_spawn(contract),
         )
         session_dict["allowed_tools"] = _effective
         session_dict["principal"] = self._child_principal(contract, _effective)
@@ -1054,6 +1072,11 @@ class SubagentRunner:
         except Exception:
             logger.debug("could not resolve the parent's unset model for a child", exc_info=True)
             return ""
+
+    def _may_spawn(self, contract: SubagentContract) -> bool:
+        max_depth = getattr(getattr(self, "parent_config", None), "max_subagent_depth", 2)
+        return child_may_spawn(int(getattr(contract, "_subagent_depth", 0) or 0),
+                               max_depth if isinstance(max_depth, int) else 2)
 
     def _build_child_config(self, contract: SubagentContract, workspace: str) -> WispConfig:
         """Clone the parent config with optional per-subagent overrides."""
