@@ -55,26 +55,16 @@ def _py_files() -> list[Path]:
 # ── 1. Who consults the authority layer ─────────────────────────────────
 
 
-#: Modules that call `authorize()` and must keep doing so. All three are real
+#: Modules that call `authorize()` and must keep doing so. Both are real
 #: enforcement points:
 #:
 #: * `wisp/tool_executor.py` — the agent's turn path.
 #: * `wisp/tools/registry.py` — the direct registry entry (the third approval
 #:   model, `registry.py:951`).
-#: * `wisp/server/deps.py` — **the REST gate**, added by **ADR-0059**. It is
-#:   deliberate, and the reason is measured: ADR-0058 wired an organization
-#:   policy into the agent path, and a bundle denying an agent tool name was
-#:   then enforced there and silently unenforced on REST — **11 of 36 (route,
-#:   mode) pairs diverged**. `require_tool_allowed` now consults the M2
-#:   authority for its **denial** verdict only (never `approval_required`, which
-#:   is where the two models disagree and where honouring it would 403 the
-#:   shipped client with no bundle at all). It reads the composition root's
-#:   single loaded policy, so this is a second *reader*, not a second opinion —
-#:   one authority, one load site (ADR-0006), three consumers.
+#: (`wisp/server/deps.py`, the REST gate of ADR-0059, was the third; it was removed in M0.)
 AUTHORITY_CONSUMERS = {
     "wisp/tool_executor.py",
     "wisp/tools/registry.py",
-    "wisp/server/deps.py",
 }
 
 

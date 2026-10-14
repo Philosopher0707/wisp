@@ -11,7 +11,6 @@ Covers:
 
 import tempfile
 import threading
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -169,26 +168,6 @@ class TestGlobalShutdown:
 # ──────────────────────────────────────────────────────────────────────────────
 # 5. Server endpoint usage (integration-like)
 # ──────────────────────────────────────────────────────────────────────────────
-
-
-class TestServerEndpointUsage:
-    """FastAPI endpoints must call get_lsp_manager, not new LSPManager()."""
-
-    @pytest.mark.parametrize("router_file", [
-        "wisp/server/routes/diagnostics.py",
-        "wisp/server/routes/suggestions.py",
-    ])
-    def test_endpoints_use_singleton_source(self, router_file):
-        """Read the router source and assert it imports get_lsp_manager."""
-        router_py = Path(__file__).resolve().parent.parent / router_file
-        assert router_py.exists(), f"{router_file} must exist"
-        source = router_py.read_text()
-        assert "get_lsp_manager" in source, (
-            f"{router_file} must import get_lsp_manager to avoid per-request leaks"
-        )
-        assert "LSPManager(str(WORKSPACE_ROOT))" not in source, (
-            f"{router_file} must NOT instantiate LSPManager per-request"
-        )
 
 
 if __name__ == "__main__":

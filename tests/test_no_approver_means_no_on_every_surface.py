@@ -15,7 +15,6 @@ Held here by driving the production executor, not by restating its logic: for ev
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
 
 import pytest
 
@@ -69,56 +68,6 @@ def test_the_table_is_not_vacuous():
     """Both answers must occur, or the equality above could hold trivially."""
     answers = {approval_needed(_cfg(m, a), t) for m in MODES for a in (False, True) for t in TOOLS}
     assert answers == {True, False}
-
-
-# ── the REST gate ────────────────────────────────────────────────────────────
-
-class _Request:
-    """The minimum `request_policy` and the gate read: app.state.root.config."""
-
-    def __init__(self, mode: str, auto_approve: bool):
-        cfg = SimpleNamespace(permission_mode=mode, auto_approve=auto_approve)
-        self.app = SimpleNamespace(state=SimpleNamespace(root=SimpleNamespace(config=cfg)))
-
-
-def _rest(action: str, mode: str, auto_approve: bool, ws) -> str:
-    from fastapi import HTTPException
-
-    from wisp.server.deps import require_tool_allowed
-
-    try:
-        require_tool_allowed(_Request(mode, auto_approve), action, {"path": "a.py"}, str(ws))
-        return "ALLOW"
-    except HTTPException as exc:
-        return exc.detail
-
-
-@pytest.mark.parametrize("action", ["write_file", "edit_file"])
-def test_rest_denies_a_gated_write_when_nobody_authorised_it(action, tmp_path):
-    detail = _rest(action, "auto_edit", False, tmp_path)
-    assert detail != "ALLOW"
-    assert "no approver is present over REST" in detail and "auto_approve" in detail and "full" in detail
-
-
-@pytest.mark.parametrize("action", ["write_file", "edit_file"])
-def test_rest_allows_it_when_the_server_authorised_it(action, tmp_path):
-    assert _rest(action, "auto_edit", True, tmp_path) == "ALLOW"
-    assert _rest(action, "full", False, tmp_path) == "ALLOW"
-
-
-def test_rest_reads_are_unaffected(tmp_path):
-    assert _rest("read_file", "auto_edit", False, tmp_path) == "ALLOW"
-
-
-def test_the_two_surfaces_agree_on_every_pair(tmp_path):
-    """The property parity exists for, over the same grid the predicate is checked on."""
-    ws = tmp_path
-    for mode in ("full", "auto_edit", "ask_all"):
-        for auto_approve in (False, True):
-            for tool in ("write_file", "edit_file", "read_file"):
-                agent_denies = _executor_asked_for_an_approver(tool, mode, auto_approve, tmp_path)
-                rest_denies = _rest(tool, mode, auto_approve, ws) != "ALLOW"
-                assert agent_denies == rest_denies, (tool, mode, auto_approve, agent_denies, rest_denies)
 
 
 # ── an independent statement of the rule (the executor now calls the same function, so comparing the two

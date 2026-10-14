@@ -98,25 +98,6 @@ def test_the_timeout_delta_is_real():
     assert openrouter_timeout > catalog_default
 
 
-# ── Precondition 3: the degradation seam is the catalog's, not the route's
-
-def test_the_route_has_its_own_degradation_guard():
-    """Why delegating would weaken `test_server_blocking_routes` rather than
-    break it: the route catches anything, so the test keeps passing while its
-    monkeypatch stops controlling the failure."""
-    src = (REPO / "wisp/server/routes/models.py").read_text(encoding="utf-8")
-    assert "except Exception:" in src
-    assert "models = []" in src
-
-
-def test_the_existing_degradation_test_still_patches_the_catalog_seam():
-    """If this seam moves, that test must be repointed — otherwise it silently
-    stops exercising the failure path."""
-    src = (REPO / "tests/test_server_blocking_routes.py").read_text(encoding="utf-8")
-    assert "wisp.provider_catalog._authed_get" in src, (
-        "the degradation test no longer patches the catalog seam; if the "
-        "catalog now delegates, repoint it at the provider's list_models"
-    )
 
 
 # ── The one thing that IS required today ─────────────────────────────

@@ -23,9 +23,10 @@ import sys
 REPO = pathlib.Path(__file__).resolve().parents[1]
 OUT = REPO / "CURRENT_FLAGS.md"
 
-#: The three switches read from `os.environ` that are **not** `WispConfig` fields. Each is a
-#: rollback flag by ADR-0002's purpose and a deviation from its *shape* — see §(a).
-ENV_ONLY = ("criteria_strict_derivation", "criteria_structured_declaration", "ws_auto_approve")
+#: The two switches read from `os.environ` that are **not** `WispConfig` fields. Each is a
+#: rollback flag by ADR-0002's purpose and a deviation from its *shape* — see §(a). (A third,
+#: `ws_auto_approve`, went with the WebSocket transport in M0, 2026-10-14.)
+ENV_ONLY = ("criteria_strict_derivation", "criteria_structured_declaration")
 
 #: `(name, env, default, read_at, gates, depends_on, adr, tripwire)`.
 #:
@@ -33,14 +34,14 @@ ENV_ONLY = ("criteria_strict_derivation", "criteria_structured_declaration", "ws
 #: claim and the schema is the authority, so a disagreement fails the derivation.
 ROWS: list[tuple[str, str, str, str, str, str, str, str]] = [
     # ── P0's three (ADR-0002), the flags the convention was written for ─────
-    ("durable_runs", "WISP_DURABLE_RUNS", "ON", "`wisp/composition.py:359`",
+    ("durable_runs", "WISP_DURABLE_RUNS", "ON", "`wisp/composition.py:348`",
      "persist a durable `RunRecord` per turn and give `BackgroundAgentManager` its SQLite store",
      "—", "ADR-0002", "—"),
     ("session_event_fidelity", "WISP_SESSION_EVENT_FIDELITY", "ON", "`wisp/core/runtime.py:658`",
      "journal `assistant_message` / `tool_call` / `tool_result` so replay can reconstruct a turn",
      "—", "ADR-0002", "—"),
     ("turn_spans", "WISP_TURN_SPANS", "ON",
-     "`wisp/composition.py:379`, `wisp/core/runtime.py:1449`",
+     "`wisp/composition.py:368`, `wisp/core/runtime.py:1449`",
      "emit a trace span per turn and per tool call", "—", "ADR-0002", "—"),
 
     # ── P1–P4 ───────────────────────────────────────────────────────────────
@@ -81,11 +82,6 @@ ROWS: list[tuple[str, str, str, str, str, str, str, str]] = [
      "**turn_criteria_source** — with the source off there are no declared criteria in the set",
      "ADR-0054", "tests/reliability/test_acceptance_gate_enablement.py"),
 
-    # ── The REST and WebSocket approval flags ───────────────────────────────
-    ("rest_approval", "WISP_REST_APPROVAL", "OFF", "`wisp/server/deps.py:595`",
-     "route a REST request for an executable-config action through the WebSocket channel for a human decision",
-     "—", "ADR-0057", "tests/reliability/test_rest_approval.py"),
-
     # ── The verification loop ───────────────────────────────────────────────
     ("verification_loop", "WISP_VERIFICATION_LOOP", "ON",
      "`wisp/core/stateless.py:546`, `wisp/core/stateless.py:1468`",
@@ -105,9 +101,6 @@ ROWS: list[tuple[str, str, str, str, str, str, str, str]] = [
      "it cannot use rather than reinterpreting it. Read by `_structured_declaration_enabled()` "
      "(`wisp/autonomous.py:82-84`)",
      "—", "ADR-0050", "tests/reliability/test_structured_criteria.py"),
-    ("ws_auto_approve", "WISP_WS_AUTO_APPROVE", "OFF", "`wisp/transport/websocket.py:127`",
-     "auto-approve a WebSocket approval request with no client connected — the one explicit opt-in",
-     "—", "ADR-0057", "tests/reliability/test_external_input_path.py"),
 
     # ── Knobs: bool settings that configure rendering, prompting or a provider ──
     ("auto_approve", "WISP_AUTO_APPROVE", "OFF", "—",
@@ -157,12 +150,6 @@ INTERACTIONS: list[tuple[str, str, str, str]] = [
      "**Adjacent, not coupled.** P0's fidelity flag decides *what* is journaled; P1's journal "
      "flag decides *when* (per exchange, or once at turn end).",
      "ADR-0010"),
-    ("rest_approval", "ws_auto_approve",
-     "**The same channel, two flags.** `rest_approval` decides whether a REST action asks a "
-     "human; `ws_auto_approve` decides what the agent path does when *no* client is connected. "
-     "They compose — a REST request with no client is denied (ADR-0057), and the agent path's "
-     "opt-in does not reach it.",
-     "ADR-0057"),
 ]
 
 
@@ -302,9 +289,9 @@ def render() -> str:
     A("**Measured departures.** Three, all recorded and none repaired — repairing any of them is")
     A("a decision, and this page introduces none.")
     A("")
-    A("1. **Three rollback flags are read from `os.environ` directly, not via `getattr(config, …)`.**")
+    A("1. **Two rollback flags are read from `os.environ` directly, not via `getattr(config, …)`.**")
     A("   `criteria_strict_derivation` and `criteria_structured_declaration`")
-    A("   (`wisp/autonomous.py:71-84`) and `ws_auto_approve` (`wisp/transport/websocket.py:127`)")
+    A("   (`wisp/autonomous.py:71-84`)")
     A("   are **not `WispConfig` fields at all** — they are resolved by `_env_truthy()` /")
     A("   `os.environ.get()`. They are therefore **invisible to `config.py`, to `wisp doctor`,")
     A("   and to any consumer that reads a config object.** Each one's docstring says the choice")
@@ -314,7 +301,7 @@ def render() -> str:
     A("   apply to them, and a test double cannot opt out by setting an attribute.")
     A("2. **`verification_loop` has two consumption sites on the turn path**")
     A("   (`wisp/core/stateless.py:546` and `:1468`) and `turn_spans` has two")
-    A("   (`wisp/composition.py:379`, `wisp/core/runtime.py:1449`). ADR-0002 says *\"read at the")
+    A("   (`wisp/composition.py:368`, `wisp/core/runtime.py:1449`). ADR-0002 says *\"read at the")
     A("   consumption site\"* — **plural sites are consistent with the rule**, so this is")
     A("   recorded as a fact rather than a violation. It is worth stating because the brief for")
     A("   this mission paraphrases the rule as *\"read once, at the composition point\"*, which")

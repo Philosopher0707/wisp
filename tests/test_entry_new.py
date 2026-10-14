@@ -53,8 +53,3 @@ class TestNewEntryPoint:
                 run_mode("cli", "test prompt")
                 mock_transport_class.assert_called_once()
 
-    def test_server_mode_runs_server_main(self):
-        from wisp.entry import run_mode
-        with patch("wisp.entry._run_server") as mock_run_server:
-            run_mode("server")
-            mock_run_server.assert_called_once_with()

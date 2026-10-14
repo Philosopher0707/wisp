@@ -9,7 +9,6 @@ Run with:  pytest tests/test_security_integration.py -v
 
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -30,26 +29,6 @@ class _FakeRequest:
 # ════════════════════════════════════════════════════════════════════════════
 #  1. Rate Limiting
 # ════════════════════════════════════════════════════════════════════════════
-
-
-class TestRateLimiting:
-    """Verify RATE_LIMITER is wired to all state-changing endpoints."""
-
-    def test_rate_limiter_imported_by_routes(self):
-        """Every endpoint module that was flagged in the audit imports RATE_LIMITER."""
-        from wisp.server import routes
-
-        required = [
-            "arena", "context", "diagnostics", "hooks", "models",
-            "prompt", "search", "git", "diff",
-        ]
-        for name in required:
-            mod = getattr(routes, name, None)
-            if mod is None:
-                pytest.skip(f"{name} router not available")
-                continue
-            source = Path(mod.__file__).read_text()
-            assert "RATE_LIMITER" in source, f"{name} missing RATE_LIMITER import"
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -80,13 +59,6 @@ class TestTransportApprovals:
         result = await transport.approve({"name": "run_bash"})
         assert result is False, "HeadlessTransport must not auto-approve"
 
-    @pytest.mark.asyncio
-    async def test_tui_transport_returns_false(self):
-        from wisp.transport.tui import TUITransport
-
-        tui = TUITransport(MagicMock())
-        result = await tui.approve({"name": "run_bash"})
-        assert result is False, "TUITransport must not auto-approve"
 
     @pytest.mark.asyncio
     async def test_multi_transport_unanimous(self):
@@ -129,39 +101,6 @@ class TestSubagentDefaults:
 # ════════════════════════════════════════════════════════════════════════════
 #  4. API Key Rotation
 # ════════════════════════════════════════════════════════════════════════════
-
-
-class TestApiKeyRotation:
-    """Verify _AuthConfig supports key rotation with a grace period."""
-
-    def test_rotate_key_keeps_old_key_valid(self):
-        from wisp.server.deps import _AuthConfig
-
-        auth = _AuthConfig()
-        auth._key = "old-secret"
-        auth._no_auth = False
-        auth._valid_keys = {"old-secret": None}
-
-        auth.rotate_key("new-secret", grace_seconds=60)
-
-        assert auth._is_valid("new-secret")
-        assert auth._is_valid("old-secret")
-        assert not auth._no_auth
-
-    def test_rotated_key_expires_after_grace(self):
-        from wisp.server.deps import _AuthConfig
-
-        auth = _AuthConfig()
-        auth._key = "old-secret"
-        auth._no_auth = False
-        auth._valid_keys = {"old-secret": None}
-
-        auth.rotate_key("new-secret", grace_seconds=1)
-        assert auth._is_valid("old-secret")
-
-        import time
-        time.sleep(1.1)
-        assert not auth._is_valid("old-secret"), "Old key should expire"
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -346,28 +285,6 @@ class TestProviderCatalogSSRF:
 # ════════════════════════════════════════════════════════════════════════════
 #  8. Hook Name Validation
 # ════════════════════════════════════════════════════════════════════════════
-
-
-class TestHookValidation:
-    """Verify hook names are sanitized."""
-
-    def test_hook_name_allowlist(self):
-        from wisp.server.routes.hooks import _validate_hook_name
-
-        assert _validate_hook_name("my-hook_1") == "my-hook_1"
-        assert _validate_hook_name("a") == "a"
-
-    def test_hook_name_rejects_traversal(self):
-        from wisp.server.routes.hooks import _validate_hook_name
-
-        with pytest.raises(ValueError):
-            _validate_hook_name("../../../etc/passwd")
-
-    def test_hook_name_rejects_empty(self):
-        from wisp.server.routes.hooks import _validate_hook_name
-
-        with pytest.raises(ValueError):
-            _validate_hook_name("")
 
 
 # ════════════════════════════════════════════════════════════════════════════

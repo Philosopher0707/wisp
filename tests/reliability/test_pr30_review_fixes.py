@@ -34,108 +34,11 @@ from wisp.core.turn_criteria import (
 )
 from wisp.core.verification import VerificationFloorGuard
 from wisp.infra.extensions import ExtensionHost
-from wisp.approval_state import ApprovalSessionState, SessionPolicy
 from wisp.infra.security import SecurityPolicy
 from wisp.infra.store import UnifiedStore
 from wisp.infra.telemetry import Telemetry
-from wisp.server.approval_bridge import ApprovalBridge
-from wisp.server.routes.agents import _resolve_tool_approval
-from wisp.transport.websocket import WebSocketTransport
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
-
-
-# ── 1. decision-key approvals reach the REST bridge ─────────────────────────
-
-class _Runtime:
-    def __init__(self) -> None:
-        self.state = ApprovalSessionState()
-        self.state.session_policy = SessionPolicy.PROMPT
-        self.decisions: list[tuple[str, str, str]] = []
-
-    def approval_state(self, sid: str):
-        return self.state
-
-    def apply_approval_decision(self, sid: str, tool: str, key: str) -> bool:
-        self.decisions.append((sid, tool, key))
-        return key in ("y", "Y", "a")
-
-
-class _SilentClient:
-    """A client that receives the agent's approval frame and does not answer it."""
-
-    def __init__(self) -> None:
-        self.frames: list[dict] = []
-
-    async def send_json(self, payload: dict) -> None:
-        self.frames.append(payload)
-
-    async def close(self) -> None:
-        pass
-
-
-class _Channel:
-    def __init__(self) -> None:
-        self.frames: list[dict] = []
-
-    async def send_approval_frame(self, frame: dict) -> None:
-        self.frames.append(frame)
-
-
-def _pending_agent_and_rest(decision_frame):
-    """One agent approval AND one REST approval pending; then the client answers the REST one."""
-    async def main():
-        runtime = _Runtime()
-        transport = WebSocketTransport(runtime)
-        ws = _SilentClient()
-        transport._current_ws, transport._session_id = ws, "s1"
-        agent = asyncio.ensure_future(transport.approve({"name": "write_file", "arguments": {}}))
-        bridge, channel = ApprovalBridge(timeout_s=2.0), _Channel()
-        bridge.register(channel)
-        rest = asyncio.ensure_future(bridge.request_approval(name="hooks.create"))
-        await asyncio.sleep(0.05)
-        assert ws.frames and channel.frames, "floor: both approvals must be pending"
-        msg = decision_frame(channel.frames[0]["call_id"])
-        call_id, approved = _resolve_tool_approval(msg, bridge, transport)
-        rest_result = await asyncio.wait_for(rest, timeout=3.0)
-        agent_done = agent.done()
-        agent.cancel()
-        return call_id, approved, rest_result, agent_done, runtime.decisions
-    return asyncio.run(main())
-
-
-class TestADecisionKeyReachesTheBridge:
-    def test_the_tuis_yes_approves_the_rest_request_and_not_the_agents(self):
-        _, approved, rest, agent_done, decisions = _pending_agent_and_rest(
-            lambda cid: {"type": "tool_approval", "id": cid, "decision": "y"})
-        assert rest is True, "the TUI's 'y' did not reach the REST request it answered"
-        assert approved is True
-        assert not agent_done, (
-            "the TUI's answer to the REST request resolved the agent's pending approval — "
-            "the cross-resolution this fix exists to remove")
-        assert decisions == [], "the REST answer was folded into the agent's session memory"
-
-    def test_the_tuis_no_denies_the_rest_request(self):
-        _, approved, rest, agent_done, _ = _pending_agent_and_rest(
-            lambda cid: {"type": "tool_approval", "id": cid, "decision": "n"})
-        assert rest is False and approved is False and not agent_done
-
-    def test_control_the_approved_form_still_works(self):
-        _, _, rest, agent_done, _ = _pending_agent_and_rest(
-            lambda cid: {"type": "tool_approval", "id": cid, "approved": True})
-        assert rest is True and not agent_done
-
-    def test_the_route_delegates_to_the_helper(self):
-        """The observation point is the route: it must call the helper, not re-implement it."""
-        src = (REPO / "wisp/server/routes/agents.py").read_text(encoding="utf-8")
-        route = next(n for n in ast.walk(ast.parse(src))
-                     if isinstance(n, ast.AsyncFunctionDef) and n.name == "agent_websocket")
-        calls = [n for n in ast.walk(route) if isinstance(n, ast.Call)
-                 and getattr(n.func, "id", None) == "_resolve_tool_approval"]
-        direct = [n for n in ast.walk(route) if isinstance(n, ast.Call)
-                  and getattr(n.func, "attr", None) in ("resolve_decision", "resolve_approval")]
-        assert calls, "agent_websocket no longer routes tool_approval through the helper"
-        assert not direct, "agent_websocket resolves approvals directly again, bypassing the helper"
 
 
 # ── 2. the verdict does not reuse a probe taken before more work ────────────

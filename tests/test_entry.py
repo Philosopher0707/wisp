@@ -20,23 +20,6 @@ class TestRunMode:
                 mock_root.assert_called_once()
                 mock_cli.assert_called_once()
 
-    def test_server_mode_runs_server(self):
-        from wisp.entry import run_mode
-
-        with patch("wisp.entry._run_server") as mock_server:
-            run_mode("server")
-            mock_server.assert_called_once()
-
-    def test_tui_mode_creates_transport(self):
-        from wisp.entry import run_mode
-
-        with patch("wisp.entry.CompositionRoot") as mock_root:
-            mock_instance = MagicMock()
-            mock_root.return_value = mock_instance
-
-            with patch("wisp.entry._run_tui") as mock_tui:
-                run_mode("tui")
-                mock_tui.assert_called_once()
 
     def test_unknown_mode_raises(self):
         from wisp.entry import run_mode

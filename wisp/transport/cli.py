@@ -1125,7 +1125,7 @@ class CLITransport(Transport):
         self._suspend_bg_output = True
         pending: list[str] = []
         try:
-            from wisp.tui.screens.subagents import SubagentMonitorApp
+            from wisp.repl.subagent_monitor import SubagentMonitorApp
             SubagentMonitorApp(telemetry, manager=mgr).run()
         except Exception as exc:
             logger.debug("Subagent monitor failed", exc_info=True)

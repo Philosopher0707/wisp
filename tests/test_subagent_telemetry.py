@@ -162,7 +162,7 @@ class TestMonitorScreen:
     async def test_roster_and_cycle_and_quit(self) -> None:
         from textual.widgets import DataTable
 
-        from wisp.tui.screens.subagents import SubagentMonitorApp
+        from wisp.repl.subagent_monitor import SubagentMonitorApp
 
         mgr = FakeManager()
         _fill(mgr)
@@ -181,7 +181,7 @@ class TestMonitorScreen:
 
     @pytest.mark.asyncio
     async def test_cancel_key_calls_manager(self) -> None:
-        from wisp.tui.screens.subagents import SubagentMonitorApp
+        from wisp.repl.subagent_monitor import SubagentMonitorApp
 
         mgr = FakeManager()
         _fill(mgr)
@@ -198,7 +198,7 @@ class TestMonitorScreen:
     async def test_live_tail_appends_without_manager(self) -> None:
         from textual.widgets import RichLog
 
-        from wisp.tui.screens.subagents import SubagentMonitorApp
+        from wisp.repl.subagent_monitor import SubagentMonitorApp
 
         buf = SubagentTelemetryBuffer()
         buf.register("solo", label="s", role="coder")
@@ -241,7 +241,7 @@ class TestBridge:
             "The worker monitor needs an interactive terminal.")
 
     def test_suspend_buffers_and_drain_replays_in_order(self, monkeypatch) -> None:
-        import wisp.tui.screens.subagents as screens_mod
+        import wisp.repl.subagent_monitor as screens_mod
         from wisp.transport.cli import CLITransport
 
         transport = _transport_with_manager()

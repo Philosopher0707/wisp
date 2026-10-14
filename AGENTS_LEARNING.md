@@ -1006,3 +1006,14 @@ Slice S4 of `docs/harness/subagent-orchestration-design.md`.
 4. **Scan, label, never drop.** The reply passes `core.injection_scan`; a finding is reported in `flags` and the reply is still delivered (design D8).
 5. **A pinned boundary test models relative imports as the package.** ADR-0060's test resolves `from .x import y` to `wisp.multi_agent`, and the package's `__init__` reaches the graph executor, so two new relative imports put the turn engine "in Layer B". Absolute imports name the module. The test says "supersede, do not edit", and the change complied.
 - Evidence: 10 tests, all red on the S3 code (the two files tests do not import the new module, so their failure is the old behaviour); 11/11 mutation probes caught; gate 4155 passed.
+
+## Subtracting code: an import scan finds a third of what names it (2026-10-14)
+
+M0 removed every front end but the CLI and REPL (`docs/removed/2026-10-14-m0-front-ends.md`; restore from `checkpoint/2026-10-14/main-pre-m0-subtract`).
+
+1. **Reachability first, by AST, including lazy imports.** From `wisp.__main__`, 90 of 520 modules (12.5k lines) were never imported; 6.7k of them are `wisp_net`. Removing the front ends left nothing newly dead outside their own server-only helpers: the shared code is all the REPL's too.
+2. **The import scan missed most of the breakage.** It found 60 test files that import a removed module. The full suite then found 22 more that name one by **path** (`(REPO / "wisp/server/deps.py").read_text()`), by **attribute** (`patch("wisp.entry._run_server")`), or in an **inventory** (`exempt = {..., "acp_session.py"}`, a consumer dict, an expected set of referrers). Run the full suite, not the import list.
+3. **Remove a removed thing's pins, keep every other check.** Inventories dropped the removed entries (`len(sites) == 3`, not 4); tests whose only subject was removed went; agent-side halves of agent-vs-REST parity tests stayed. Derived-page rows whose tripwire file went keep the row, with `—` and the reason in the source cell.
+4. **A removed subcommand must refuse, not fall through.** `wisp <word>` treats an unknown word as a prompt, so `wisp server` became a model turn. `_REMOVED_SUBCOMMANDS` refuses with exit 2 and a pointer (`tests/test_removed_subcommands_refuse.py`, red first, with a control that a never-subcommand word is still a prompt).
+5. **Look before writing a file you think is new.** `ROADMAP.md` already existed (stale: a 2,817-test baseline, server and TUI items); the shell's interactive `cp` stopped the overwrite. Merging it is a separate docs change.
+- Evidence: 192 files, 22.5k lines removed (11.9k from `wisp/`, 10k from tests); full suite 11,817 passed / 44 failed before the pin fixes, every failing file green after them except `test_preflight_doctor` (needs the Docker daemon, down here). `test_cli_surface_e2e::test_check_resolves_empty_model_…` failed once in three runs of its file and passed alone 4/4: a flake, recorded.

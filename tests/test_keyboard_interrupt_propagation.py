@@ -96,28 +96,3 @@ class TestBaseExceptionMustPropagate:
                 execute_tool("run_bash", {"command": "x"}, "/tmp", _skip_authorize=True)
 
 
-class TestServerWebsocketHandlesException:
-    """WebSocket handler must catch Exception, not swallow signals (BaseException)."""
-
-    def test_server_run_catches_exception(self):
-        """The agent_websocket catches Exception so KeyboardInterrupt/SystemExit propagate.
-
-        The server intentionally does NOT catch BaseException — signals and
-        clean-exit requests must escape to the event loop, not be swallowed.
-        """
-        import ast
-        from pathlib import Path
-
-        src = Path("wisp/server/routes/agents.py").read_text()
-        tree = ast.parse(src)
-
-        found = False
-        for node in ast.walk(tree):
-            if isinstance(node, ast.AsyncFunctionDef) and node.name == "agent_websocket":
-                for item in node.body:
-                    if isinstance(item, ast.Try):
-                        for handler in item.handlers:
-                            if isinstance(handler.type, ast.Name) and handler.type.id == "Exception":
-                                found = True
-                                break
-        assert found, "WebSocket handler must catch Exception (BaseException must NOT be caught — signals must escape)"

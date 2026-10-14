@@ -33,7 +33,6 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 RUNTIME_MODULES = (
     "wisp/composition.py",
     "wisp/tool_executor.py",
-    "wisp/acp_session.py",
 )
 
 
@@ -122,13 +121,12 @@ def test_tool_executor_construction_sites_are_known():
     count that a swap would leave unchanged.
     """
     sites = _tool_executor_calls()
-    assert len(sites) == 4, (
+    assert len(sites) == 3, (
         "a new ToolExecutor construction site appeared — check whether it "
         f"passes a policy bundle: {sites}"
     )
     assert {rel for rel, _line, _passes in sites} == {
         "wisp/composition.py",       # the composition root
-        "wisp/acp_session.py",       # the ACP session's config-driven fallback
         "wisp/benchmark/runner.py",  # the benchmark factory — ADR-0045, F54
         "wisp/multi_agent/cli.py",   # `wisp swarm` subagents — d1ee3c9
     }, f"the construction-site inventory changed: {sites}"
@@ -145,9 +143,6 @@ def test_the_composition_root_passes_the_organization_policy():
 
     The other two sites are named and must **not** receive it:
 
-    * `wisp/acp_session.py:208` — reached only when there is **no** composition
-      root; an ACP-only deployment has no configured runtime to load from.
-      Named as a residual in `PHASE_M4_WIRING.md`.
     * `wisp/benchmark/runner.py:82` — a benchmark **harness**, not the runtime.
       Giving it a policy would change what it measures.
 
@@ -230,24 +225,6 @@ def test_the_agent_passes_its_none_policy_through():
 
 # ── The distribution surface is inert too ────────────────────────────
 
-def test_the_publish_route_holds_a_bundle_that_nothing_reads():
-    """`app.state.policy_bundle` has exactly one writer and no decision reader.
-
-    Matches the *held bundle* attribute specifically — `ReproManifest` has an
-    unrelated `policy_bundle_id` field (see the test below).
-    """
-    holders = []
-    for py in (REPO / "wisp").rglob("*.py"):
-        if "__pycache__" in py.parts:
-            continue
-        if "state.policy_bundle" in py.read_text(encoding="utf-8"):
-            holders.append(str(py.relative_to(REPO)))
-    assert holders == ["wisp/server/routes/policy.py"], (
-        "something outside the policy route now reads or writes the held "
-        f"bundle — re-examine the finding: {holders}"
-    )
-
-
 def test_the_repro_manifest_policy_field_is_never_populated():
     """Corroboration: the run manifest has a 'which policy governed this run'
     field, declared and serialized, that is always empty — because no policy
@@ -261,30 +238,6 @@ def test_the_repro_manifest_policy_field_is_never_populated():
     assert holders == ["wisp/runs/repro.py"], (
         "policy_bundle_id is now set somewhere — the M4 layer may have been "
         f"wired. Re-read the finding: {holders}"
-    )
-
-
-def test_the_distribution_surface_is_unconfigured_in_production():
-    """The **route's** `app.state.policy_pubkey` is set by tests only.
-
-    **Scoped to `state.policy_pubkey`, not the bare name.** The scan used to match
-    `policy_pubkey=` anywhere, which conflates the route's attribute with an
-    unrelated, same-named **config setting**: ADR-0058 added
-    `WispConfig.policy_pubkey` (`WISP_POLICY_PUBKEY`), and a test passing it as a
-    keyword argument made this tripwire fire for the wrong reason — a *different*
-    thing from "the route is configured in production". The sibling test above
-    already scopes to `state.policy_bundle`; this one now matches it.
-    """
-    setters = []
-    for py in list((REPO / "wisp").rglob("*.py")) + list((REPO / "tests").rglob("*.py")):
-        if "__pycache__" in py.parts or py.name == pathlib.Path(__file__).name:
-            continue
-        text = py.read_text(encoding="utf-8")
-        if "state.policy_pubkey =" in text or "state.policy_pubkey=" in text:
-            setters.append(str(py.relative_to(REPO)))
-    assert setters == ["tests/test_policy_routes.py"], (
-        "the route's `app.state.policy_pubkey` is now set outside tests — the "
-        f"distribution surface may be configured in production: {setters}"
     )
 
 

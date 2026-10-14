@@ -146,24 +146,12 @@ class TestTheHarnessCanActuallyExecute:
         code from prose is the defect `ast.AnnAssign` already taught this
         repository once.
 
-        `acp_session.py` is exempt because its fallback is *loud* — it logs
-        a warning naming exactly what is missing. That exemption is pinned by
-        the next test, so it cannot be quietly widened.
+        (`acp_session.py` was exempt, with a loud fallback; it was removed in M0.)
         """
         offenders = _unwired_core_constructions()
         assert not offenders, (
             "these construct a WispAgentCore without a tool_executor, so "
             "every mutation is denied: " + ", ".join(offenders))
-
-    def test_the_one_exempt_fallback_is_loud(self) -> None:
-        """`acp_session.py`'s unwired core must keep warning about itself."""
-        from pathlib import Path
-
-        source = (Path(__file__).resolve().parents[1]
-                  / "wisp" / "acp_session.py").read_text(encoding="utf-8")
-        assert "no provider or tool_executor" in source, (
-            "the exempted fallback no longer warns — either restore the "
-            "warning or remove the exemption in `_unwired_core_constructions`")
 
     def test_the_unwired_core_scanner_is_not_vacuous(self, tmp_path) -> None:
         """Control: the scanner must FIND an unwired core that is really there."""
@@ -197,15 +185,13 @@ def _unwired_core_constructions(extra_source: str = "") -> list[str]:
 
     AST-based, so docstrings and comments are not code. `composition.py` and
     `stateless.py` are exempt: the first is the composition root that wires
-    the executor, the second defines the class. `acp_session.py` is exempt
-    because its fallback logs a warning naming what is missing — pinned by
-    `test_the_one_exempt_fallback_is_loud`.
+    the executor, the second defines the class.
     """
     import ast
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1] / "wisp"
-    exempt = {"composition.py", "stateless.py", "acp_session.py"}
+    exempt = {"composition.py", "stateless.py"}
     offenders: list[str] = []
 
     def _scan(source: str, label: str) -> None:

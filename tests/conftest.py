@@ -18,7 +18,6 @@ os.environ.pop("FORCE_COLOR", None)
 os.environ.setdefault("TERM", "xterm")
 
 
-
 @pytest.fixture
 def isolated_wisp_env(monkeypatch, tmp_path):
     """Strip provider env vars and hide user config/home state.
@@ -135,73 +134,6 @@ def _isolate_memory_store():
         for module, attr, value in patched:
             setattr(module, attr, value)
         shutil.rmtree(scratch, ignore_errors=True)
-
-
-@pytest.fixture(scope="session", autouse=True)
-def _neutralize_server_auth():
-    """Force server dev-mode (no auth) for the unit-test session.
-
-    wisp.server.deps builds its _AuthConfig singleton at import time from
-    the ambient WISP_API_KEY. A set key silently flips every server route
-    test to 401 (seen live: 14 red tests, all environmental). Live E2E
-    runs (WISP_E2E_LIVE=1) keep ambient credentials.
-    """
-    if os.environ.get("WISP_E2E_LIVE") == "1":
-        yield
-        return
-    import wisp.server.deps as deps_mod
-
-    auth = deps_mod._auth
-    saved_key, saved_no_auth = auth._key, auth._no_auth
-    saved_valid = dict(auth._valid_keys)
-    saved_env = os.environ.pop("WISP_API_KEY", None)
-    auth._key = ""
-    auth._no_auth = True
-    auth._valid_keys = {}
-    try:
-        yield
-    finally:
-        auth._key, auth._no_auth = saved_key, saved_no_auth
-        auth._valid_keys = saved_valid
-        if saved_env is not None:
-            os.environ["WISP_API_KEY"] = saved_env
-
-
-@pytest.fixture(scope="session", autouse=True)
-def _neutralize_server_rate_limit():
-    """Give the route tests their own rate-limit budget.
-
-    `RATE_LIMITER` is a process-external singleton: a SQLite file at
-    `~/.config/wisp/rate_limits.db`, 30 requests per 60 s, keyed by client IP.
-    Route tests therefore shared one budget with each other *and with previous
-    runs* — once a run made 30 requests to gated routes inside a minute, every
-    later route test received 429 instead of the verdict it was asserting.
-
-    Seen live: six tests across `test_server_policy_gate.py` and
-    `test_protected_path_guard.py` failed with `429 Too Many Requests` only when
-    run together, and stayed red across repeated runs because the budget lives
-    outside the process. That is a test-isolation defect, not a product one.
-
-    The limiter's own behaviour is covered directly by
-    `tests/test_server_deps.py`, which constructs `SQLiteRateLimiter` instances
-    against a `tmp_path` and is unaffected by this patch. Live E2E runs keep
-    ambient behaviour.
-    """
-    if os.environ.get("WISP_E2E_LIVE") == "1":
-        yield
-        return
-    import wisp.server.deps as deps_mod
-
-    class _Unlimited:
-        async def __call__(self, request):
-            return None
-
-    saved = deps_mod.get_rate_limiter
-    deps_mod.get_rate_limiter = lambda: _Unlimited()
-    try:
-        yield
-    finally:
-        deps_mod.get_rate_limiter = saved
 
 
 @pytest.fixture(autouse=True)

@@ -13,7 +13,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
-
 def _cfg(**kw) -> SimpleNamespace:
     """Config stand-in with WispConfig-style .replace()."""
     base = {"provider": "openai", "model": "", "api_key": "k",
@@ -363,41 +362,4 @@ def test_is_strict_provider_single_source():
 
 # ── GUI select route shares the REPL seam ───────────────────────────────
 
-@pytest.mark.asyncio
-async def test_models_route_lists_all_providers_and_active():
-    from wisp.server.routes import models as models_route
 
-    cfg = SimpleNamespace(provider="openrouter", model="org/m1", api_key="k")
-    root = SimpleNamespace(config=cfg, runtime=None)
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(root=root)))
-
-    with patch("wisp.provider_catalog.list_models",
-               side_effect=lambda name, c: [f"{name}/m1", f"{name}/m2"]):
-        out = await models_route.list_models(request)
-
-    assert {p["name"] for p in out["providers"]} >= {"ollama", "openai",
-                                                     "nvidia", "openrouter"}
-    assert out["active"] == {"provider": "openrouter", "model": "org/m1"}
-    assert out["models"] == ["openrouter/m1", "openrouter/m2"]
-
-
-@pytest.mark.asyncio
-async def test_select_route_rejects_model_not_served():
-    """Selecting a dead model fails VISIBLY here, not as a turn-time 404."""
-    from fastapi import HTTPException
-
-    from wisp.server.routes import models as models_route
-
-    cfg = _cfg(provider="openrouter", model="org/m1")
-    runtime = SimpleNamespace(config=cfg)
-    root = SimpleNamespace(config=cfg, runtime=runtime)
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(root=root)))
-
-    with patch("wisp.provider_select.current_key_status", return_value="✓"), \
-            patch("wisp.provider_catalog.list_models",
-                  return_value=["real/a", "real/b"]):
-        with pytest.raises(HTTPException) as ei:
-            await models_route.select_model(
-                models_route.SelectPayload(model="fake/dead"), request)
-    assert ei.value.status_code == 400
-    assert "not served" in ei.value.detail
