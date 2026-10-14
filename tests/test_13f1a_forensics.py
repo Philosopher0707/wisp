@@ -21,6 +21,13 @@ from wisp.providers.mock import MockProvider
 from wisp.tool_executor import ToolExecutor
 
 
+@pytest.fixture(autouse=True)
+def _offer_the_tools_under_test(monkeypatch):
+    """These tests drive tools outside the default basic profile (run_bash/read_file/edit_file/write_file), and a
+    tool that is not offered is refused since 2026-10-14; offer every built-in."""
+    monkeypatch.setenv("WISP_TOOL_PROFILE", "full")
+
+
 def _call(name, args):
     return {"function": {"name": name, "arguments": args}}
 

@@ -44,7 +44,8 @@ class _Ext:
 def core(tmp_path: Path) -> WispAgentCore:
     host = ExtensionHost()
     host.register(_Ext())
-    cfg = WispConfig().replace(workspace=str(tmp_path), model="m", provider="ollama", chars_per_token=4)
+    cfg = WispConfig().replace(workspace=str(tmp_path), model="m", provider="ollama", chars_per_token=4,
+                               tool_profile="core")  # extension tools: the basic default offers none
     return WispAgentCore(provider=None, config=cfg, extensions=host)
 
 

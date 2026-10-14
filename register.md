@@ -22,7 +22,7 @@
 > `—` therefore means *no catch inside these roots*, which is **not** the same claim as
 > *unhandled* — see §(c).
 >
-> Generated 2026-09-30 at `427d7c9` · **57 classes** · **323 raise sites** · **70 catch sites** · **9 with no test naming them**.
+> Generated 2026-09-30 at `ccdcf1a` · **57 classes** · **323 raise sites** · **70 catch sites** · **9 with no test naming them**.
 
 ---
 
@@ -35,7 +35,7 @@
 | `ApprovalTimeout` | `Exception` | verdict | approval | `wisp/exceptions.py:33` | 1 | `wisp/transport/cli.py:923` | `wisp/core/approval_gate.py:127`, `wisp/multi_agent/approval_relay.py:66`, `wisp/tool_executor.py:895` | — |
 | `_TransientOpenError` | `Exception` | recoverable | provider | `wisp/core/provider_stream.py:44` | 1 | `wisp/core/provider_stream.py:235` | `wisp/core/provider_stream.py:342` | — |
 | `FirstTokenTimeout` | `asyncio.TimeoutError` | recoverable | subagent | `wisp/multi_agent/_runner.py:186` | 1 | `wisp/multi_agent/_runner.py:246` | `wisp/multi_agent/_runner.py:481`, `wisp/multi_agent/_runner.py:786`, `wisp/multi_agent/_runner.py:966` | — |
-| `CircuitOpenError` | `Exception` | recoverable | provider | `wisp/infra/circuit_breaker.py:175` | 2 | `wisp/infra/circuit_breaker.py:93` | `wisp/core/stateless.py:1377` | — |
+| `CircuitOpenError` | `Exception` | recoverable | provider | `wisp/infra/circuit_breaker.py:175` | 2 | `wisp/infra/circuit_breaker.py:93` | `wisp/core/stateless.py:1381` | — |
 | `CircuitBreakerOpenError` | `Exception` | recoverable | subagent | `wisp/multi_agent/_circuit_breaker.py:102` | 1 | `wisp/multi_agent/_circuit_breaker.py:44` | — | — |
 | `_Exit` | `Exception` | recoverable | cli | `wisp/review/cli.py:32` | 1 | `wisp/review/cli.py:48` | `wisp/review/cli.py:141`, `wisp/review/cli.py:202` | — |
 | `OllamaError` | `Exception` | recoverable | provider | `wisp/ollama_client.py:46` | 10 | `wisp/ollama_client.py:273` | `wisp/ollama_client.py:288`, `wisp/ollama_client.py:427` | — |
@@ -43,7 +43,7 @@
 | `BoundsError` | `RuntimeError` | guard | startup | `wisp/runtime/bounds.py:59` | 11 | `wisp/runtime/bounds.py:95` | `wisp/composition.py:134` | — |
 | `CostError` | `RuntimeError` | guard | turn | `wisp/runtime/cost.py:48` | 4 | `wisp/runtime/cost.py:93` | — | — |
 | `UnknownModel` | `CostError` | guard | turn | `wisp/runtime/cost.py:54` | 1 | `wisp/runtime/cost.py:159` | `wisp/runtime/cost.py:183` | — |
-| `FleetManifestError` | `ValueError` | guard | cli | `wisp/fleet.py:28` | 15 | `wisp/fleet.py:98` | `wisp/cli/doctor_harness.py:288`, `wisp/cli/doctor_harness.py:310`, `wisp/fleet.py:387`, `wisp/fleet.py:426`, `wisp/fleet_ci.py:259` | — |
+| `FleetManifestError` | `ValueError` | guard | cli | `wisp/fleet.py:28` | 15 | `wisp/fleet.py:98` | `wisp/cli/doctor_harness.py:292`, `wisp/cli/doctor_harness.py:314`, `wisp/fleet.py:387`, `wisp/fleet.py:426`, `wisp/fleet_ci.py:259` | — |
 | `UsageError` | `Exception` | guard | cli | `wisp/review/cli.py:28` | 9 | `wisp/review/cli.py:45` | `wisp/review/cli.py:143`, `wisp/review/cli.py:152`, `wisp/review/cli.py:204` | — |
 | `RulesError` | `ValueError` | guard | cli | `wisp/review/rules.py:28` | 3 | `wisp/review/rules.py:63` | `wisp/review/cli.py:152` | — |
 | `IdempotencyError` | `RuntimeError` | guard | tool | `wisp/runtime/idempotency.py:57` | 2 | `wisp/runtime/idempotency.py:295` | — | — |
@@ -56,7 +56,7 @@
 | `ContextOverflow` | `RuntimeError` | guard | context | `wisp/core/context_trust.py:104` | 1 | `wisp/core/context_trust.py:314` | — | — |
 | `CriteriaDeclarationRejected` | `Exception` | guard | turn | `wisp/core/convergence.py:674` | 9 | `wisp/core/convergence.py:783` | `wisp/autonomous.py:341`, `wisp/autonomous_repl.py:70` | ADR-0050 |
 | `ReplayDivergence` | `RuntimeError` | guard | persist | `wisp/core/replay_digest.py:64` | 2 | `wisp/core/replay_digest.py:125` | `wisp/core/runtime.py:1868` | — |
-| `MemoryStoreError` | `RuntimeError` | guard | persist | `wisp/memory.py:63` | 2 | `wisp/memory.py:210` | `wisp/__main__.py:325`, `wisp/memory.py:256`, `wisp/memory.py:288`, `wisp/tools/memory.py:38` | — |
+| `MemoryStoreError` | `RuntimeError` | guard | persist | `wisp/memory.py:63` | 2 | `wisp/memory.py:210` | `wisp/__main__.py:328`, `wisp/memory.py:256`, `wisp/memory.py:288`, `wisp/tools/memory.py:38` | — |
 | `ImportGraphTooLarge` | `RuntimeError` | guard | tool | `wisp/import_graph.py:25` | 1 | `wisp/import_graph.py:133` | `wisp/test_runner.py:353` | — |
 | `WalkBudgetExceeded` | `RuntimeError` | guard | tool | `wisp/core/workspace_walk.py:39` | 1 | `wisp/core/workspace_walk.py:130` | `wisp/import_graph.py:132` | — |
 | `JobLimitError` | `ToolError` | guard | tool | `wisp/jobs/spawn.py:20` | 2 | `wisp/jobs/spawn.py:41` | — | — |

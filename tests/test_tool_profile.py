@@ -1,10 +1,9 @@
-"""The default tool profile: 8 core tools plus grep, glob and rewind.
+"""Tool profiles. The default, ``basic``, is exactly run_bash, read_file, edit_file and write_file (owner decision,
+2026-10-14), with no extension tools. ``core`` (opt-in) is 8 core tools plus grep, glob and rewind, with extension tools.
 
-Evidence for the set (wisp's own audit logs, 18,132 tool calls): seven tools were 95% of all calls. Everything else
-cost about 8,200 schema tokens on every provider call for under 2% of use. The profile narrows what is OFFERED, not
-what is callable: a tool outside it is still in the registry, still authorised the same way, and a role subagent with
-an explicit tool list still gets exactly that list. Extension tools (MCP servers, skills) are the operator's own
-configuration and are not touched by the profile.
+Evidence for the core set (wisp's own audit logs, 18,132 tool calls): seven tools were 95% of all calls. What a
+session is offered is what it may call: the engine refuses anything else (tests/baseline, B7). A role subagent with an
+explicit tool list still gets exactly that list. Tests of the core profile below ask for it by name.
 """
 
 from __future__ import annotations
@@ -17,7 +16,7 @@ import pytest
 from wisp.config import WispConfig
 from wisp.core.engine import WispAgentCore
 from wisp.infra.extensions import ExtensionHost
-from wisp.tools.profile import CORE_TOOLS, DEFAULT_PROFILE, builtin_names_for, parse_profile
+from wisp.tools.profile import BASIC_TOOLS, CORE_TOOLS, DEFAULT_PROFILE, builtin_names_for, offers_extensions, parse_profile
 from wisp.tools.registry import TOOL_IMPLS, TOOL_SCHEMAS
 
 CORE = {
@@ -51,6 +50,7 @@ class _Ext:
 def _core(tmp_path: Path, **cfg) -> WispAgentCore:
     host = ExtensionHost()
     host.register(_Ext())
+    cfg.setdefault("tool_profile", "core")
     config = WispConfig().replace(workspace=str(tmp_path), model="m", provider="ollama", chars_per_token=4, **cfg)
     return WispAgentCore(provider=None, config=config, extensions=host)
 
@@ -87,34 +87,45 @@ class TestTheProfileDefinition:
     def test_every_core_tool_exists_in_the_registry(self):
         assert CORE <= BUILTIN and CORE <= set(TOOL_IMPLS)
 
-    def test_core_is_the_default(self):
-        assert DEFAULT_PROFILE == "core"
+    def test_basic_is_the_default_and_is_exactly_four_tools(self):
+        assert DEFAULT_PROFILE == "basic"
+        assert set(BASIC_TOOLS) == {"read_file", "write_file", "edit_file", "run_bash"} and len(BASIC_TOOLS) == 4
+        assert builtin_names_for("basic") == frozenset(BASIC_TOOLS) and not offers_extensions("basic")
 
-    @pytest.mark.parametrize("raw,expected", [("core", "core"), ("FULL", "full"), (" full ", "full"), ("", "core"),
-                                              ("everything", "core"), (None, "core"), (3, "core")])
-    def test_parsing_fails_to_the_smaller_surface(self, raw, expected):
+    @pytest.mark.parametrize("raw,expected", [("core", "core"), ("FULL", "full"), (" full ", "full"), ("basic", "basic"),
+                                              ("", "basic"), ("everything", "basic"), (None, "basic"), (3, "basic")])
+    def test_parsing_fails_to_the_smallest_surface(self, raw, expected):
         assert parse_profile(raw) == expected
 
     def test_full_means_no_narrowing(self):
         assert builtin_names_for("full") is None
         assert builtin_names_for("core") == frozenset(CORE)
+        assert offers_extensions("core") and offers_extensions("full")
 
 
 class TestTheConfigSetting:
-    def test_the_default_is_core(self, monkeypatch):
+    def test_the_default_is_basic(self, monkeypatch):
         monkeypatch.delenv("WISP_TOOL_PROFILE", raising=False)
-        assert WispConfig().tool_profile == "core"
+        assert WispConfig().tool_profile == "basic"
 
     def test_the_environment_can_restore_the_full_surface(self, monkeypatch):
         monkeypatch.setenv("WISP_TOOL_PROFILE", "full")
         assert WispConfig().tool_profile == "full"
 
-    def test_an_unknown_value_falls_back_to_core(self, monkeypatch):
+    def test_an_unknown_value_falls_back_to_basic(self, monkeypatch):
         monkeypatch.setenv("WISP_TOOL_PROFILE", "wide-open")
-        assert WispConfig().tool_profile == "core"
+        assert WispConfig().tool_profile == "basic"
 
 
 class TestWhatTheProviderIsOffered:
+    def test_basic_offers_exactly_the_four_tools_and_no_extension_tools(self, tmp_path):
+        assert _names(_core(tmp_path, tool_profile="basic")._provider_tools(_session(tmp_path))) == set(BASIC_TOOLS)
+
+    def test_the_basic_menu_names_exactly_the_four_tools(self, tmp_path):
+        prompt = _core(tmp_path, tool_profile="basic")._build_system_prompt(_session(tmp_path))
+        listed = {line[2:].split(":", 1)[0] for line in _menu_block(prompt).splitlines() if line.startswith("- ")}
+        assert listed == set(BASIC_TOOLS) and "plugins/MCP" not in prompt
+
     def test_the_parent_gets_the_core_builtins_and_keeps_its_extension_tools(self, tmp_path):
         names = _names(_core(tmp_path)._provider_tools(_session(tmp_path)))
         assert names & BUILTIN == CORE

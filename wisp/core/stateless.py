@@ -524,6 +524,10 @@ class WispAgentCore:
             str(a).lower() for a in allowed_tools
         }:
             _allowed_set = {str(a) for a in allowed_tools}
+        # What was offered is what may be called: a call to any tool outside the list sent to the provider is refused,
+        # whatever the profile (D7, 2026-10-14: `spawn` and `git_commit` ran although neither was offered).
+        if _allowed_set is None and tools is not None:
+            _allowed_set = {_tool_schema_name(t) for t in tools}
         # Verification floor (harness > model on completion calls): the
         # guard owns wrote_code / exit-0-evidence / grind-budget state so
         # _turn_inner never re-derives the invariant inline.
@@ -1006,7 +1010,7 @@ class WispAgentCore:
                                 session.get("workspace", "."))
                     except Exception:
                         logger.debug("Auto-skill capture failed", exc_info=True)
-                yield _flatten_event(done_event(session.get("id", "")))
+                yield _flatten_event(done_event(session.get("id", ""), turns=iteration + 1))
                 return
 
             # ── Execute tools and feed results back to messages ──
@@ -1229,7 +1233,7 @@ class WispAgentCore:
                 hint="raise `max_iterations` in config; the summary above "
                      "covers what was gathered before the budget ended",
             ))
-        yield _flatten_event(done_event(session.get("id", "")))
+        yield _flatten_event(done_event(session.get("id", ""), turns=max_iterations))
 
     async def _stream_events_async(
         self,
@@ -1409,6 +1413,14 @@ class WispAgentCore:
         profile = getattr(self.config, "tool_profile", "full")
         return builtin_names_for(profile)
 
+    def _profile_offers_extensions(self) -> bool:
+        """Whether the configured profile offers extension tools (MCP, plugins, skills): not under ``basic``."""
+        from wisp.tools.profile import offers_extensions
+
+        if self.config is None:
+            return True
+        return offers_extensions(getattr(self.config, "tool_profile", "full"))
+
     @staticmethod
     def _builtin_tool_names() -> frozenset[str]:
         """Names in the built-in registry; anything else in a schema list is an extension tool (MCP, skills)."""
@@ -1434,7 +1446,9 @@ class WispAgentCore:
         profile_names = self._profile_names() if allowed_set is None else None
         if profile_names is not None:
             builtin = self._builtin_tool_names()
-            tools = [t for t in tools if _tool_schema_name(t) not in builtin or _tool_schema_name(t) in profile_names]
+            keep_extensions = self._profile_offers_extensions()
+            tools = [t for t in tools if _tool_schema_name(t) in profile_names
+                     or (keep_extensions and _tool_schema_name(t) not in builtin)]
 
         # 13-I2 capability partition: host-owned visibility filter over
         # provider-bound schemas. Flag OFF (default) preserves the exact
@@ -1723,8 +1737,8 @@ class WispAgentCore:
                 lines.append("- background agents finished since your last turn:")
                 lines.extend(f"  {n}" for n in notifications)
 
-        # Plugin / MCP surface: how many tools beyond built-ins are live.
-        if self.extensions is not None:
+        # Plugin / MCP surface: how many tools beyond built-ins are live (none are offered under the basic profile).
+        if self.extensions is not None and self._profile_offers_extensions():
             try:
                 from wisp.tools.registry import TOOL_SCHEMAS as _BUILTIN_SCHEMAS
                 ext_n = len(self._get_tool_schemas()) - len(_BUILTIN_SCHEMAS)
@@ -2070,6 +2084,8 @@ class WispAgentCore:
         """
         entries: list[tuple[str, str]] = []
         seen: set[str] = set()
+        # Names the profile governs: the built-ins, or every tool when the profile offers no extension tools.
+        everything = profile_names is not None and not self._profile_offers_extensions()
         profile_scope = self._builtin_tool_names() if profile_names is not None else frozenset()
 
         def _describe(fn: dict[str, Any]) -> tuple[str, str]:
@@ -2093,7 +2109,7 @@ class WispAgentCore:
                 continue
             if exclude_prefixes and name.startswith(exclude_prefixes):
                 continue
-            if profile_names is not None and name in profile_scope and name not in profile_names:
+            if profile_names is not None and (everything or name in profile_scope) and name not in profile_names:
                 continue
             seen.add(name)
             entries.append((name, first))
@@ -2634,13 +2650,9 @@ class WispAgentCore:
         name = str(tc_event.get("name", ""))
 
         if allowed_set is not None and name not in allowed_set:
-            hint = ""
-            if name == "run_bash":
-                hint = " — run_bash is blocked in auto_edit mode; use list_files/read_file instead, or switch to full mode"
-            elif name in ("spawn", "fanout"):
-                hint = " — subagent spawning is blocked in auto_edit; switch to full mode"
+            offered = ", ".join(sorted(allowed_set)) or "none"
             tc_event["_blocked"] = (
-                f"tool '{name}' is not allowed for this agent's role{hint}")
+                f"tool '{name}' is not offered to this agent, so it is not allowed; use one of: {offered}")
             return
 
         # Structural validation BEFORE approval (13-J1): an invalid

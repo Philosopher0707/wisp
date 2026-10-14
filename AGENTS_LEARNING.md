@@ -1017,3 +1017,21 @@ M0 removed every front end but the CLI and REPL (`docs/removed/2026-10-14-m0-fro
 4. **A removed subcommand must refuse, not fall through.** `wisp <word>` treats an unknown word as a prompt, so `wisp server` became a model turn. `_REMOVED_SUBCOMMANDS` refuses with exit 2 and a pointer (`tests/test_removed_subcommands_refuse.py`, red first, with a control that a never-subcommand word is still a prompt).
 5. **Look before writing a file you think is new.** `ROADMAP.md` already existed (stale: a 2,817-test baseline, server and TUI items); the shell's interactive `cp` stopped the overwrite. Merging it is a separate docs change.
 - Evidence: 192 files, 22.5k lines removed (11.9k from `wisp/`, 10k from tests); full suite 11,817 passed / 44 failed before the pin fixes, every failing file green after them except `test_preflight_doctor` (needs the Docker daemon, down here). `test_cli_surface_e2e::test_check_resolves_empty_model_…` failed once in three runs of its file and passed alone 4/4: a flake, recorded.
+
+## What the model is offered is what it may call; the default is four tools (2026-10-14)
+
+Owner decision: the model gets `run_bash`, `read_file`, `edit_file` and `write_file`, nothing else (`basic`, the new
+default; `core` and `full` stay opt-in through `WISP_TOOL_PROFILE`).
+
+1. **A profile used to narrow the offer, not the capability** (`profile.py` said so). A scripted model that called
+   `spawn` and `git_commit`, neither offered, got a child and a commit (D7). The engine now refuses any call outside the
+   list it sent the provider (`_turn_inner` derives the allowed set from `tools`), with `POLICY_DENIED` and the list of
+   tools it may use. Proved through the real command: `tests/baseline` B7.
+2. **The prompt must not name a tool the model lacks.** Under `basic` it still said `run_tests` (rule 7 and the
+   Environment line) and `list_dir` (a tool that never existed). A baseline test now scans the real request for every
+   registry tool name outside the offered set (`diagnose` is excluded: it is also an English verb).
+3. **Tests that relied on the gap.** 18 engine tests drove `run_tests`, `spawn`, `fanout` or plan tools through a
+   default config, which only worked because un-offered tools ran. They now ask for `full` with an autouse fixture that
+   says why; their assertions are unchanged. Tests of the `core` profile name it explicitly.
+- Evidence: 4 new B7 tests red first; 2,167 engine-driven tests + the profile, doctor and subagent suites green locally.
+  `tests/smoke_repl_multi_turn.py` (not collected: not `test_*.py`) fails with SystemExit 1 under every profile: unrelated, recorded.

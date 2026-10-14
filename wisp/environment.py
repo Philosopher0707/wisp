@@ -170,6 +170,6 @@ def format_environment_block(snap: EnvironmentSnapshot) -> str:
     # The executing tools do not run here. Said once, plainly, because the whole line above is a
     # statement about the host — and an agent that reads it as "my environment" will run a command
     # that does not exist where it runs.
-    lines.append("- `run_bash` and `run_tests` execute in a sandbox container when one is available; "
+    lines.append("- `run_bash` executes in a sandbox container when one is available; "
                  "its interpreter and toolchain can differ from the above.")
     return "\n".join(lines)

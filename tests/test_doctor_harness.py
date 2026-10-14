@@ -82,12 +82,13 @@ def test_tool_profile_full_is_a_warning(monkeypatch):
     assert status is CheckStatus.WARN and "full" in message
 
 
-def test_tool_profile_fails_when_a_core_tool_has_no_implementation(monkeypatch):
+def test_tool_profile_fails_when_an_offered_tool_has_no_implementation(monkeypatch):
     from wisp.tools.registry import TOOL_IMPLS
 
-    monkeypatch.delitem(TOOL_IMPLS, "grep")
+    monkeypatch.delenv("WISP_TOOL_PROFILE", raising=False)  # the basic default offers edit_file
+    monkeypatch.delitem(TOOL_IMPLS, "edit_file")
     status, message = _run(dh._check_tool_profile)
-    assert status is CheckStatus.FAIL and "grep" in message
+    assert status is CheckStatus.FAIL and "edit_file" in message
 
 
 # ── subagent_surface ─────────────────────────────────────────────────────────────────────────────────────────

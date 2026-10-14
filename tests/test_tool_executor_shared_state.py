@@ -37,6 +37,13 @@ from wisp.tools import context as exec_ctx
 from wisp.tool_executor import ToolExecutor, _exec_branch, _exec_depth
 
 
+@pytest.fixture(autouse=True)
+def _offer_the_tools_under_test(monkeypatch):
+    """These tests drive tools outside the default basic profile (run_bash/read_file/edit_file/write_file), and a
+    tool that is not offered is refused since 2026-10-14; offer every built-in."""
+    monkeypatch.setenv("WISP_TOOL_PROFILE", "full")
+
+
 class _FakeOrchParallel:
     """Blocking fanout fake: parks so concurrent calls overlap, and
     captures each invocation's contracts (with their bound callbacks)."""
