@@ -1921,6 +1921,7 @@ class ToolExecutor:
         return SubagentDeps(
             resolve_manager=self._get_background_manager,
             tool_error=self._tool_error,
+            resolve_registry=lambda: getattr(self.subagent_orchestrator, "agent_registry", None),
         )
 
     async def _subagent_wait(self, func_args: dict) -> str:

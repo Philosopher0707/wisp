@@ -73,3 +73,10 @@ turn_deadline: ContextVar[float | None] = ContextVar("wisp_turn_deadline", defau
 def get_turn_deadline() -> float | None:
     """Remaining-budget clock for subagent waits/retries. None = no live turn."""
     return turn_deadline.get()
+
+# Lineage of the executing agent (design S1). `current_agent_id` is the subagent whose turn is
+# running (None for the top-level agent); `root_session_id` is the top-level session, set by the
+# engine at the start of a top-level turn and inherited by every child it spawns. The orchestrator
+# reads both to link each child's record to its parent and session.
+current_agent_id: ContextVar[str | None] = ContextVar("wisp_current_agent_id", default=None)
+root_session_id: ContextVar[str | None] = ContextVar("wisp_root_session_id", default=None)

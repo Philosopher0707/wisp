@@ -404,6 +404,38 @@ class UnifiedStore:
                 except sqlite3.OperationalError:
                     pass  # column already present
 
+            # Design S1 (docs/harness/subagent-orchestration-design.md): one row per subagent,
+            # refusals included, linked to its parent and the top-level session. Additive only.
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS agent_records (
+                    agent_id TEXT PRIMARY KEY,
+                    parent_agent_id TEXT NOT NULL DEFAULT '',
+                    root_session_id TEXT NOT NULL DEFAULT '',
+                    origin TEXT NOT NULL DEFAULT 'spawn',
+                    name TEXT NOT NULL DEFAULT '',
+                    role TEXT NOT NULL DEFAULT '',
+                    depth INTEGER NOT NULL DEFAULT 0,
+                    attempt INTEGER NOT NULL DEFAULT 0,
+                    tools TEXT NOT NULL DEFAULT '[]',
+                    model TEXT NOT NULL DEFAULT '',
+                    task_preview TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL,
+                    refusal_reason TEXT NOT NULL DEFAULT '',
+                    error TEXT NOT NULL DEFAULT '',
+                    started_at REAL NOT NULL DEFAULT 0,
+                    ended_at REAL NOT NULL DEFAULT 0,
+                    tokens_used INTEGER NOT NULL DEFAULT 0,
+                    iterations INTEGER NOT NULL DEFAULT 0,
+                    files_changed TEXT NOT NULL DEFAULT '[]',
+                    worktree INTEGER NOT NULL DEFAULT 0,
+                    links TEXT NOT NULL DEFAULT '{}'
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_records_session "
+                         "ON agent_records(root_session_id, started_at)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_records_parent "
+                         "ON agent_records(parent_agent_id)")
+
             # Schema migration (M5): trace span store. span_id is the
             # primary key so retried appends are idempotent; run_id is a
             # real column (not JSON extraction) for indexability.
@@ -720,6 +752,39 @@ class UnifiedStore:
         )
 
     # ── Background runs ─────────────────────────────────────────────
+
+    _AGENT_COLUMNS = ("agent_id", "parent_agent_id", "root_session_id", "origin", "name", "role", "depth",
+                      "attempt", "tools", "model", "task_preview", "status", "refusal_reason", "error",
+                      "started_at", "ended_at", "tokens_used", "iterations", "files_changed", "worktree", "links")
+
+    def agent_insert(self, row: dict) -> None:
+        """Insert one subagent record (see `wisp.runs.agents`)."""
+        cols = [c for c in self._AGENT_COLUMNS if c in row]
+        self._get_conn().execute(
+            f"INSERT INTO agent_records ({', '.join(cols)}) VALUES ({', '.join(':' + c for c in cols)})",
+            {c: row[c] for c in cols})
+
+    def agent_update(self, agent_id: str, **fields: Any) -> None:
+        """Update named columns of one subagent record."""
+        cols = [c for c in fields if c in self._AGENT_COLUMNS and c != "agent_id"]
+        if not cols:
+            return
+        self._get_conn().execute(
+            f"UPDATE agent_records SET {', '.join(f'{c} = :{c}' for c in cols)} WHERE agent_id = :agent_id",
+            {**{c: fields[c] for c in cols}, "agent_id": agent_id})
+
+    def agent_rows(self, *, root_session_id: str | None = None, parent_agent_id: str | None = None) -> list[dict]:
+        """Subagent records, oldest first, optionally narrowed to one session or one parent."""
+        where, params = [], {}
+        if root_session_id is not None:
+            where.append("root_session_id = :root")
+            params["root"] = root_session_id
+        if parent_agent_id is not None:
+            where.append("parent_agent_id = :parent")
+            params["parent"] = parent_agent_id
+        sql = "SELECT * FROM agent_records" + (" WHERE " + " AND ".join(where) if where else "")
+        rows = self._get_conn().execute(sql + " ORDER BY started_at, rowid", params).fetchall()
+        return [dict(r) for r in rows]
 
     def bg_create(self, run: dict) -> None:
         """Create a background run record."""

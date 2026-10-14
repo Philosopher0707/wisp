@@ -31,6 +31,8 @@ from wisp.core.recovery import is_systemic_text
 from ._runner import SubagentRunner
 from ._worktree_manager import WorktreeManager
 from .roles import ROLE_CONFIGS
+from wisp.runs import agents as agent_records
+from wisp.tools import context as _exec_ctx
 from .task import EventKind, OrchestratorEvent, SubagentContract, SubagentResult
 from .task import MAX_SUBAGENT_RETRIES
 
@@ -425,6 +427,8 @@ class SubagentOrchestrator:
         # reap every child deterministically instead of leaking runners that
         # keep streaming into a dying REPL.
         self._live_tasks: set[asyncio.Task[Any]] = set()
+        # One durable record per child (design S1); set by the composition root.
+        self.agent_registry: agent_records.AgentRegistry | None = None
 
     def _spawn_tracked(self, coro: Coroutine[Any, Any, Any]) -> asyncio.Task[Any]:
         task = asyncio.ensure_future(coro)
@@ -725,6 +729,8 @@ class SubagentOrchestrator:
 
         Never raises — failures are returned as ``SubagentResult(success=False)``.
         """
+        record = self._new_agent_record(contract)
+
         # ── Fire spawn hook (before guards — always notify on attempt) ──
         await self._fire_subagent_hook("subagent_spawn", contract, None)
 
@@ -737,8 +743,7 @@ class SubagentOrchestrator:
                 error=f"Subagent depth {contract._subagent_depth} exceeds max {self._max_depth}",
                 elapsed_seconds=0.0,
             )
-            await self._fire_subagent_hook("subagent_fail", contract, result)
-            return result
+            return await self._refused(contract, record, "depth", result)
 
         # ── Role validation ────────────────────────────────────────────
         role_error = self._validate_role(contract)
@@ -751,8 +756,7 @@ class SubagentOrchestrator:
                 error=role_error,
                 elapsed_seconds=0.0,
             )
-            await self._fire_subagent_hook("subagent_fail", contract, result)
-            return result
+            return await self._refused(contract, record, "role", result)
         contract = self._with_role_tools(contract)
 
         # ── Contract validation ────────────────────────────────────────
@@ -764,8 +768,7 @@ class SubagentOrchestrator:
                 error="timeout_seconds must be > 0",
                 elapsed_seconds=0.0,
             )
-            await self._fire_subagent_hook("subagent_fail", contract, result)
-            return result
+            return await self._refused(contract, record, "contract", result)
         if contract.max_iterations <= 0:
             result = SubagentResult(
                 task_id=contract.name,
@@ -774,8 +777,7 @@ class SubagentOrchestrator:
                 error="max_iterations must be > 0",
                 elapsed_seconds=0.0,
             )
-            await self._fire_subagent_hook("subagent_fail", contract, result)
-            return result
+            return await self._refused(contract, record, "contract", result)
 
         # ── One-shot orphan sweep ──────────────────────────────────────
         # First run in this process reclaims worktrees leaked by crashed
@@ -820,8 +822,7 @@ class SubagentOrchestrator:
                 error=budget_error,
                 elapsed_seconds=0.0,
             )
-            await self._fire_subagent_hook("subagent_fail", contract, result)
-            return result
+            return await self._refused(contract, record, "budget", result)
 
         # ── Worktree ───────────────────────────────────────────────────
         worktree_path = await self._resolve_worktree(contract)
@@ -840,6 +841,7 @@ class SubagentOrchestrator:
             except Exception as exc:
                 logger.warning("Failed to clean up worktree %s: %s", worktree_path, exc)
 
+        started = finished = False
         try:
             agent_workspace = str(worktree_path or self.workspace)
 
@@ -849,6 +851,10 @@ class SubagentOrchestrator:
             # ── Run with concurrency control ───────────────────────
             async with self._semaphore:
                 self._active += 1
+                if self.agent_registry is not None:
+                    self.agent_registry.start(record)
+                started = True
+                lineage = _exec_ctx.current_agent_id.set(record.agent_id)
                 try:
                     result = await self._runner.run(
                         contract=contract,
@@ -857,7 +863,9 @@ class SubagentOrchestrator:
                         progress_callback=contract.progress_callback,
                     )
                 finally:
+                    _exec_ctx.current_agent_id.reset(lineage)
                     self._active -= 1
+            own = result
 
             # ── Timeout retry: one extra round at ×1.5, bounded by the ──
             # parent turn's remaining clock. Slow reasoning models (nemotron
@@ -882,6 +890,8 @@ class SubagentOrchestrator:
                     )
                     await self._emit_retry(contract, contract.retry_count + 1,
                                            0.0)
+                    self._finish_agent_record(record, own, worktree_path is not None)
+                    finished = True
                     return await self.run(self._consume_budget(
                         contract, timeout_seconds=budget))
             elif result.timed_out and contract.retry_count > 0:
@@ -945,7 +955,19 @@ class SubagentOrchestrator:
             # G1E §25: stamp consumed logical budget on the result so callers
             # observe attempt_number/max without a parallel channel.
             result.retry_count = contract.retry_count
+            self._finish_agent_record(record, own, worktree_path is not None,
+                                      repaired_by_retry=result is not own)
+            finished = True
+            if result is own:
+                result.agent_id = record.agent_id
             return result
+        except BaseException as exc:
+            if started and not finished and self.agent_registry is not None:
+                self.agent_registry.finish(
+                    record.agent_id,
+                    agent_records.CANCELLED if isinstance(exc, asyncio.CancelledError) else agent_records.FAILED,
+                    error=f"{type(exc).__name__}: {exc}")
+            raise
         finally:
             await _cleanup_worktree()
 
@@ -1400,6 +1422,59 @@ class SubagentOrchestrator:
             return f"Role '{contract.role}' has no system prompt configured"
         return None
 
+    def _new_agent_record(self, contract: SubagentContract) -> agent_records.AgentRecord:
+        """This attempt's record, linked to the agent whose turn is running and its session."""
+        from ._runner import _effective_child_tools, _extension_tool_names
+
+        tools = contract.tools
+        if contract.role in ROLE_CONFIGS:
+            tools = self._with_role_tools(contract).tools
+        mode = str(getattr(self.config, "permission_mode", "auto_edit") or "auto_edit")
+        metadata = getattr(contract, "metadata", None) or {}
+        try:
+            effective = tuple(_effective_child_tools(
+                tools, mode, _extension_tool_names(getattr(self._runner, "_agent_runtime", None))))
+        except Exception:
+            # Recording must never stop a child; the record then lists what was asked for.
+            logger.debug("could not resolve %s's effective tools for its record", contract.name, exc_info=True)
+            effective = tuple(str(t) for t in tools or ())
+        return agent_records.AgentRecord(
+            agent_id=agent_records.new_agent_id(), status=agent_records.RUNNING,
+            parent_agent_id=_exec_ctx.current_agent_id.get() or "",
+            root_session_id=_exec_ctx.root_session_id.get() or "",
+            origin=str(metadata.get("_origin", "spawn")), name=contract.name, role=contract.role,
+            depth=int(contract._subagent_depth or 0), attempt=int(contract.retry_count or 0),
+            tools=effective,
+            model=str(contract.model or getattr(self.config, "model", "") or ""),
+            task_preview=contract.task or "", started_at=time.time(),
+            links={str(k): str(v) for k, v in dict(metadata.get("_links") or {}).items()})
+
+    async def _refused(self, contract: SubagentContract, record: agent_records.AgentRecord, reason: str,
+                       result: SubagentResult) -> SubagentResult:
+        result.refusal_reason = reason
+        result.agent_id = record.agent_id
+        if self.agent_registry is not None:
+            self.agent_registry.refuse(record, reason, result.error or "")
+        await self._fire_subagent_hook("subagent_fail", contract, result)
+        return result
+
+    def _finish_agent_record(self, record: agent_records.AgentRecord, own: SubagentResult, isolated: bool,
+                             repaired_by_retry: bool = False) -> None:
+        if self.agent_registry is None:
+            return
+        error = own.error or ""
+        if own.success and not repaired_by_retry:
+            status = agent_records.SUCCEEDED
+        elif "cancel" in error.lower():
+            status = agent_records.CANCELLED
+        else:
+            status = agent_records.FAILED
+            if repaired_by_retry and not error:
+                error = "output failed its schema; a retry was run"
+        self.agent_registry.finish(
+            record.agent_id, status, error=error, tokens_used=own.tokens_used,
+            iterations=own.iterations_used, files_changed=own.files_changed or (), worktree=isolated)
+
     @staticmethod
     def _with_role_tools(contract: SubagentContract) -> SubagentContract:
         """A contract that names a role but no tools gets the role's tool list.
@@ -1621,6 +1696,9 @@ class SubagentOrchestrator:
                 if result.success:
                     return result
                 last_error = result.error or "subagent failed"
+                # A refusal (depth, role, contract, budget) is the same on every attempt.
+                if result.refusal_reason:
+                    return result
                 # Don't retry on timeouts — the model is too slow or unreachable
                 if result.timed_out:
                     logger.warning(

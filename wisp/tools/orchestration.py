@@ -193,6 +193,7 @@ async def dag(deps: OrchestrationDeps, func_args: dict[str, Any], workspace: str
         )
         if err:
             return deps.tool_error("orchestrate_dag", err)
+        contract.metadata.update({"_origin": "dag", "_links": {"node_id": name}})
         node_deps = spec.get("depends_on") or []
         unknown = [d for d in node_deps if d not in seen_names]
         if unknown:

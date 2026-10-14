@@ -21,6 +21,7 @@ class SubagentDeps:
 
     resolve_manager: Callable[[], Any | None]
     tool_error: Callable[[str, str], str]
+    resolve_registry: Callable[[], Any | None] = lambda: None
 
 
 async def wait(deps: SubagentDeps, func_args: dict[str, Any]) -> str:
@@ -155,14 +156,22 @@ async def wait(deps: SubagentDeps, func_args: dict[str, Any]) -> str:
 
 
 async def list_agents(deps: SubagentDeps, func_args: dict[str, Any]) -> str:
+    from wisp.tools.context import root_session_id
+
     manager = deps.resolve_manager()
-    if manager is None:
+    registry = deps.resolve_registry()
+    if manager is None and registry is None:
         return deps.tool_error("subagent_list", "Background agents not available")
-    entries = manager.list(include_finished=bool(func_args.get("include_finished", True)))
+    entries = manager.list(include_finished=bool(func_args.get("include_finished", True))) if manager else []
+    data: dict[str, Any] = {"agents": entries, "count": len(entries)}
+    session = root_session_id.get()
+    if registry is not None and session:
+        # Every child of this session, sync ones and refusals included, as parent -> children.
+        data["tree"] = registry.tree(session)
     return json.dumps({
         "status": "ok",
         "tool": "subagent_list",
-        "data": {"agents": entries, "count": len(entries)},
+        "data": data,
         "metadata": {},
     }, ensure_ascii=False)
 
