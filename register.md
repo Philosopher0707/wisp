@@ -34,7 +34,7 @@
 | `ApprovalCancelled` | `Exception` | verdict | approval | `wisp/exceptions.py:17` | 1 | `wisp/transport/cli.py:960` | `wisp/core/approval_gate.py:117`, `wisp/core/approval_gate.py:146`, `wisp/multi_agent/approval_relay.py:66`, `wisp/tool_executor.py:882` | — |
 | `ApprovalTimeout` | `Exception` | verdict | approval | `wisp/exceptions.py:33` | 1 | `wisp/transport/cli.py:923` | `wisp/core/approval_gate.py:127`, `wisp/multi_agent/approval_relay.py:66`, `wisp/tool_executor.py:895` | — |
 | `_TransientOpenError` | `Exception` | recoverable | provider | `wisp/core/provider_stream.py:44` | 1 | `wisp/core/provider_stream.py:235` | `wisp/core/provider_stream.py:342` | — |
-| `FirstTokenTimeout` | `asyncio.TimeoutError` | recoverable | subagent | `wisp/multi_agent/_runner.py:186` | 1 | `wisp/multi_agent/_runner.py:246` | `wisp/multi_agent/_runner.py:480`, `wisp/multi_agent/_runner.py:783`, `wisp/multi_agent/_runner.py:961` | — |
+| `FirstTokenTimeout` | `asyncio.TimeoutError` | recoverable | subagent | `wisp/multi_agent/_runner.py:186` | 1 | `wisp/multi_agent/_runner.py:246` | `wisp/multi_agent/_runner.py:480`, `wisp/multi_agent/_runner.py:785`, `wisp/multi_agent/_runner.py:965` | — |
 | `CircuitOpenError` | `Exception` | recoverable | provider | `wisp/infra/circuit_breaker.py:175` | 2 | `wisp/infra/circuit_breaker.py:93` | `wisp/core/stateless.py:1377` | — |
 | `CircuitBreakerOpenError` | `Exception` | recoverable | subagent | `wisp/multi_agent/_circuit_breaker.py:102` | 1 | `wisp/multi_agent/_circuit_breaker.py:44` | — | — |
 | `_Exit` | `Exception` | recoverable | cli | `wisp/review/cli.py:32` | 1 | `wisp/review/cli.py:48` | `wisp/review/cli.py:141`, `wisp/review/cli.py:202` | — |

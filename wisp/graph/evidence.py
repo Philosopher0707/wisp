@@ -19,6 +19,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from wisp.core.verification import _MUTATING_TOOLS, _VERIFY_TOOLS
+from wisp.multi_agent.observations import clean, tests_state
 
 #: Tools whose result says nothing about what is on disk afterwards: anything that can write, and the two shells.
 _CHANGES_FILES = frozenset(_MUTATING_TOOLS | _VERIFY_TOOLS)
@@ -33,24 +34,8 @@ _EXPLANATION = {
 }
 
 
-def _clean(observations: Any) -> list[dict[str, Any]]:
-    if not isinstance(observations, (list, tuple)):
-        return []
-    return [o for o in observations if isinstance(o, dict) and isinstance(o.get("tool"), str) and o["tool"]]
-
-
-def _tests_state(observations: list[dict[str, Any]]) -> str:
-    last = None
-    for index, entry in enumerate(observations):
-        if entry["tool"] == "run_tests":
-            last = index
-    if last is None:
-        return "none"
-    if observations[last].get("green") is not True:
-        return "red"
-    if any(entry["tool"] in _CHANGES_FILES for entry in observations[last + 1:]):
-        return "stale"
-    return "green"
+_clean = clean
+_tests_state = tests_state
 
 
 def _demands_tests(allowed_tools: Any, required: Any) -> bool:

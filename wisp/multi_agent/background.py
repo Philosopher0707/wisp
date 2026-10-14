@@ -520,12 +520,12 @@ class BackgroundAgentManager:
                 "error": entry.error,
                 "session_id": "",
             }
+        from wisp.multi_agent.handback import handback
+
         r = entry.result
         return {
-            "ok": bool(getattr(r, "success", False)),
-            "summary": (getattr(r, "output", "") or "")[:2000],
-            "files": list(getattr(r, "files_changed", []) or []),
             "error": getattr(r, "error", None),
+            **handback(r),
             "session_id": getattr(r, "session_id", "") or "",
             "elapsed_seconds": round(getattr(r, "elapsed_seconds", 0.0), 1),
         }
