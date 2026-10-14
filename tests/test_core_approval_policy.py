@@ -50,21 +50,6 @@ def test_tool_executor_no_longer_defines_the_policy():
     assert not defined & set(MOVED), f"still defined in tool_executor: {sorted(defined & set(MOVED))}"
 
 
-def test_the_rest_gate_depends_on_core_not_on_the_executor():
-    src = (REPO / "wisp" / "server" / "deps.py").read_text(encoding="utf-8")
-    assert "from wisp.core.approval_policy import approval_needed" in src
-    assert "from wisp.tool_executor import approval_needed" not in src
-
-
-def test_the_module_does_not_reach_up_into_the_executor_or_presentation():
-    tree = ast.parse(Path(policy.__file__).read_text(encoding="utf-8"))
-    mods = {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module}
-    mods |= {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
-    bad = {m for m in mods if m.startswith(("wisp.tool_executor", "wisp.cli", "wisp.repl", "wisp.server",
-                                           "wisp.transport", "wisp.tui"))}
-    assert not bad, f"core approval policy imports {sorted(bad)}"
-
-
 def test_the_write_tool_set_is_unchanged_in_content():
     """Pins what is gated, by name, so a move that drops or adds a tool is caught here and not in production."""
     tools = policy.get_write_tools(None)

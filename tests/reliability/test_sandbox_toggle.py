@@ -259,11 +259,3 @@ def test_no_server_route_can_set_the_sandbox_mode():
     )
 
 
-def test_prompt_request_has_no_sandbox_field():
-    """Mechanical, not a source scan: the request model is the API contract."""
-    from wisp.server.routes.prompt import PromptRequest
-
-    fields = getattr(PromptRequest, "model_fields", None) or getattr(PromptRequest, "__fields__", {})
-    assert "sandbox" not in set(fields), (
-        "POST /api/prompt must not carry a sandbox field — see ADR-0076 R4"
-    )

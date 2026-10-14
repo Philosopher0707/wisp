@@ -68,17 +68,6 @@ async def test_is_available_caller_can_stay_on_loop():
     assert result is True
 
 
-def test_diagnostics_route_wraps_probe_in_to_thread():
-    """Structural pin: the status route must not call is_available()
-    directly."""
-    from pathlib import Path
-
-    text = Path("wisp/server/routes/diagnostics.py").read_text()
-    assert "await asyncio.to_thread(sandbox.is_available)" in text, (
-        "sandbox probe back on the event loop"
-    )
-
-
 @pytest.mark.asyncio
 async def test_workspace_routers_have_isolated_docker_lifecycle(
     tmp_path, monkeypatch

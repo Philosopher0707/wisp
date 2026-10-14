@@ -21,7 +21,7 @@ restrictions, redaction rules, approval matrix, telemetry policy, expiry,
 
 - Org signing key: offline, backed up; rotation via overlapping validity.
 - Emergency revocation: publish a short-lived bundle with bumped
-  `revocation_seq`, or `POST /api/policy/revoke`.
+  `revocation_seq` (the `POST /api/policy/revoke` route went with the server in M0).
 - Device keys (M4 future): local Ed25519, public half registered.
 
 ## Precedence (narrow-only)

@@ -357,8 +357,9 @@ class SubagentRunner:
 
         # Emit start event
         if progress_callback:
-            # The renderer shows each subagent's real authority surface
-            # (wisp-desktop SubagentPanel). Derive it with the *same* helper
+            # A renderer shows each subagent's real authority surface (the
+            # desktop SubagentPanel was its reader until M0; the REPL does not
+            # show it yet). Derive it with the *same* helper
             # that populates `session_dict["allowed_tools"]` further down, so
             # what the UI displays is the enforcement input itself and cannot
             # drift from what the child's executor is governed by.

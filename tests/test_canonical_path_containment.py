@@ -19,7 +19,6 @@ from __future__ import annotations
 import os
 import pathlib
 import tempfile
-from pathlib import Path
 
 import pytest
 
@@ -94,16 +93,6 @@ def _workspace(root: str, cand: str) -> str:
         return "DENY"
 
 
-def _server(root: str, cand: str) -> str:
-    import wisp.server.routes.files as F
-    F.WORKSPACE_ROOT = Path(root)
-    try:
-        F._resolve_path(cand)
-        return "ALLOW"
-    except Exception:
-        return "DENY"
-
-
 def _sandbox(root: str, cand: str) -> str:
     from wisp.sandbox import resolve_sandbox_cwd
     return "ALLOW" if resolve_sandbox_cwd(root, cand) is not None else "DENY"
@@ -114,7 +103,6 @@ ENTRY_POINTS = {
     "tools._utils": _utils,
     "graph.artifacts": _artifacts,
     "workspace": _workspace,
-    "server.routes.files": _server,
     "sandbox.cwd": _sandbox,
 }
 

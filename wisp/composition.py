@@ -318,17 +318,6 @@ class CompositionRoot:
         except Exception:
             logger.debug("background agent recovery failed", exc_info=True)
 
-        # ADR-0057: the REST approval bridge. A REST request for an
-        # executable-config action (`hooks.create`, `mcp.add_server`,
-        # `plugins.install`) asks a human over the WebSocket channel, because
-        # ADR-0055 measured that REST otherwise gets the agent's *no-approver*
-        # behaviour. The bridge holds the connected channels; the WebSocket
-        # route registers one per connection. Flag-gated by
-        # `WISP_REST_APPROVAL` (default OFF), so with it off nothing consults
-        # this object.
-        from wisp.server.approval_bridge import ApprovalBridge
-        self.approval_bridge = ApprovalBridge()
-
         # Owned HTTP session registry (Phase 2.1, D4): pools acquired
         # through this registry are closed in shutdown(). Providers that
         # predate the registry still construct their own sessions; those

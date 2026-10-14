@@ -106,7 +106,6 @@ Common operations:
 | `wisp swarm 'goal'` | Multi-agent swarm for a goal |
 | `wisp graph run coding-agent '{"goal":"..."}'` | Deterministic graph run (list/show/validate/resume/status/cancel/trace/inspect/metrics) |
 | `wisp bench -m m1,m2` | Benchmark matrix (see below) |
-| `wisp server` | API + WebSocket server (auth required, see below) |
 | `wisp task/policy/trace/replay/audit/release` | Durable tasks, governance, evidence, supply chain |
 | `wisp check` / `wisp models` | Provider health / model listing |
 | `wisp fleet status/doctor/workers` | Read-only status over the repos in `wisp.fleet.toml`; render MCP workers (see `docs/fleet/README.md`) |
@@ -152,15 +151,12 @@ Threat model (`docs/THREAT-MODEL.md`): the developer is trusted; **model output,
 | **Sandbox** | `run_bash` routes through `get_sandbox()`: Docker (network-none by default — `WISP_SANDBOX_NETWORK=bridge` opens egress — memory/CPU-capped, workspace-mounted) when the daemon is reachable, else host execution with a loud per-call `UNCONFINED` warning. `WISP_SANDBOX=off` forces host mode explicitly. |
 | **Authority** | `ToolExecutor` is the only action path; layered `authorize()` denies closed-gate with the controlling layer named. Hook-controlled dirs (`.wisp/hooks/`) are un-writable by agent tools. |
 | **Credentials** | `config.json` and `.env` written `0o600`; subprocess envs are credential-stripped; 6 secret families redacted at record construction. |
-| **Server** | `wisp server` refuses to boot unauthenticated (exit 2 + key-minting instructions). `--no-auth` is loopback-only and loudly warned; non-loopback binds always require `WISP_API_KEY`. |
-| **Transport/API** | WebSocket message caps; SQLite-backed rate limits on mutating routes; security headers + opt-in HSTS; error sanitization on production routes. |
 | **Invariant gates** | Five deterministic layers run before every tool call and on every result, before any approval prompt (no human "yes" overrides them): canonical-path write confinement, a real shell parser that refuses irreversible commands however they are spelled (and anything it cannot analyse), secret scrubbing before the model sees a tool result, a dependency lock, and a completion verifier that only counts a real test/lint/build run. `WISP_INVARIANT_GATES=enforce|observe|off` (a typo means `enforce`), `WISP_DEPENDENCY_LOCK`. Invariant table with a witness test per row: [`docs/harness/invariant-gates.md`](docs/harness/invariant-gates.md). |
 | **Governance** | Ed25519 bundles, revocation + expiry-trim, extension consent + origin pinning, quarantine markers that deny writes even in full mode. |
 
 What Wisp does **not** claim: the legacy dangerous-command check (`sudo`, recursive `rm`, disk writes, pipe-to-shell) is a best-effort heuristic deny-list, not a security boundary. The invariant gates replace guesswork with a parser for what a *shell* can see, but they do not parse inline interpreter code (`python -c`, `node -e`) and cannot defend a symlink swapped between check and write (both stated in `docs/harness/invariant-gates.md`). Confinement means Docker; everything else is defense in depth. Production hardening knobs:
 
 ```bash
-export WISP_API_KEY="$(openssl rand -hex 32)"   # required for wisp server
 export WISP_PRODUCTION_MODE="true"               # blocks metadata IPs
 export WISP_ALLOWED_WORKSPACE_ROOTS="/var/wisp-workspaces"
 export WISP_ALLOWED_OLLAMA_HOSTS="localhost,127.0.0.1,my-llm.internal"
@@ -216,8 +212,6 @@ Extension points: add a tool via `TOOL_SCHEMAS` + `TOOL_IMPLS` in `wisp/tools/re
 
 ## Ecosystem / Community Interfaces
 
-- **macOS app** (`wisp-desktop/`, Electron, arm64): a self-contained app that bundles its own Python and wisp (no system Python needed), with a sessions sidebar (history from every Wisp store on the machine, read-only), a model-provider switcher, and a workbench dock with Diff, Terminal, Browser and Files. Ad-hoc signed for now. Build, verify and security model: [`wisp-desktop/README.md`](wisp-desktop/README.md); decisions: [`docs/adr/2026-10-07-desktop-host-terminal-and-workspace.md`](docs/adr/2026-10-07-desktop-host-terminal-and-workspace.md).
-- **Remote control clients** (community-maintained, experimental): build and usage guide at [`docs/archive/ANDROID_USAGE_GUIDE.md`](docs/archive/ANDROID_USAGE_GUIDE.md); cloud deploy notes at [`docs/archive/CLOUD_DEPLOYMENT_GUIDE.md`](docs/archive/CLOUD_DEPLOYMENT_GUIDE.md).
 - **Operators**: [`docs/QUICKSTART.md`](docs/QUICKSTART.md) · [`docs/ADMIN-GUIDE.md`](docs/ADMIN-GUIDE.md) · [`docs/COMPLIANCE.md`](docs/COMPLIANCE.md) · [`docs/RELEASE.md`](docs/RELEASE.md)
 
 ---

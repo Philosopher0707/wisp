@@ -2,13 +2,12 @@
 
 Covers configuration, skills listing, memory, plan, progress, diagnose,
 and utility functions.  Does NOT cover commands that require a live LLM
-(cmd_run, cmd_repl, cmd_server, cmd_tui, cmd_models, cmd_check).
+(cmd_run, cmd_repl, cmd_models, cmd_check).
 """
 
 import sys
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 import wisp.__main__ as main_mod
 
@@ -97,33 +96,6 @@ class TestCmdConfig:
 
 
 # ── cmd_print ────────────────────────────────────────────────────────
-
-class TestCmdPrint:
-    def test_api_key_in_headers(self, monkeypatch):
-        """cmd_print must send API key in X-API-Key header, not query param."""
-        import requests
-
-        posted = {}
-
-        def mock_post(url, json=None, params=None, headers=None, timeout=None):
-            posted["headers"] = headers or {}
-            posted["params"] = params
-            class R:
-                status_code = 200
-                def json(self):
-                    return {"ok": True, "content": "Done"}
-            return R()
-
-        monkeypatch.setattr(requests, "post", mock_post)
-        monkeypatch.setenv("WISP_API_KEY", "test-secret-key")
-
-        with patch("wisp.__main__._setup_logging"):
-            with pytest.raises(SystemExit) as exc:
-                main_mod.cmd_print(prompt="hello", quiet=True)
-            assert exc.value.code == 0
-
-        assert posted["headers"].get("X-API-Key") == "test-secret-key"
-        assert posted.get("params") is None or "api-key" not in (posted["params"] or {})
 
 
 # ── _resolve_session_or_fragment ─────────────────────────────────────
@@ -332,18 +304,5 @@ class TestCmdMcp:
         mock_add.assert_called_once()
 
 
-import inspect
 
 
-class TestCmdTui:
-    """cmd_tui must have a single code path — no React/Ink bifurcation."""
-
-    def test_no_use_ink_parameter(self):
-        import inspect
-        sig = inspect.signature(main_mod.cmd_tui)
-        assert "use_ink" not in sig.parameters, "cmd_tui should not expose use_ink"
-
-    def test_no_react_path_in_body(self):
-        src = inspect.getsource(main_mod.cmd_tui)
-        assert "subprocess.run" not in src, "cmd_tui contains legacy React/Ink subprocess path"
-        assert "wisp-tui.mjs" not in src, "cmd_tui references legacy wisp-tui.mjs"

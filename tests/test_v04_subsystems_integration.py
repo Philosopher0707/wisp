@@ -296,42 +296,6 @@ class TestScenarioBSandboxAndServerAuth:
                    for r in caplog.records), \
             "unconfined execution ran silently!"
 
-    def test_server_without_token_fails_fast(self, capsys: Any) -> None:
-        from wisp.server.main import _check_bind_auth
-
-        with pytest.raises(SystemExit) as exc:
-            _check_bind_auth("127.0.0.1", False, False)
-        assert exc.value.code == 2
-        err = capsys.readouterr().err
-        assert "WISP_API_KEY" in err and "--no-auth" in err
-
-    def test_server_no_auth_flag_warns_not_fails(self) -> None:
-        from wisp.server.main import _check_bind_auth
-
-        warning = _check_bind_auth("127.0.0.1", True, False)
-        assert warning is not None and "DISABLED" in warning
-
-    def test_server_main_entry_fails_fast_without_token(
-        self, monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """main() must refuse before uvicorn ever binds."""
-        from unittest.mock import patch
-
-        from wisp.server.main import main
-
-        monkeypatch.delenv("WISP_API_KEY", raising=False)
-        with patch("uvicorn.run") as mock_run:
-            with pytest.raises(SystemExit) as exc:
-                main(host="127.0.0.1", port=8123, no_auth=False)
-        assert exc.value.code == 2
-        mock_run.assert_not_called()
-
-    def test_server_non_loopback_never_allows_no_auth(self) -> None:
-        from wisp.server.main import _check_bind_auth
-
-        with pytest.raises(SystemExit):
-            _check_bind_auth("0.0.0.0", True, False)
-
 
 # ═══════════════════════════════════════════════════════════════════════
 # Scenario C: File checkpoint & rewind state machine (GH#15)

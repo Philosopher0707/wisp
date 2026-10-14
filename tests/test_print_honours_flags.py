@@ -6,9 +6,9 @@ quietly ran on the default provider, and `WISP_PERMISSION_MODE=read_only wisp --
 with full permissions: a caller who asked for a read-only headless run got an unrestricted one.
 
 The default is unchanged (`full`, as before, so existing headless users are unaffected). An explicit
-mode is honoured; an invalid one is refused rather than treated as `full`. When any override is set the
-local-server shortcut is skipped, because a server on :8000 would ignore it and answer with its own
-provider, workspace and permissions.
+mode is honoured; an invalid one is refused rather than treated as `full`. There is no local-server
+shortcut any more (the server was removed in M0, 2026-10-14): every run is in-process, so no override
+can be ignored by a server on :8000.
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ def _print(**kw):
 def test_the_default_is_unchanged(headless):
     assert _print() == 0
     k = headless["kwargs"]
-    assert k["permission_mode"] == "full" and k["provider"] is None and headless["posted"] is True
+    assert k["permission_mode"] == "full" and k["provider"] is None and headless["posted"] is False
 
 
 def test_provider_and_workspace_reach_the_run(headless, tmp_path):

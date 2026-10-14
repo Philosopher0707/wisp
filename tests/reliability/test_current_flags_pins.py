@@ -121,15 +121,13 @@ class TestTheRegisterIsTotal:
 
     def test_the_env_only_switches_have_rows(self, rows):
         stated = {r[0] for r in rows}
-        for name in ("criteria_strict_derivation", "criteria_structured_declaration",
-                     "ws_auto_approve"):
+        for name in ("criteria_strict_derivation", "criteria_structured_declaration"):
             assert name in stated, (
                 f"{name} is read from `os.environ` and is not a `WispConfig` field, so the "
                 "schema check above cannot see it; it must be listed explicitly")
 
     def test_no_row_names_a_setting_that_does_not_exist(self, rows, schema):
-        env_only = {"criteria_strict_derivation", "criteria_structured_declaration",
-                    "ws_auto_approve"}
+        env_only = {"criteria_strict_derivation", "criteria_structured_declaration"}
         bools = {k for k, v in schema.items() if v.get("type") is bool}
         stray = sorted({r[0] for r in rows} - bools - env_only)
         assert not stray, (
@@ -264,8 +262,7 @@ class TestTheReadingRuleIsStatedAndItsDeparturesRecorded:
 
     def test_it_records_the_env_only_departure(self, page_text):
         body = page_text.split("## (a) The reading rule", 1)[1].split("\n## ", 1)[0]
-        for name in ("criteria_strict_derivation", "criteria_structured_declaration",
-                     "ws_auto_approve"):
+        for name in ("criteria_strict_derivation", "criteria_structured_declaration"):
             assert name in body, (
                 f"§(a) must record that {name} is read from `os.environ` and not via "
                 "`getattr(config, …)` — that is a departure from ADR-0002's part 2")

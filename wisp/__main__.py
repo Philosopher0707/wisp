@@ -113,12 +113,6 @@ def _setup_logging(verbose: bool = False):
     root.handlers[:] = [handler]
 
 
-def cmd_server(host="127.0.0.1", port=8000, no_auth=False):
-    """Run Wisp Cloud Server (loopback-only unless WISP_API_KEY is set)."""
-    from wisp.entry import run_mode
-    run_mode("server", host=host, port=port, no_auth=no_auth)
-
-
 def cmd_run(prompt, model=None, skill=None, workspace=None, auto_approve=False, session_id=None, show_thinking=False, provider=None):
     """Run Wisp with a prompt."""
     from wisp.entry import run_mode
@@ -131,19 +125,6 @@ def cmd_repl(model=None, skill=None, workspace=None, session_id=None, show_think
     from wisp.entry import run_mode
     run_mode("cli", model=model, skill=skill, workspace=workspace,
              session_id=session_id, show_thinking=show_thinking, auto_approve=auto_approve, provider=provider)
-
-
-def cmd_tui(model=None, workspace=None, show_thinking=False, auto_approve=False, provider=None):
-    """Run the full-screen terminal app with a real composition root.
-
-    The app needs root.runtime for local turns — building the bare
-    WispTUIApp here left every prompt dead-ended at "Waiting for
-    server...", so this delegates through run_mode like cmd_repl.
-    """
-    from wisp.entry import run_mode
-    run_mode("tui", model=model, workspace=workspace,
-             show_thinking=show_thinking, auto_approve=auto_approve,
-             provider=provider)
 
 
 def cmd_skills(workspace=None):
@@ -244,77 +225,27 @@ def cmd_print(prompt, model=None, session_id=None, output_format="json", quiet=F
               provider=None, workspace=None):
     """Headless mode: run prompt, print JSON result to stdout, exit.
 
-    First attempts to reach a local Wisp server at port 8000, unless the caller set an override the
-    server would ignore (`--provider`, `--workspace`, `WISP_PERMISSION_MODE`). If unavailable, runs the
-    agent directly in-process.
+    Runs the agent in-process (the HTTP server it used to try first was removed in M0).
     """
-    import requests
-
-    result = None
     exit_code = 0
     permission_mode = _print_permission_mode()
-    delegate = not (provider or workspace or os.environ.get("WISP_PERMISSION_MODE", "").strip())
-
-    # Try local server first — bounded: a listener that accepts but never
-    # replies (stale server, port squatter) must not hang headless runs.
-    # (connect 5s, read 15s); on timeout we fall through to in-process,
-    # which returns the correct answer with at most duplicative server work.
     try:
-        if not delegate:
-            raise requests.ConnectionError("overrides set: run in-process")
-        api_key = os.environ.get("WISP_API_KEY", "")
-        headers = {}
-        if api_key:
-            headers["X-API-Key"] = api_key
-        resp = requests.post(
-            "http://127.0.0.1:8000/api/prompt",
-            json={
-                "prompt": prompt,
-                "model": model,
-                "session_id": session_id,
-            },
-            headers=headers,
-            timeout=(5, 15),
-        )
-        if resp.status_code == 200:
-            result = resp.json()
-        elif resp.status_code == 401:
-            # Auth required -- fall through to in-process
-            pass
-        else:
-            # Other error from server
-            try:
-                result = resp.json()
-            except Exception:
-                result = {"ok": False, "error": f"Server returned {resp.status_code}: {resp.text[:500]}"}
-            exit_code = 1
-    except requests.ConnectionError:
-        # No server running, fall through to in-process
-        pass
-    except Exception:
-        pass
+        import asyncio
+        from wisp.headless import run_headless
 
-    # Run in-process if server not available
-    if result is None:
-        if not quiet:
-            sys.stderr.write("No local server found — running agent in-process...\n")
-        try:
-            import asyncio
-            from wisp.headless import run_headless
+        from wisp.config import safe_getcwd
 
-            from wisp.config import safe_getcwd
-
-            result = asyncio.run(run_headless(
-                prompt=prompt,
-                model=model,
-                workspace=workspace or safe_getcwd(),
-                session_id=session_id,
-                permission_mode=permission_mode,
-                provider=provider,
-            ))
-        except Exception as e:
-            result = {"ok": False, "error": str(e)}
-            exit_code = 1
+        result = asyncio.run(run_headless(
+            prompt=prompt,
+            model=model,
+            workspace=workspace or safe_getcwd(),
+            session_id=session_id,
+            permission_mode=permission_mode,
+            provider=provider,
+        ))
+    except Exception as e:
+        result = {"ok": False, "error": str(e)}
+        exit_code = 1
 
     # Output
     if output_format == "stream-json":
@@ -602,65 +533,16 @@ def cmd_mcp(args: list[str]):
         else:
             print(dim("No MCP servers configured."))
             print(dim("  Add a server: wisp mcp add <name> <command> [args...]"))
-            print(dim("  Add VS Code:  wisp mcp add-vscode"))
         return
 
     sub = args[0]
 
-    if sub == "add-vscode":
-        _setup_vscode_mcp()
-    elif sub == "add" and len(args) >= 3:
+    if sub == "add" and len(args) >= 3:
         _add_mcp_server(args[1], args[2:])
     else:
         print("Usage:")
         print("  wisp mcp                      List MCP servers")
-        print("  wisp mcp add-vscode           Add VS Code MCP server")
         print("  wisp mcp add <name> <cmd>     Add a custom MCP server")
-
-
-def _setup_vscode_mcp():
-    """Configure VS Code MCP server in .wisp/mcp.json."""
-    import json
-    from pathlib import Path
-
-    ws_mcp_dir = Path(".wisp")
-    ws_mcp_dir.mkdir(exist_ok=True)
-    config_file = ws_mcp_dir / "mcp.json"
-
-    vscode_config = {
-        "name": "vscode",
-        "command": sys.executable or "python",
-        "args": ["-m", "wisp.mcp_servers.vscode_server"],
-        "description": "VS Code editor integration - open files, run commands, show messages",
-    }
-
-    if config_file.exists():
-        try:
-            configs = json.loads(config_file.read_text())
-            if isinstance(configs, dict):
-                configs = configs.get("mcpServers", configs.get("servers", []))
-        except (json.JSONDecodeError, OSError):
-            configs = []
-    else:
-        configs = []
-
-    # Check if vscode already exists
-    for c in configs:
-        if c.get("name") == "vscode":
-            print(success("✓ VS Code MCP server already configured."))
-            return
-
-    configs.append(vscode_config)
-    config_file.write_text(json.dumps(configs, indent=2) + "\n")
-    print(success(f"✓ VS Code MCP server added to {config_file}"))
-    print()
-    print(info("  Tools available:"))
-    print(dim("    vscode_open_file     - Open a file at a specific line"))
-    print(dim("    vscode_run_command   - Run any VS Code command"))
-    print(dim("    vscode_show_message  - Show a notification in VS Code"))
-    print(dim("    vscode_get_editor_state - Get current editor state"))
-    print()
-    print(dim("  Next time you run wisp, these tools will be available to the LLM."))
 
 
 def _add_mcp_server(name: str, cmd_args: list[str]):
@@ -844,12 +726,6 @@ def cmd_changes(args: list[str]):
 
 # ── ACP adapter command ────────────────────────────────────────────────
 
-def cmd_acp(args: list[str]):
-    """Run Wisp as an ACP external agent for Zed."""
-    from wisp.acp_adapter import main as acp_main
-    acp_main(args)
-
-
 def _session_store(workspace: str | None = None):
     """Resolve the session store readers use (GH#12).
 
@@ -1013,9 +889,6 @@ Options:
 Subcommands:
   run <prompt>             Single-shot agent with a prompt
   repl                     Interactive REPL mode (continuous chat)
-  tui                      Full-screen terminal app (experimental)
-  tui --ink                Launch React/Ink TUI (requires Node.js)
-  server                   Start cloud server for remote clients
   session list             List all saved sessions
   session show <id>        Show session details and recent messages
   session delete <id>      Delete a session
@@ -1078,13 +951,6 @@ _SUBCOMMAND_HELP: dict[str, str] = {
         "\n"
         "Inside the REPL, /help lists slash commands."
     ),
-    "tui": (
-        "Usage: wisp tui [flags]\n"
-        "\n"
-        "Launch the Textual TUI frontend.\n"
-        "\n"
-        "Flags: -m model, -w workspace, -y auto-approve, -T show-thinking"
-    ),
     "skills": 'Usage: wisp skills\n\nList all discovered skills.',
     "setup": 'Usage: wisp setup\n\nInteractive wizard: pick a provider, choose a model, enter credentials, validate live, save.',
     "config": 'Usage: wisp config [key] [value]\n\nView or set configuration values. With no arguments, dumps effective config.',
@@ -1121,12 +987,6 @@ _SUBCOMMAND_HELP: dict[str, str] = {
     "locks": 'Usage: wisp locks\n\nShow active file locks in the workspace.',
     "fleet": 'Usage: wisp fleet <status|doctor|workers|ci> [--manifest FILE] [--json] [--strict] [--fetch] [--write MCP_JSON] [--watch SECONDS --timeout SECONDS]\n\nRead-only git status over every repo in wisp.fleet.toml; doctor also lists repos under the scan roots that the manifest omits; workers renders the MCP servers for repos with a worker table (prints, or merges into MCP_JSON with --write); ci reports open-PR and default-branch CI for every GitHub repo (--watch waits until nothing is pending).',
     "changes": 'Usage: wisp changes\n\nShow changes made in this session.',
-    "acp": 'Usage: wisp acp\n\nRun Wisp as an ACP external agent (Zed editor integration).',
-    "server": (
-        "Usage: wisp server [--host H] [--port P] [--no-auth]\n"
-        "\n"
-        "Start the Wisp API server. Loopback-only unless WISP_API_KEY is set."
-    ),
     "compact": 'Usage: wisp compact <session-id> [keep-n]\n\nCompact a stored session, keeping the last keep-n exchanges (default 6).',
     "swarm": 'Usage: wisp swarm "<goal>" [--roles r1,r2] [-m model] [-w dir] [--max-parallel N]\n\nRun a multi-agent swarm to accomplish a goal.',
     "graph": 'Usage: wisp graph <list|show|validate|run|resume|status|cancel|trace|inspect|metrics> [args]\n\nDeterministic graph execution (see wisp graph --help).',
@@ -1186,14 +1046,17 @@ _SUBCOMMAND_HELP: dict[str, str] = {
 
 
 _SUBCOMMAND_NAMES = frozenset({
-    "run", "repl", "tui", "skills", "config", "check", "models",
+    "run", "repl", "skills", "config", "check", "models",
     "setup", "doctor", "tools",
     "session", "memory", "mcp", "policy", "trace", "replay", "audit", "task",
     "completion", "release",
     "git", "plan", "progress", "diagnose",
-    "locks", "changes", "acp", "server", "compact", "swarm", "agents", "graph",
+    "locks", "changes", "compact", "swarm", "agents", "graph",
     "bench", "converge", "fleet", "judge", "review", "triage",
 })
+
+
+_REMOVED_SUBCOMMANDS = frozenset({"server", "tui", "acp"})
 
 
 def print_subcommand_help(name: str) -> bool:
@@ -1244,7 +1107,7 @@ def _run_with_config_error_handling(fn, *args, **kwargs):
 
     One reusable catch so every dispatch call site in main() gets the same
     loud-refusal wisp.entry.check_config_file's own pre-flight already
-    gives the run/repl/tui path — without wrapping main() itself, which
+    gives the run/repl path — without wrapping main() itself, which
     would stop load_user_env() from being its literal first statement
     (tests/test_dotenv_is_read.py pins that by AST).
     """
@@ -1275,6 +1138,12 @@ def main():
     if not argv or (("-h" in argv or "--help" in argv) and argv[0] not in _SUBCOMMAND_NAMES):
         print_help()
         return
+
+    # An unknown word is a prompt, so a removed subcommand would silently become a model turn.
+    if argv[0] in _REMOVED_SUBCOMMANDS:
+        sys.stderr.write(f"✗ `wisp {argv[0]}` was removed: Wisp is CLI and REPL only for now "
+                         f"(docs/removed/2026-10-14-m0-front-ends.md).\n")
+        raise SystemExit(2)
 
     _SUBCOMMANDS = _SUBCOMMAND_NAMES
     first = argv[0]
@@ -1348,9 +1217,6 @@ def main():
 
         def _do_repl():
             cmd_repl(flags_model, flags_skill, flags_workspace, flags_session, flags_show_thinking, flags_auto, flags_provider)
-
-        def _do_tui():
-            cmd_tui(flags_model, flags_workspace, flags_show_thinking, flags_auto, flags_provider)
 
         def _do_session():
             if not rest:
@@ -1461,28 +1327,6 @@ def main():
             cmd_locks(rest)
         def _do_changes():
             cmd_changes(rest)
-        def _do_acp():
-            cmd_acp(rest)
-
-        def _do_server():
-            host = "127.0.0.1"
-            port = 8000
-            no_auth = False
-            i = 0
-            while i < len(rest):
-                if rest[i] == "--host" and i + 1 < len(rest):
-                    host = rest[i + 1]
-                    i += 2
-                elif rest[i] == "--port" and i + 1 < len(rest):
-                    port = int(rest[i + 1])
-                    i += 2
-                elif rest[i] == "--no-auth":
-                    no_auth = True
-                    i += 1
-                else:
-                    i += 1
-            cmd_server(host=host, port=port, no_auth=no_auth)
-
         def _do_swarm():
             if not rest:
                 print(error("✗ Usage: wisp swarm 'goal' [--roles coder,reviewer,tester] [--max-parallel N]"))
@@ -1556,7 +1400,6 @@ def main():
         _SUBCOMMAND_TABLE = {
             "run": _do_run,
             "repl": _do_repl,
-            "tui": _do_tui,
             "session": _do_session,
             "compact": _do_compact,
             "skills": _do_skills,
@@ -1581,8 +1424,6 @@ def main():
             "diagnose": _do_diagnose,
             "locks": _do_locks,
             "changes": _do_changes,
-            "acp": _do_acp,
-            "server": _do_server,
             "swarm": _do_swarm,
             "agents": _do_agents,
             "graph": _do_graph,

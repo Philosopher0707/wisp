@@ -123,13 +123,11 @@ def run_mode(mode: str, prompt: str | None = None, **kwargs) -> None:
     """Run Wisp in the specified mode.
 
     Args:
-        mode: "cli", "server", "tui"
+        mode: "cli" (single-shot or the REPL); the other front ends were removed in M0
         prompt: Optional initial prompt for CLI mode
     """
-    if mode == "server":
-        # Server creates its own CompositionRoot in lifespan
-        _run_server(**kwargs)
-        return
+    if mode != "cli":
+        raise ValueError(f"Unknown mode: {mode}")
 
     bad_env = validate_env_config()
     if bad_env:
@@ -166,12 +164,7 @@ def run_mode(mode: str, prompt: str | None = None, **kwargs) -> None:
     try:
         root.start()
 
-        if mode == "cli":
-            _run_cli(root, prompt, **kwargs)
-        elif mode == "tui":
-            _run_tui(root)
-        else:
-            raise ValueError(f"Unknown mode: {mode}")
+        _run_cli(root, prompt, **kwargs)
 
     finally:
         root.shutdown()
@@ -370,23 +363,10 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
     # constructed by run_mode before dispatch. Nothing to build here.
     # Step 4: single-frame startup banner.
     runner.banner(is_continuation=is_continuation, skill=skill)
-    # Let the dashboard's Live tab list this session (a file that is removed on exit; failures never reach the REPL).
-    from wisp.dashboard import presence
-    presence.announce(session_id=session_id, model=str(config.model or ""), provider=str(getattr(config, "provider", "") or ""),
-                      workspace=str(config.workspace or ""), kind="repl")
-    if os.environ.get("WISP_DASHBOARD") == "1":
-        try:
-            from wisp.dashboard import embed
-            started = embed.start()
-            if started.get("port"):
-                sys.stderr.write(f"Dashboard: {embed.url(started['port'])}\n")
-        except Exception:  # noqa: BLE001 — a dashboard problem must not stop the session
-            pass
     # Step 5: hand off to the interactive loop (shutdown runs inside).
     try:
         runner.run()
     finally:
-        presence.withdraw()
         # Loop teardown stays here: the loop is owned by this driver
         # (or shared with single-shot mode), not by the runner.
         _previous_sigint = signal.getsignal(signal.SIGINT)
@@ -828,41 +808,6 @@ async def _run_single_prompt(transport: CLITransport, root: CompositionRoot, pro
     transport._flush_content(sys.stdout)
     _show_turn_stats(transport, adapter)
     sys.stdout.flush()
-
-
-def _run_server(**kwargs) -> None:
-    """Run server mode.
-
-    Server creates its own CompositionRoot in lifespan —
-    no need to create one here.
-    """
-    from wisp.server.main import main as server_main
-    host = kwargs.get("host", "127.0.0.1")
-    port = kwargs.get("port", 8000)
-    no_auth = kwargs.get("no_auth", False)
-    server_main(host=host, port=port, no_auth=no_auth)
-
-
-def _run_tui(root: CompositionRoot) -> None:
-    """Run TUI mode.
-
-    Launches the Textual TUI app and wires it to TUITransport.
-    """
-    from wisp.tui.app import WispTUIApp
-
-    # Deferred: textual costs ~29ms of import time the CLI never uses.
-    from wisp.transport.tui import TUITransport
-
-    transport = TUITransport()
-    transport.start()
-
-    try:
-        app = WispTUIApp(config=root.config, transport=transport,
-                         runtime=root.runtime)
-        transport.set_app(app)
-        app.run()
-    finally:
-        transport.stop()
 
 
 # ── Headless mode ──────────────────────────────────────────────────

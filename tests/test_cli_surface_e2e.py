@@ -7,7 +7,6 @@ state is touched — with one critical subtlety: redirecting HOME hides
 user-site paths are carried over explicitly via PYTHONPATH.
 
 Spec/reality gaps (audited, not papered over):
-- G1 ``tui --ink``: no such flag exists; unknown flags are ignored for tui.
 - G2 ``config`` persists to ``~/.config/wisp/config.json``, not
   ``.agent/config.json``; keys are schema-validated (unknown keys rejected).
 - G3 ``--quiet`` emits compact single-line JSON, not bare final text.
@@ -221,7 +220,7 @@ class TestGroup1Baseline:
     def test_help_lists_subcommands(self, e2e) -> None:
         proc = run_cli(["--help"], e2e["home"], e2e["ws"])
         assert proc.returncode == 0
-        for name in ("run", "repl", "tui", "skills", "config", "check",
+        for name in ("run", "repl", "skills", "config", "check",
                      "models", "session", "agents", "swarm", "bench"):
             assert name in proc.stdout, f"missing subcommand: {name}"
 
@@ -356,75 +355,6 @@ class TestGroup3Headless:
         assert len(lines) == 1, proc.stdout
         assert json.loads(lines[0]).get("ok") is True
 
-    def test_print_blackhole_server_falls_back(self, e2e) -> None:
-        """F5: a listener that accepts but never replies must not hang.
-
-        Binds :8000 with a black hole (accept-and-hold); --print must give
-        up within its server timeout and return the in-process answer.
-        Skips if :8000 is already taken (a real server owns the verdict).
-        """
-        import socket
-        import threading
-
-        hole = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        hole.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        try:
-            hole.bind(("127.0.0.1", 8000))
-        except OSError:
-            pytest.skip("port 8000 occupied — a real server owns this path")
-        hole.listen(5)
-        stop = threading.Event()
-
-        def _hold() -> None:
-            while not stop.is_set():
-                try:
-                    hole.settimeout(0.5)
-                    conn, _ = hole.accept()
-                except OSError:
-                    continue
-                # Hold the connection open, never reply (stale server).
-                threading.Thread(target=_drain_conn,
-                                 args=(conn, stop), daemon=True).start()
-
-        def _drain_conn(conn: socket.socket, stop: threading.Event) -> None:
-            # Hold forever: recv timeouts are normal silence while the
-            # client waits — only a client close or stop ends the hold.
-            # (Breaking on the first timeout closes the socket, which the
-            # client reads as EOF and fast-falls-back: a false pin.)
-            try:
-                conn.settimeout(0.5)
-                while not stop.is_set():
-                    try:
-                        if not conn.recv(4096):
-                            break
-                    except socket.timeout:
-                        continue
-                    except OSError:
-                        break
-            finally:
-                try:
-                    conn.close()
-                except OSError:
-                    pass
-
-        thread = threading.Thread(target=_hold, daemon=True)
-        thread.start()
-        try:
-            start = time.time()
-            proc = run_cli(["--print", "say hi", "--output-format", "json"],
-                           e2e["home"], e2e["ws"], timeout=120)
-            elapsed = time.time() - start
-        finally:
-            stop.set()
-            hole.close()
-        assert proc.returncode == 0, proc.stderr
-        assert json.loads(proc.stdout).get("ok") is True
-        assert elapsed < 90, f"server fallback took {elapsed:.0f}s (unbounded?)"
-        # Lower bound proves the hole was actually held (not a fast
-        # disconnect/EOF, which falls back in ~3s): the client must have
-        # waited out its ~15s server read timeout.
-        assert elapsed > 10, f"fallback in {elapsed:.1f}s — hole never held?"
-
 
 # ══════════════════════════════════════════════════════════════════════
 # Group 4: Interactive REPL & TUI entrypoints
@@ -492,27 +422,6 @@ class TestGroup4Interactive:
         assert code == 0
         assert "Traceback" not in strip_ansi(out)
 
-    def test_tui_boots_and_quits(self, e2e) -> None:
-        """Textual app boots, advances past splash, exits on quit binding.
-
-        WispTUIApp binds quit to ctrl+q (wisp/tui/app.py BINDINGS, served
-        by textual's App.action_quit). Key discipline: marker-driven reads —
-        fixed sleeps race boot and swallow the quit keystroke.
-        """
-        pid, fd = pty_session(e2e["home"], e2e["ws"], ["tui"])
-        try:
-            out = pty_read_until(fd, b"Press any key", PTY_TIMEOUT)
-            assert b"Press any key" in out, "splash screen did not render"
-            os.write(fd, b"\x1b")  # escape -> session picker
-            out += pty_read_until(fd, b"Search sessions", 30)
-            assert b"Search sessions" in out, "session picker did not render"
-            os.write(fd, b"\x11")  # ctrl+q -> quit
-            out += pty_drain(fd, total_s=8.0)
-        finally:
-            code = pty_reap(pid, fd)
-        text = strip_ansi(out)
-        assert "Traceback" not in text
-        assert code == 0, f"tui exit code {code}"
 
     def test_tui_ink_flag_has_no_backend(self, e2e) -> None:
         """G1 gap pin: --ink is not a real flag (ignored, tui boots anyway).
@@ -618,51 +527,6 @@ class TestGroup6SkillsBench:
 # ══════════════════════════════════════════════════════════════════════
 # Group 8: Server boot posture (P0.2, GH#14)
 # ══════════════════════════════════════════════════════════════════════
-
-
-class TestGroup8ServerBoot:
-    def test_server_refuses_without_key(self, e2e) -> None:
-        """No key + no flag: fail fast (rc 2), never silently open."""
-        proc = run_cli(["server", "--port", "18924"], e2e["home"], e2e["ws"],
-                       timeout=60)
-        assert proc.returncode == 2, proc.stdout + proc.stderr
-        assert "WISP_API_KEY" in proc.stderr
-
-    def test_server_no_auth_boots_and_serves(self, e2e) -> None:
-        """Explicit --no-auth: boots loopback, serves, terminates cleanly."""
-        import json as _json
-        import socket as _socket
-        import urllib.request as _url
-
-        home, ws = e2e["home"], e2e["ws"]
-        env = cli_env(home)
-        proc = subprocess.Popen(
-            [sys.executable, "-m", "wisp", "server",
-             "--port", "18925", "--no-auth"],
-            env=env, cwd=str(ws),
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        try:
-            deadline = time.time() + 45
-            while time.time() < deadline:
-                with _socket.socket() as sock:
-                    if sock.connect_ex(("127.0.0.1", 18925)) == 0:
-                        break
-                if proc.poll() is not None:
-                    break
-                time.sleep(0.5)
-            assert proc.poll() is None, "server exited before serving"
-            with _url.urlopen("http://127.0.0.1:18925/api/sessions",
-                              timeout=10) as resp:
-                body = _json.loads(resp.read().decode())
-            assert resp.status == 200
-            assert "sessions" in body
-        finally:
-            proc.terminate()
-            try:
-                proc.wait(timeout=15)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=15)
 
 
 # ══════════════════════════════════════════════════════════════════════

@@ -82,7 +82,7 @@ WIRED = {
     "log_blocked": {"wisp/tools/audit.py", "wisp/tool_executor.py",
                     "wisp/core/stateless.py"},
     "redact_sensitive_tool_args": {"wisp/infra/security.py", "wisp/transport/cli.py",
-                                   "wisp/transport/tui.py", "wisp/cli/approval.py"},
+                                   "wisp/cli/approval.py"},
 }
 
 

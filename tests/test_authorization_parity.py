@@ -65,7 +65,6 @@ table, and any decision made from it, is stale).
 from __future__ import annotations
 
 import ast
-import asyncio
 import inspect
 import pathlib
 
@@ -208,29 +207,6 @@ def test_the_divergence_is_only_the_approval_layer(tmp_path):
         )
 
 
-def test_the_rest_gate_documents_the_approval_contract():
-    """The gate claims approval-required denies. If that text changes, the
-    divergence above may have been resolved (or the claim abandoned).
-
-    ADR-0055 R4 qualified the claim without removing it: the sentence is kept,
-    and the docstring now also states that it cannot fire for the
-    executable-config routes and names what their control actually is.
-    """
-    src = (REPO / "wisp/server/deps.py").read_text(encoding="utf-8")
-    assert "approval-required verdicts deny" in src, (
-        "require_tool_allowed no longer documents the approval contract — "
-        "re-examine KNOWN_MODEL_DIVERGENCES"
-    )
-    assert "ADR-0055" in src, (
-        "require_tool_allowed's docstring no longer carries ADR-0055's "
-        "qualification — the claim is again stronger than what the gate does "
-        "for the executable-config routes"
-    )
-    assert "authorization_parity_measurement.py" in src, (
-        "the docstring no longer cites the instrument that measured path parity"
-    )
-
-
 def test_the_agent_consults_both_models():
     """Pins the composition **per path** — parsed, not scanned.
 
@@ -242,7 +218,6 @@ def test_the_agent_consults_both_models():
     | path | denials | approval |
     |---|---|---|
     | the agent (`ToolExecutor.execute`) | both models | the turn path's own set |
-    | REST (`require_tool_allowed`) | both models (ADR-0059) | `SecurityPolicy` alone |
 
     If either path drops a model, this table stops describing reality.
     """
@@ -261,79 +236,6 @@ def test_the_agent_consults_both_models():
         f"{sorted(calls)}"
     )
 
-    deps = _function_ast(REPO / "wisp/server/deps.py", "require_tool_allowed")
-    assert "check" in {n.attr for n in ast.walk(deps) if isinstance(n, ast.Attribute)}, (
-        "REST no longer consults the mode engine (`SecurityPolicy.check`)"
-    )
-    called = {n.func.id for n in ast.walk(deps)
-              if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
-    assert "_m2_denial" in called, (
-        "REST no longer consults the M2 authority — ADR-0059's composition is gone, "
-        "and a bundle denial is again silently unenforced on REST"
-    )
-
-
-def test_a_bundle_denial_reaches_both_paths(tmp_path):
-    """ADR-0059's property: with a bundle loaded, the paths agree on `allowed`.
-
-    Driven through the **real** REST gate and the **real** `authorize()`. Before
-    ADR-0059 the REST side ignored the bundle entirely, so this is the guard on
-    the closure — and it fails if the consult is removed or stops reading
-    `allowed`.
-    """
-    from fastapi import HTTPException
-
-    from wisp.auth.decision import authorize
-    from wisp.auth.principal import local_principal
-    from wisp.auth.workspace_trust import classify_workspace
-    from wisp.policy.bundle import PolicyBundle
-    from wisp.policy.loader import _bundle_to_effective
-    from wisp.server.deps import require_tool_allowed
-
-    import time as _time
-
-    ws = pathlib.Path(tmp_path)
-    bundle = _bundle_to_effective(
-        PolicyBundle(org_id="acme", expires_at=_time.time() + 3600,
-                     approval_matrix={"write_file": "deny"}),
-        "local file")
-
-    class _Cfg:
-        permission_mode = "auto_edit"
-        profile = "default"
-
-    class _Root:
-        config = _Cfg()
-        tool_executor = None
-
-    class _State:
-        root = _Root()
-
-    class _App:
-        state = _State()
-
-    class _Req:
-        app = _App()
-
-    _Req.app.state.root.organization_policy = bundle
-    request = _Req()
-
-    principal = local_principal(workspace=str(ws), profile="default")
-    agent = authorize(principal, "write_file", {"path": "a.py"},
-                      classify_workspace(str(ws)), permission_mode="auto_edit",
-                      effective_policy=bundle)
-    assert not agent.allowed, "floor: the bundle must deny the agent path"
-
-    try:
-        require_tool_allowed(request, "write_file", {"path": "a.py"}, str(ws))
-        rest_denied = False
-    except HTTPException:
-        rest_denied = True
-
-    assert rest_denied, (
-        "REST allowed write_file although the loaded bundle denies it and the "
-        "agent path refuses it — ADR-0059's composition is not in effect"
-    )
 
 
 def test_default_mode_is_the_affected_one():
@@ -375,18 +277,6 @@ class _FakeRequest:
         self.app = _FakeRequest._App(mode)
 
 
-def _rest_outcome(action: str, args: dict, mode: str, ws) -> str:
-    from fastapi import HTTPException
-
-    from wisp.server.deps import require_tool_allowed
-
-    try:
-        require_tool_allowed(_FakeRequest(mode), action, dict(args), str(ws))
-        return "ALLOW"
-    except HTTPException:
-        return "DENY"
-
-
 async def _agent_outcome(action: str, args: dict, mode: str, ws) -> str:
     """Drive the real turn path with **no approver** — REST's own condition."""
     from wisp.config import WispConfig
@@ -413,70 +303,6 @@ def test_the_route_list_has_a_floor():
     assert len(ROUTES) >= 8, "the route list shrank — the guard would check less"
     assert len(MODES) == 4
     assert REST_ONLY_ACTIONS, "the REST-only action list is empty"
-
-
-def test_the_real_paths_agree_on_every_route_in_every_mode(tmp_path):
-    """**The property ADR-0055 measured, pinned.** Drives both production
-    surfaces — not the two models — and asserts outcome parity.
-
-    A `NOT-A-TOOL` result means the action name has no agent-side
-    implementation, so there is no agent path for it to diverge from; that is
-    a fact about the action, not a divergence, and it is pinned separately by
-    `test_the_rest_only_actions_have_no_agent_path`.
-    """
-    ws = tmp_path / "ws"
-    ws.mkdir()
-    (ws / "a.py").write_text("x = 1\n")
-
-    divergent = []
-    for route, action, args in ROUTES:
-        for mode in MODES:
-            agent = asyncio.run(_agent_outcome(action, args, mode, ws))
-            rest = _rest_outcome(action, args, mode, ws)
-            if agent == "NOT-A-TOOL":
-                continue
-            if (agent == "ALLOW") != (rest == "ALLOW"):
-                divergent.append((route, mode, agent, rest))
-    assert not divergent, (
-        "the agent path and the REST gate no longer agree on an outcome: "
-        f"{divergent}. ADR-0055 R1 pins path parity; a change here is either a "
-        "regression or a decision, and it is not this test's job to accept it "
-        "silently."
-    )
-
-
-def test_the_rest_only_actions_have_no_agent_path():
-    """The premise of ADR-0055 R2/R3, pinned as a property.
-
-    These three names are the entire content of `KNOWN_MODEL_DIVERGENCES`.
-    They are REST-only. **If one of them gains an agent implementation, this
-    test fails** — which is exactly the reversal condition ADR-0055 names for
-    re-opening Option B: `authorize()` would then be describing a real
-    operation, and "should REST approve what the agent approves?" becomes a
-    question with an answer.
-    """
-    from wisp.core.contracts import TOOL_RISK_TABLE
-    from wisp.tools.registry import TOOL_IMPLS, has_plugin_tool
-    from wisp.tool_executor import _get_write_tools
-
-    assert REST_ONLY_ACTIONS, "floor"
-    write_tools = _get_write_tools(None)
-    assert write_tools, "floor: the write-tool set is empty"
-
-    for action in REST_ONLY_ACTIONS:
-        assert action not in TOOL_IMPLS, (
-            f"{action} is now an agent tool — re-open ADR-0055 R3 (Option B) and "
-            "re-run scripts/authorization_parity_measurement.py"
-        )
-        assert not has_plugin_tool(action), f"{action} is now a plugin tool"
-        assert action not in TOOL_RISK_TABLE, (
-            f"{action} now has a risk-table row — it is no longer REST-only, so "
-            "the model divergence may now be a path divergence"
-        )
-        assert action not in write_tools, (
-            f"{action} is now in the turn path's approval set — the three "
-            "approval models no longer agree about what is absent"
-        )
 
 
 def test_the_turn_path_approval_set_is_not_authorize_approval_required(tmp_path):

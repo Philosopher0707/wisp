@@ -13,6 +13,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The corpus guards need full history (see ci.yml).
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -22,65 +25,23 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e "."
-          pip install pytest
+          pip install -e ".[dev]"
 
       - name: Run tests
-        run: pytest tests/ -v --tb=short -m "not live"
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          java-version: "17"
-          distribution: "temurin"
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Grant execute permission for gradlew
-        run: chmod +x android/gradlew
-
-      - name: Build Android release APK
-        working-directory: ./android
-        run: ./gradlew assembleRelease
-
-      - name: Build Docker image
-        run: docker build -t wisp:${{ github.ref_name }} .
-
-      - name: Push or skip Docker image
-        if: env.DOCKER_USERNAME != '' && env.DOCKER_TOKEN != ''
-        env:
-          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
-          DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}
-        run: |
-          echo "$DOCKER_TOKEN" | docker login -u "$DOCKER_USERNAME" --password-stdin
-          docker tag wisp:${{ github.ref_name }} "${DOCKER_USERNAME}/wisp:${{ github.ref_name }}"
-          docker push "${DOCKER_USERNAME}/wisp:${{ github.ref_name }}"
+        run: pytest -m "not live" --tb=short -p no:cacheprovider
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            android/app/build/outputs/apk/release/app-release-unsigned.apk
           body: |
             ## Wisp ${{ github.ref_name }}
 
-            ### What's included
-            - Python agent with all tools
-            - Android APK for remote control
-            - Docker image ready to deploy
+            The `wisp` CLI and REPL (Python 3.11+).
 
-            ### Quick deploy
             ```bash
             git clone https://github.com/${{ github.repository }}.git
-            cd wisp
-            docker-compose up -d
-            ```
-
-            ### Android
-            Install the APK from assets above, or build yourself:
-            ```bash
-            cd android && ./gradlew assembleDebug
+            cd wisp && pip install -e .
+            wisp repl
             ```
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

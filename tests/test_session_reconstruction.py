@@ -245,10 +245,7 @@ class TestReachabilityAndHonesty:
         """
         consumers = {
             "wisp/__main__.py": "load_session",
-            "wisp/supervisor.py": "load_session",
             "wisp/sdk.py": "load_session",
-            "wisp/acp_session.py": "load_session",
-            "wisp/server/routes/sessions.py": "load_session",
         }
         still_blob = []
         for rel, needle in consumers.items():

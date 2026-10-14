@@ -24,14 +24,6 @@ class TestLazyHeavyImports:
         )
         assert proc.returncode == 0, f"stdout={proc.stdout} stderr={proc.stderr[-2000:]}"
 
-    def test_tui_transport_importable_through_package(self):
-        # Lazy __getattr__ must keep the public surface intact.
-        import wisp.transport as t
-
-        assert hasattr(t, "TUITransport")
-        from wisp.transport.tui import TUITransport as Direct
-
-        assert t.TUITransport is Direct
 
     def test_web_tools_resolve_lazily_but_are_callable(self):
         from wisp.tools.registry import TOOL_IMPLS
