@@ -8,6 +8,7 @@ never depends upward on the CLI entrypoint.
 
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 
 from wisp.composition import CompositionRoot
@@ -88,7 +89,9 @@ async def run_headless(prompt: str, model: str | None = None,
         transport.start()
 
         session = await root.runtime.get_or_create_session(
-            session_id=session_id or "headless",
+            # A run without a session id is its own conversation: a shared default joined every
+            # one-shot run in a workspace into one history (baseline D3, 2026-10-14).
+            session_id=session_id or f"headless-{uuid.uuid4().hex[:12]}",
             model=config.model,
             workspace=config.workspace,
         )

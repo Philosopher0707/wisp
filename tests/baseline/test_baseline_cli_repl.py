@@ -112,8 +112,7 @@ def test_b3_an_unverified_change_is_named_by_the_harness_not_the_model(home, ws)
         result["content"])
 
 
-@pytest.mark.xfail(strict=True, reason="known defect (baseline 2026-10-14): every withheld draft is kept in the answer")
-def test_b3_known_defect_a_withheld_draft_appears_once(home, ws):
+def test_b3_d1_fixed_a_withheld_draft_appears_once(home, ws):
     model = ScriptedModel({"claim": [
         ("tool", "edit_file", {"path": "calc.py", "old_text": "a - b", "new_text": "a + b"}),
         ("text", "Done. All tests pass."),
@@ -226,21 +225,23 @@ def test_b6_a_named_session_is_continued_with_its_history(home, ws):
     assert any("remember the word heron" in str(m.get("content")) for m in model.of("two")[-1]["messages"])
 
 
-@pytest.mark.xfail(strict=True, reason="known defect (baseline 2026-10-14): every --print run in a workspace "
-                                       "joins one stored session, 'headless'")
-def test_b6_known_defect_unrelated_print_runs_do_not_share_history(home, ws):
+def test_b6_d3_fixed_unrelated_print_runs_do_not_share_history(home, ws):
     model = ScriptedModel({"one": [("text", "noted")], "two": [("text", "ok")]})
     try:
         _print("BASELINE{one} my secret word is heron", home, ws, model)
         _print("BASELINE{two} an unrelated question", home, ws, model)
     finally:
         model.close()
-    seen = " ".join(str(m.get("content")) for m in model.of("two")[0]["messages"])
-    assert "heron" not in seen, "the second one-shot run was sent the first run's prompt"
+    messages = model.of("two")[0]["messages"]
+    conversation = " ".join(str(m.get("content")) for m in messages if m["role"] != "system")
+    assert "heron" not in conversation and not any(m["role"] == "assistant" for m in messages), (
+        "the second one-shot run carried the first run's conversation")
+    # By design, a new session's system prompt carries short summaries of recent sessions
+    # ("Previous Session Context", wisp.agent_memory); that is memory, not a shared conversation.
+    assert "## Previous Session Context" in messages[0]["content"]
 
 
-@pytest.mark.xfail(strict=True, reason="known defect (baseline 2026-10-14): --print reports iterations 0")
-def test_b6_known_defect_print_reports_the_iterations_it_ran(home, ws):
+def test_b6_d4_fixed_print_reports_the_iterations_it_ran(home, ws):
     model = ScriptedModel({"it": [("tool", "read_file", {"path": "calc.py"}), ("text", "read it")]})
     try:
         _, result = _print("BASELINE{it} read calc.py", home, ws, model)

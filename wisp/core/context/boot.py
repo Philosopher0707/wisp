@@ -191,6 +191,10 @@ class BootContextAssembler:
         import shutil
 
         try:
+            from wisp.sandbox import sandbox_mode
+
+            if sandbox_mode() == "off":
+                return "host-unconfined"
             return "docker" if shutil.which("docker") else "host-unconfined"
         except Exception:
             return "unknown"
@@ -283,7 +287,9 @@ class BootContextAssembler:
             "## Workspace posture\n"
             f"- root: {self.workspace}\n"
             f"- git: {posture['branch']} @ {posture['commit']} [{posture['dirty']}]\n"
-            f"- sandbox: {sandbox}")
+            f"- sandbox: {sandbox}"
+            + (" (if its daemon is running; otherwise commands run host-unconfined, with a warning on each)"
+               if sandbox == "docker" else ""))
         sections.append(posture_text)
         if bullets:
             sections.append("## Active memory\n" + "\n".join(f"- {b}" for b in bullets))

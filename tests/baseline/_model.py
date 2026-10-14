@@ -1,7 +1,8 @@
 """A scripted, OpenAI-compatible model on localhost, for driving the real `wisp` command.
 
 The latest user message that names a script (`BASELINE{name}`) picks it; the step is the number of
-tool results since that message, so each request gets the script's next action. Every request
+tool results since that message (harness nudges, which arrive as user messages, do not
+restart it), so each request gets the script's next action. Every request
 is recorded (which script, which tools were offered, the messages), so a test can assert on what
 Wisp actually sent as well as on what it did.
 """
@@ -41,8 +42,10 @@ class ScriptedModel:
                 users = [str(m.get("content")) for m in msgs if m.get("role") == "user"]
                 hit = next((m for m in (_MARK.search(u) for u in reversed(users)) if m), None)
                 name = hit.group(1) if hit else "none"
-                last_user = max((i for i, m in enumerate(msgs) if m.get("role") == "user"), default=-1)
-                step = sum(1 for m in msgs[last_user + 1:] if m.get("role") == "tool")
+                # Count from the message that named the script: the harness's own nudges arrive as user messages too.
+                start = max((i for i, m in enumerate(msgs) if m.get("role") == "user" and _MARK.search(str(m.get("content")))),
+                            default=-1)
+                step = sum(1 for m in msgs[start + 1:] if m.get("role") == "tool")
                 tools = sorted(t["function"]["name"] for t in body.get("tools") or [])
                 model.requests.append({"script": name, "step": step, "tools": tools, "messages": msgs})
                 script = model.scripts.get(name, [("text", f"no script {name}")])
