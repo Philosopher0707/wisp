@@ -291,6 +291,10 @@ class SubagentResult:
 
     session_id: str = ""
     """Session ID persisted to the session store for audit."""
+    agent_id: str = ""
+    """This attempt's `agent_records` id (design S1); empty for a cache hit."""
+    refusal_reason: str = ""
+    """Why the child was refused before it ran (depth, role, contract, budget); empty if it ran."""
 
     def __post_init__(self):
         """Normalize backward-compat aliases."""

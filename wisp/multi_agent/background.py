@@ -285,6 +285,10 @@ class BackgroundAgentManager:
         refusal = self._admit(agent_id)
         if refusal is not None:
             return {"ok": False, "error": refusal}
+        metadata = getattr(contract, "metadata", None)
+        if isinstance(metadata, dict):
+            metadata.setdefault("_origin", "background")
+            metadata.setdefault("_links", {})["background_agent_id"] = agent_id
         entry = BackgroundAgentEntry(
             id=agent_id,
             label=label or f"{getattr(contract, 'role', 'generalist')}-{self._counter}",

@@ -33,14 +33,14 @@ ENV_ONLY = ("criteria_strict_derivation", "criteria_structured_declaration", "ws
 #: claim and the schema is the authority, so a disagreement fails the derivation.
 ROWS: list[tuple[str, str, str, str, str, str, str, str]] = [
     # ── P0's three (ADR-0002), the flags the convention was written for ─────
-    ("durable_runs", "WISP_DURABLE_RUNS", "ON", "`wisp/composition.py:341`",
+    ("durable_runs", "WISP_DURABLE_RUNS", "ON", "`wisp/composition.py:359`",
      "persist a durable `RunRecord` per turn and give `BackgroundAgentManager` its SQLite store",
      "—", "ADR-0002", "—"),
     ("session_event_fidelity", "WISP_SESSION_EVENT_FIDELITY", "ON", "`wisp/core/runtime.py:658`",
      "journal `assistant_message` / `tool_call` / `tool_result` so replay can reconstruct a turn",
      "—", "ADR-0002", "—"),
     ("turn_spans", "WISP_TURN_SPANS", "ON",
-     "`wisp/composition.py:371`, `wisp/core/runtime.py:1449`",
+     "`wisp/composition.py:379`, `wisp/core/runtime.py:1449`",
      "emit a trace span per turn and per tool call", "—", "ADR-0002", "—"),
 
     # ── P1–P4 ───────────────────────────────────────────────────────────────
@@ -88,7 +88,7 @@ ROWS: list[tuple[str, str, str, str, str, str, str, str]] = [
 
     # ── The verification loop ───────────────────────────────────────────────
     ("verification_loop", "WISP_VERIFICATION_LOOP", "ON",
-     "`wisp/core/stateless.py:542`, `wisp/core/stateless.py:1464`",
+     "`wisp/core/stateless.py:546`, `wisp/core/stateless.py:1468`",
      "require an exit-0 verification after code edits before a turn may complete",
      "—", "ADR-0016", "—"),
 
@@ -313,8 +313,8 @@ def render() -> str:
     A("   deviation**, not an accident — but the consequence stands: ADR-0002 part 2 does not")
     A("   apply to them, and a test double cannot opt out by setting an attribute.")
     A("2. **`verification_loop` has two consumption sites on the turn path**")
-    A("   (`wisp/core/stateless.py:542` and `:1464`) and `turn_spans` has two")
-    A("   (`wisp/composition.py:371`, `wisp/core/runtime.py:1449`). ADR-0002 says *\"read at the")
+    A("   (`wisp/core/stateless.py:546` and `:1468`) and `turn_spans` has two")
+    A("   (`wisp/composition.py:379`, `wisp/core/runtime.py:1449`). ADR-0002 says *\"read at the")
     A("   consumption site\"* — **plural sites are consistent with the rule**, so this is")
     A("   recorded as a fact rather than a violation. It is worth stating because the brief for")
     A("   this mission paraphrases the rule as *\"read once, at the composition point\"*, which")

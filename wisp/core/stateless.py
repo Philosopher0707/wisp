@@ -442,6 +442,10 @@ class WispAgentCore:
         # arrives on the session instead, and wins when present.
         _exec_ctx.agent_depth.set(_nesting(session, self.config, "_subagent_depth"))
         _exec_ctx.agent_branch.set(_nesting(session, self.config, "_subagent_branch_count"))
+        # A top-level turn names the session its children's records belong to; a child's turn
+        # keeps the one it inherited.
+        if _exec_ctx.current_agent_id.get() is None and session.get("id"):
+            _exec_ctx.root_session_id.set(str(session["id"]))
         # Build messages list
         messages = list(session.get("messages", []))
         # Turn-0 boot seed (GH#22): workspace reality as the first message,

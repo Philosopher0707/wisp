@@ -21,6 +21,7 @@ import json
 import re
 import subprocess
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -54,13 +55,20 @@ class _Stub:
                 hit = next((m for m in (_SCN.search(str(x.get("content", ""))) for x in msgs
                                         if x.get("role") == "user") if m), None)
                 kind, arg = (hit.group(1), hit.group(2) or "") if hit else ("none", "")
-                stub.requests.append({"kind": kind, "arg": arg,
+                results = [str(m.get("content")) for m in msgs if m.get("role") == "tool"]
+                stub.requests.append({"kind": kind, "arg": arg, "tool_results": results,
                                       "tools": sorted(t["function"]["name"] for t in body.get("tools") or [])})
+                if kind == "silent":
+                    time.sleep(float(arg or 10))
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.end_headers()
                 answered = any(m.get("role") == "tool" for m in msgs)
-                if kind == "recurse" and not answered:
+                if kind == "parent" and len(results) == 0:
+                    self._tool("spawn", {"task": f"SCN{{say:{arg or 'kid'}}}", "role": "generalist"}, "call_0")
+                elif kind == "parent" and len(results) == 1:
+                    self._tool("subagent_list", {}, "call_1")
+                elif kind == "recurse" and not answered:
                     self._tool("spawn", {"task": "SCN{recurse}", "role": "generalist"}, "call_1")
                 elif kind == "loop" and body.get("tools"):
                     n = sum(1 for m in msgs if m.get("role") == "tool")

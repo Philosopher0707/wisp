@@ -268,6 +268,14 @@ class CompositionRoot:
             store=self.store,
         )
 
+        # One durable record per child (design S1), under the same rollback flag as the run store.
+        if self.run_store is not None:
+            from wisp.runs.agents import AgentRegistry
+            self.agent_registry: AgentRegistry | None = AgentRegistry(self.store)
+        else:
+            self.agent_registry = None
+        self.subagent_orchestrator.agent_registry = self.agent_registry
+
         # Budget enforcement at admission: the ceiling must reach the
         # orchestrator or its check() compares against None forever.
         # getattr-tolerant because test configs may be partial.

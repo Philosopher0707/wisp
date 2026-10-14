@@ -131,7 +131,8 @@ class SubagentNodeRunner:
             output_format="json" if contract.output_schema else "text",
             output_schema=contract.output_schema or None,
             max_retries=max(min(contract.retry_policy.max_attempts - 1, 10), 0),
-            cache=False)
+            cache=False,
+            metadata={"_origin": "graph", "_links": {"node_id": node.id}})
         result = await self._orch.run(sub)
         status = NodeStatus.SUCCESS if result.success else NodeStatus.FAILURE
         structured = getattr(result, "validated_output", None)
