@@ -57,13 +57,13 @@
 | `CriteriaDeclarationRejected` | `Exception` | guard | turn | `wisp/core/convergence.py:674` | 9 | `wisp/core/convergence.py:783` | `wisp/autonomous.py:341`, `wisp/autonomous_repl.py:70` | ADR-0050 |
 | `ReplayDivergence` | `RuntimeError` | guard | persist | `wisp/core/replay_digest.py:64` | 2 | `wisp/core/replay_digest.py:125` | `wisp/core/runtime.py:1868` | — |
 | `MemoryStoreError` | `RuntimeError` | guard | persist | `wisp/memory.py:63` | 2 | `wisp/memory.py:210` | `wisp/__main__.py:325`, `wisp/memory.py:256`, `wisp/memory.py:288`, `wisp/tools/memory.py:38` | — |
-| `ImportGraphTooLarge` | `RuntimeError` | guard | tool | `wisp/import_graph.py:25` | 1 | `wisp/import_graph.py:133` | `wisp/test_runner.py:353` | — |
-| `WalkBudgetExceeded` | `RuntimeError` | guard | tool | `wisp/core/workspace_walk.py:39` | 1 | `wisp/core/workspace_walk.py:130` | `wisp/import_graph.py:132` | — |
+| `ImportGraphTooLarge` | `RuntimeError` | guard | tool | `wisp/import_graph.py:25` | 1 | `wisp/import_graph.py:154` | `wisp/test_runner.py:353` | — |
+| `WalkBudgetExceeded` | `RuntimeError` | guard | tool | `wisp/core/workspace_walk.py:39` | 1 | `wisp/core/workspace_walk.py:130` | `wisp/import_graph.py:153` | — |
 | `JobLimitError` | `ToolError` | guard | tool | `wisp/jobs/spawn.py:20` | 2 | `wisp/jobs/spawn.py:41` | — | — |
 | `SourceError` | `Exception` | fault | cli | `wisp/review/source.py:39` | 15 | `wisp/review/source.py:59` | `wisp/review/cli.py:152`, `wisp/review/source.py:202`, `wisp/review/source.py:235` | — |
 | `TriageError` | `Exception` | fault | cli | `wisp/review/triage.py:58` | 5 | `wisp/review/triage.py:277` | `wisp/review/cli.py:212` | — |
 | `ToolError` | `Exception` | fault | tool | `wisp/tools/errors.py:8` | 89 | `agent/fast_tools.py:47` | `agent/tools/batch_reader.py:386`, `agent/tools/batch_reader.py:629`, `wisp/cli/dispatcher.py:398`, `wisp/jobs/supervisor.py:102`, `wisp/tool_executor.py:279`, `wisp/tool_executor.py:1409`, `wisp/tool_executor.py:1522`, `wisp/tools/bash.py:211`, `wisp/tools/registry.py:1309`, `wisp/tools/registry.py:1451` | — |
-| `PlanError` | `Exception` | fault | plan | `wisp/graph/planner.py:72` | 28 | `wisp/graph/planner.py:87` | `wisp/graph/cli.py:333`, `wisp/graph/cli.py:375`, `wisp/graph/planner.py:314`, `wisp/graph/planner.py:396` | — |
+| `PlanError` | `Exception` | fault | plan | `wisp/graph/planner.py:72` | 28 | `wisp/graph/planner.py:87` | `wisp/graph/cli.py:332`, `wisp/graph/cli.py:374`, `wisp/graph/planner.py:314`, `wisp/graph/planner.py:396` | — |
 | `LSPServerError` | `Exception` | fault | tool | `wisp/lsp/client.py:24` | 16 | `wisp/lsp/client.py:78` | `wisp/lsp/client.py:529`, `wisp/lsp/manager.py:174`, `wisp/lsp/manager.py:188` | — |
 | `SearchReplaceError` | `ValueError` | fault | tool | `wisp/core/mutator/search_replace.py:38` | 3 | `wisp/core/mutator/search_replace.py:59` | — | — |
 | `DockerUnavailable` | `RuntimeError` | fault | bench | `wisp/benchmark/adapters/docker_backend.py:35` | 4 | `wisp/benchmark/adapters/docker_backend.py:47` | `wisp/benchmark/adapters/docker_backend.py:74`, `wisp/benchmark/adapters/docker_backend.py:111` | — |
