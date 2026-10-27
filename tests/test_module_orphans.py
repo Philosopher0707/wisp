@@ -17,8 +17,8 @@ Three of those claims were **wrong**, for two different reasons:
    docstring states it exists so an external spec's import path resolves.
    Being unreferenced is its purpose, not a defect.
 
-Only `cli/commands/model.py` remains genuinely unreferenced, and it duplicates
-the live selection UX in `repl/commands/provider.py`.
+Only `cli/commands/model.py` was genuinely unreferenced — it duplicated the
+live selection UX in `repl/commands/provider.py` — and W1 deleted it.
 
 This detector resolves both absolute and relative imports, and ratchets the
 known-unreferenced set so (a) a real orphan is caught, and (b) the false
@@ -153,9 +153,6 @@ KNOWN_UNREFERENCED = {
     # Spec-compliance shim: an external spec names this import path, so being
     # unreferenced internally is the point (see its module docstring).
     "wisp.cli.commands.doctor",
-    # Duplicate of the live selection UX in repl/commands/provider.py.
-    # Genuinely unreferenced; deletion is sequenced, not urgent.
-    "wisp.cli.commands.model",
     # TUI packages loaded by Textual conventions (CSS_PATH / themes), not imports.
     "wisp.tui.css",
     "wisp.tui.themes",
@@ -164,7 +161,7 @@ KNOWN_UNREFERENCED = {
     # MCP server entrypoint: launched as a process, never imported.
     "wisp.mcp_servers",
     "wisp.mcp_servers.vscode_server",
-    # CLI command package namespace (holds doctor/model above).
+    # CLI command package namespace (holds the doctor shim above).
     "wisp.cli.commands",
     # The owner's WIP, tracked so CI can import its sibling capability_filter.
     # A near-duplicate of the wired infra/circuit_breaker.py; P9 recommends
@@ -187,20 +184,14 @@ KNOWN_UNWIRED: dict[str, str] = {
     # Kept for external consumers of the published package.
     "wisp.agent": "backwards-compatible WispAgent shim; no in-repo importer",
     # Dead duplicates of live modules (W1 deletion targets).
-    "wisp.core.context.compactor": "duplicate of core/compaction.py; no importer",
-    "wisp.core.context.repomap": "duplicate of repo_map.py; no importer",
     "wisp.runtime.idempotency": "no production importer; the live path uses core/action_key.py",
     "wisp.runtime.redaction": "no production importer; auth/secrets.py owns redaction on the live path",
-    "wisp.transport.protocol": "unused transport-message schema; core/events.py is the live event model",
     # Test-only subsystems and prototypes.
     "wisp.core.graph": "experimental Layer C graph; test-only by ADR-0060",
     "wisp.core.mutator": "disk-safe mutation primitives; test-only",
     "wisp.core.speculative": "speculative-search prototype; test-only",
     "wisp.eval": "evaluation harness; tests only",
     "wisp.benchmark.adapters": "terminal-bench backends; tests only",
-    "wisp.markdown_parser": "markdown response parser; no production importer",
-    "wisp.multi_agent.capability_matcher": "capability-mismatch detector; test-only",
-    "wisp.structured_output": "Ollama JSON-output enforcer; no production importer",
     # Compatibility shim pinned by its own tests (11 of them).
     "wisp.graph.compat": "graph compatibility shim; tests pin it, production does not use it",
 }

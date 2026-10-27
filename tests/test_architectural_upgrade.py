@@ -152,45 +152,7 @@ def test_graph_approval_denial_parks_cleanly():
     assert outcome.artifact is None
 
 
-# ── 2. RepoMap: token budget + seeded ranking ──────────────────────────
-
-
-def _repo(tmp_path, files: dict[str, str]):
-    for rel, content in files.items():
-        target = tmp_path / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content)
-    return str(tmp_path)
-
-
-def test_repomap_budget_fit_and_determinism(tmp_path):
-    from wisp.core.context.repomap import RepoMap
-
-    ws = _repo(tmp_path, {
-        "auth.py": "def login(user):\n    return token(user)\n\ndef token(user):\n    return 'x'\n",
-        "main.py": "from auth import login\n\ndef main():\n    login('a')\n    login('b')\n",
-        "util.py": "def helper():\n    return 1\n",
-    })
-    repo = RepoMap(ws, budget_tokens=1024)
-    first = repo.rank(["main.py"])
-    second = repo.rank(["main.py"])
-    assert [s.name for s in first] == [s.name for s in second]
-    # Seeded file's neighborhood outranks the isolated module.
-    names = [s.name for s in first]
-    assert names.index("login") < names.index("helper")
-    text = repo.format_for_llm(first)
-    assert len(text) // 4 <= 1024
-    assert "login" in text
-
-
-def test_repomap_empty_workspace():
-    from wisp.core.context.repomap import RepoMap
-
-    assert RepoMap("/nonexistent-ws-xyz").rank([]) == []
-    assert RepoMap("/nonexistent-ws-xyz").format_for_llm([]) == ""
-
-
-# ── 3. Search/replace fuzzy patching ───────────────────────────────────
+# ── 2. Search/replace fuzzy patching ───────────────────────────────────
 
 
 def test_search_replace_exact_and_whitespace_tiers():
@@ -235,22 +197,3 @@ def test_search_replace_malformed_block():
         parse_block("no fences here\n")
     with pytest.raises(SearchReplaceError):
         parse_block("<<<<<<< SEARCH\n=======\nx\n>>>>>>> REPLACE\n")
-
-
-
-
-def test_compactor_micro_tier_preserves_pairs():
-    from wisp.core.context.compactor import CLEARED_MARKER, micro_compact
-
-    messages = [{"role": "user", "content": "go"}]
-    for i in range(6):
-        messages.append({"role": "assistant", "content": "",
-                         "tool_calls": [{"id": f"c{i}"}]})
-        messages.append({"role": "tool", "name": "read_file",
-                         "tool_use_id": f"c{i}", "content": "body" * 500})
-    report = micro_compact(messages, keep_turns=3)
-    assert report.changed
-    cleared = [m for m in messages if m.get("content") == CLEARED_MARKER]
-    assert len(cleared) == 3
-    # Pair schema intact: every cleared body keeps its tool_use_id.
-    assert all("tool_use_id" in m for m in cleared)

@@ -22,7 +22,7 @@
 > `—` therefore means *no catch inside these roots*, which is **not** the same claim as
 > *unhandled* — see §(c).
 >
-> Generated 2026-09-30 at `ccdcf1a` · **57 classes** · **323 raise sites** · **70 catch sites** · **9 with no test naming them**.
+> Generated 2026-09-30 at `ccdcf1a` · **55 classes** · **320 raise sites** · **70 catch sites** · **10 with no test naming them**.
 
 ---
 
@@ -66,7 +66,6 @@
 | `PlanError` | `Exception` | fault | plan | `wisp/graph/planner.py:72` | 28 | `wisp/graph/planner.py:87` | `wisp/graph/cli.py:333`, `wisp/graph/cli.py:375`, `wisp/graph/planner.py:314`, `wisp/graph/planner.py:396` | — |
 | `LSPServerError` | `Exception` | fault | tool | `wisp/lsp/client.py:24` | 16 | `wisp/lsp/client.py:78` | `wisp/lsp/client.py:529`, `wisp/lsp/manager.py:174`, `wisp/lsp/manager.py:188` | — |
 | `SearchReplaceError` | `ValueError` | fault | tool | `wisp/core/mutator/search_replace.py:38` | 3 | `wisp/core/mutator/search_replace.py:59` | — | — |
-| `JsonExtractionError` | `RuntimeError` | fault | provider | `wisp/structured_output.py:28` | 3 | `wisp/structured_output.py:160` | — | — |
 | `DockerUnavailable` | `RuntimeError` | fault | bench | `wisp/benchmark/adapters/docker_backend.py:35` | 4 | `wisp/benchmark/adapters/docker_backend.py:47` | `wisp/benchmark/adapters/docker_backend.py:74`, `wisp/benchmark/adapters/docker_backend.py:111` | — |
 | `ExportRefused` | `Exception` | fault | observe | `wisp/trace/otlp.py:24` | 1 | `wisp/trace/otlp.py:50` | — | — |
 | `AclError` | `ValueError` | fault | net | `wisp_net/acl.py:30` | 9 | `wisp_net/acl.py:38` | `wisp_net/sim/config.py:97` | — |
@@ -85,7 +84,6 @@
 | `CancelledTurnError` | `WispError` | unwired | — | `wisp/core/contracts.py:118` | 0 | — | — | — |
 | `LadderExhausted` | `RuntimeError` | unwired | — | `wisp/core/recovery.py:607` | 0 | — | — | — |
 | `EventStreamError` | `Exception` | unwired | — | `wisp/stream_parser.py:17` | 0 | — | `wisp/stream_parser.py:191`, `wisp/stream_parser.py:197` | — |
-| `SchemaValidationError` | `RuntimeError` | unwired | — | `wisp/structured_output.py:37` | 0 | — | — | — |
 | `SchemaValidationError` | `Exception` | unwired | — | `wisp/multi_agent/schema_validator.py:16` | 0 | — | — | — |
 
 `first_raise` is the **lowest-sorted** site, not the most important one — it is a
@@ -132,29 +130,29 @@ the derivation refuses if a row's phase is absent here, or a phase here has no r
 
 ## (c) The raise/catch asymmetry
 
-**323 raise sites, 70 catch sites.** The asymmetry is large and it is mostly not a defect: a library-style module raises and lets its caller decide, and the caller is often outside the three roots this page covers.
+**320 raise sites, 70 catch sites.** The asymmetry is large and it is mostly not a defect: a library-style module raises and lets its caller decide, and the caller is often outside the three roots this page covers.
 
 What the asymmetry **does** let this page state precisely is the zero:
 
 | | count |
 |---|---|
-| classes with at least one raise site | 48 |
-| classes with **no** raise site | 9 |
+| classes with at least one raise site | 47 |
+| classes with **no** raise site | 8 |
 | classes with at least one catch site | 29 |
-| classes with **no** catch site | 28 |
+| classes with **no** catch site | 26 |
 
 **A zero-raise class is the load-bearing number.** `caught_at: —` is weak evidence — it
 may mean the caller is out of scope. `raise_sites: 0` is strong: an AST walk over the
 whole runtime found no `raise` of that name anywhere, so the class cannot fire in this
 tree at all.
 
-**9 distinct names — 9 of 57 rows — are named by no test file.** Derived by
+**10 distinct names — 10 of 55 rows — are named by no test file.** Derived by
 searching `tests/` for each name, so it is a floor and not a proof: a test can exercise a
 path without ever naming the exception. The list is a place to look, not a verdict.
 
-The name and row counts differ because `SchemaValidationError` is defined twice (§Findings); a name-keyed count would say 8 and a row-keyed count 9, and only the pair is honest.
+A name-keyed count and a row-keyed count agree today, because every class name is defined once. The table still keys rows by *definition site*, so a future duplicate is recorded rather than merged.
 
-`CancelledTurnError`, `CircuitBreakerOpenError`, `EventStreamError`, `LSPServerError`, `LadderExhausted`, `ToolDeniedError`, `UsageError`, `_Exit`, `_TransientOpenError`
+`CancelledTurnError`, `CircuitBreakerOpenError`, `EventStreamError`, `LSPServerError`, `LadderExhausted`, `SchemaValidationError`, `ToolDeniedError`, `UsageError`, `_Exit`, `_TransientOpenError`
 
 ---
 
@@ -168,8 +166,6 @@ The name and row counts differ because `SchemaValidationError` is defined twice 
 
 - **A crashed approval handler is published as `DENIAL_USER_DENIED`.** In `wisp/core/approval_gate.py` the handler call is wrapped by four handlers: the cancellation quad re-raises untouched, `ApprovalCancelled` and `ApprovalTimeout` each return their own denial — and the generic `except Exception` **logs and falls through** to the block's final `return`, which stamps `denial=DENIAL_USER_DENIED`. So *"the handler raised"* and *"the human said no"* are published under one code. That is the same collapse `tool_executor.py:883-913` was fixed for: that site now emits `DENIAL_NO_APPROVER` and its comment states the rule — *"Nobody could be asked" and "the human said no" are different facts.* ADR-0061 R4 states it for the WebSocket path. **This site was not covered by that repair**, and it is live: `ApprovalGate` is imported by `wisp/core/stateless.py`. The fix is the same shape as the one already applied — a distinct code, not a distinct message. *Note the mis-attribution is the F8 defect class from the other side: a system failure reported as a human verdict.*
 
-- **`SchemaValidationError` is defined twice, and the registry cannot see it.** `wisp/multi_agent/schema_validator.py:16` subclasses `Exception`; `wisp/structured_output.py:37` subclasses `RuntimeError`. Two classes, one name, two bases, no relation. The second has zero raise sites and zero catch sites. **This is also a finding about the instrument**: the first draft of the scanner keyed its registry by class *name* and reported **46** classes where the tree has **47** — a name-keyed scan silently merges the second definition into the first. This page keys rows by *definition site* so the totality check cannot repeat that error, and the derivation now refuses two rows sharing a pin. *A scanner that reports 46 has not shown the tree holds 46.*
-
 - **`EventStreamError` is caught twice and raised never.** Two `except EventStreamError` clauses in `wisp/stream_parser.py::parse_stream` (at `:191` and `:197`), zero raise sites, and no importer outside the module. A handler for a signal the tree cannot produce — either a removed raise or one that was always intended to come from a dependency. Recorded, not resolved: which of the two it is cannot be settled from the tree alone.
 
 - **Two denial statuses are emitted but never classified.** `wisp/core/events.py`'s `_DENIAL_STATUSES` has **seven** members; `OUTCOME_BY_STATUS` has only the **original five** plus `ok` and `error`. `DENIAL_BUDGET_EXCEEDED` and `DENIAL_NO_APPROVER` were added to the first and never to the second, so `classify_status("BUDGET_EXCEEDED")` returns `OutcomeClass.UNKNOWN` and `is_terminal_outcome` returns **`False`** — a verdict that by construction must not be retried reads as retryable — while `is_denial_text` on the same value returns `True`. One status, two answers: the "second classifier" failure `events.py:330-333` warns about in its own comment. Both are emitted live (`tool_executor.py:726-732` and `:900-905`). **The guards cannot catch it because they pin the same five**: `tests/test_outcome_classification_authority.py:53` and `wisp/core/recovery.py:152` each hard-code the original list, so a guard whose subject is a *copy* of the vocabulary cannot see the vocabulary grow. *The repair is two lines and the decision is not — `OUTCOME_BY_STATUS` is a published vocabulary, ADR-0052's blast radius.*
@@ -178,9 +174,9 @@ The name and row counts differ because `SchemaValidationError` is defined twice 
 
 - **`ReplayDivergence`'s docstring states an absolute the tree does not keep.** The class docstring says a divergence *"must **escape** the loop, not be caught and reported as one more way a run can end"*. It **is** caught — at `wisp/core/runtime.py:1863`, inside `_recover_unfinished_turn`. The catch is deliberate and its own comment documents it as a repair: the divergence used to be swallowed by a bare `except Exception: pass`, so the log claimed a replay that never happened. **The code is right and the docstring is stale**: what must escape is the *turn loop*, not every handler. The catch does not reconcile silently — it discards the journal and says why. *A docstring absolute that the tree deliberately narrows is a trap for the next reader; the sentence should name the loop.*
 
-- **`adr` is `—` for 45 of 47 rows, and that is a limit, not a claim.** Only two rows carry a decision, and each is cited because the class's **own docstring** names it — `ADR-0038` for `OllamaConfigurationError`, `ADR-0050` for `CriteriaDeclarationRejected`. Most of these exceptions arrived in a phase whose ADR exists but does not name the class. **The provenance was not traced**, and a plausible ADR is worse than a blank — guessing a decision is the defect this corpus exists to prevent. `—` states *not pinned*, not *none exists*.
+- **`adr` is `—` for 53 of 55 rows, and that is a limit, not a claim.** Only two rows carry a decision, and each is cited because the class's **own docstring** names it — `ADR-0038` for `OllamaConfigurationError`, `ADR-0050` for `CriteriaDeclarationRejected`. Most of these exceptions arrived in a phase whose ADR exists but does not name the class. **The provenance was not traced**, and a plausible ADR is worse than a blank — guessing a decision is the defect this corpus exists to prevent. `—` states *not pinned*, not *none exists*.
 
-- **`tripwire` is derived, and a derived tripwire is weaker than a declared one.** The column is the first `tests/` file that names the exception, found by search. It shows what is *referenced*, not what is *asserted*: a test that imports a name and never exercises the raise still counts. It is included because the zero is informative — 9 of 57 classes are named by no test file at all — and it is labelled derived so nobody reads it as a guard. **The number is a floor.** `LSPServerError` has 16 raise sites and no test names it; that is a live path with no assertion on its failure shape, and it is the kind of zero this column exists to surface.
+- **`tripwire` is derived, and a derived tripwire is weaker than a declared one.** The column is the first `tests/` file that names the exception, found by search. It shows what is *referenced*, not what is *asserted*: a test that imports a name and never exercises the raise still counts. It is included because the zero is informative — 10 of 55 classes are named by no test file at all — and it is labelled derived so nobody reads it as a guard. **The number is a floor.** `LSPServerError` has 16 raise sites and no test names it; that is a live path with no assertion on its failure shape, and it is the kind of zero this column exists to surface.
 
 ### What this page did not do
 
