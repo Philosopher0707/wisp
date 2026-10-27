@@ -20,7 +20,8 @@ Three of those claims were **wrong**, for two different reasons:
 Only `cli/commands/model.py` was genuinely unreferenced — it duplicated the
 live selection UX in `repl/commands/provider.py` — and W1 deleted it.
 
-This detector resolves both absolute and relative imports, and ratchets the
+This detector resolves both absolute and relative imports through
+`wisp/import_graph.py` — one owner for import resolution — and ratchets the
 known-unreferenced set so (a) a real orphan is caught, and (b) the false
 "dead code" conclusion cannot be reached by tooling again.
 
@@ -33,9 +34,10 @@ Production reachability is now asserted separately from "anything imports it".
 
 from __future__ import annotations
 
-import ast
 import pathlib
 from functools import lru_cache
+
+from wisp.import_graph import build_import_graph
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 PKG_ROOT = REPO / "wisp"
@@ -52,52 +54,6 @@ def _module_name(path: pathlib.Path) -> str:
     return ".".join(parts)
 
 
-def _is_package(path: pathlib.Path) -> bool:
-    return path.name == "__init__.py"
-
-
-def _resolve_relative(current: str, is_package: bool, level: int, module: str | None) -> str | None:
-    """Resolve a relative import to an absolute module name.
-
-    `level` is the number of leading dots. For a module `a.b.c`, `from .x import`
-    (level 1) targets `a.b.x`; for a package `a.b`, it targets `a.b.x`.
-    """
-    base = current if is_package else current.rsplit(".", 1)[0] if "." in current else ""
-    for _ in range(level - 1):
-        base = base.rsplit(".", 1)[0] if "." in base else ""
-    if not base:
-        return module
-    return f"{base}.{module}" if module else base
-
-
-def _collect_imports(path: pathlib.Path) -> set[str]:
-    current = _module_name(path)
-    is_pkg = _is_package(path)
-    out: set[str] = set()
-    try:
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-    except (SyntaxError, UnicodeDecodeError):
-        return out
-
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom):
-            if node.level:
-                target = _resolve_relative(current, is_pkg, node.level, node.module)
-                if target:
-                    out.add(target)
-                    # `from . import runner` and `from pkg import sub` name a
-                    # submodule in the alias, not in `module`.
-                    out.update(f"{target}.{a.name}" for a in node.names)
-            elif node.module and node.module.startswith("wisp"):
-                out.add(node.module)
-                out.update(f"{node.module}.{a.name}" for a in node.names)
-        elif isinstance(node, ast.Import):
-            for a in node.names:
-                if a.name.startswith("wisp"):
-                    out.add(a.name)
-    return out
-
-
 def _all_modules() -> dict[str, pathlib.Path]:
     mods: dict[str, pathlib.Path] = {}
     for py in PKG_ROOT.rglob("*.py"):
@@ -108,21 +64,28 @@ def _all_modules() -> dict[str, pathlib.Path]:
 
 
 @lru_cache(maxsize=None)
+def _graph() -> dict[pathlib.Path, set[pathlib.Path]]:
+    """The tree's import graph, built by the live implementation.
+
+    The bounds are raised because the default protects a per-write lookup;
+    this gate scans a known repository once and refuses (never truncates) if
+    the walk exceeds them.
+    """
+    return build_import_graph(REPO, max_files=50_000, budget_seconds=120)
+
+
+@lru_cache(maxsize=None)
 def _edges(roots: tuple[str, ...]) -> set[tuple[str, str]]:
-    """(importer, imported) pairs from the given source roots.
+    """(importer, imported) module-name pairs from the given importer roots.
 
     Cached: the tree does not change during a run, and the scan is the slow part.
     """
     found: set[tuple[str, str]] = set()
-    for root in roots:
-        d = REPO / root
-        if not d.exists():
+    for src, deps in _graph().items():
+        importer = _module_name(src)
+        if importer.split(".")[0] not in roots:
             continue
-        for py in d.rglob("*.py"):
-            if "__pycache__" in py.parts:
-                continue
-            importer = _module_name(py)
-            found.update((importer, target) for target in _collect_imports(py))
+        found.update((importer, _module_name(dep)) for dep in deps)
     return found
 
 
@@ -284,23 +247,4 @@ def test_speculative_is_test_covered():
     assert _referenced(_edges(PRODUCTION_ROOTS + NON_PRODUCTION_ROOTS), "wisp.core.speculative")
 
 
-def test_relative_import_resolution_is_correct():
-    """Unit-pin the resolver, since a bug here silently fabricates orphans.
 
-    PEP 328: from module `wisp.a.b.c`, `.` is the package `wisp.a.b` and `..`
-    is its parent `wisp.a`.
-    """
-    assert _resolve_relative("wisp.multi_agent._runner", False, 1,
-                             "resource_budget") == "wisp.multi_agent.resource_budget"
-    assert _resolve_relative("wisp.multi_agent", True, 1,
-                             "resource_budget") == "wisp.multi_agent.resource_budget"
-    # level 1 -> wisp.a.b.d ; level 2 -> wisp.a.d
-    assert _resolve_relative("wisp.a.b.c", False, 1, "d") == "wisp.a.b.d"
-    assert _resolve_relative("wisp.a.b.c", False, 2, "d") == "wisp.a.d"
-    assert _resolve_relative("wisp.a.b.c", False, 1, None) == "wisp.a.b"
-
-
-def test_from_import_names_are_resolved():
-    """`from pkg import sub` names the submodule only in the alias."""
-    imports = _collect_imports(REPO / "tests/jobs/conftest.py")
-    assert "wisp.jobs.procs" in imports

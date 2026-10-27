@@ -107,19 +107,40 @@ def _extract_imports_from_file(source_file: Path, workspace: Path) -> set[Path]:
             resolved = _resolve_import(workspace, source_file, parts, level)
             if resolved:
                 imports.add(resolved)
+            # The alias may name a submodule: `from pkg import sub` loads both
+            # pkg/__init__.py and pkg/sub.py. An alias naming a function or
+            # class resolves to no file and is skipped.
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                resolved = _resolve_import(workspace, source_file, [*parts, alias.name], level)
+                if resolved:
+                    imports.add(resolved)
 
     return imports
 
 
-def build_import_graph(workspace: str | Path) -> dict[Path, set[Path]]:
+def build_import_graph(
+    workspace: str | Path,
+    *,
+    max_files: int | None = None,
+    budget_seconds: float | None = None,
+) -> dict[Path, set[Path]]:
     """Build a dependency graph for every ``*.py`` file under *workspace*.
 
     Returns a dict mapping each source file to the set of workspace-local
     files it imports.  Only files inside *workspace* are included.
+
+    The bounds are parameters because the per-write affected-test lookup is not
+    the only caller: a one-off scan of a known repository can afford more. They
+    are read here, not bound as default arguments, so a test can patch the
+    module constants.
     """
+    max_files = MAX_FILES if max_files is None else max_files
+    budget_seconds = BUDGET_SECONDS if budget_seconds is None else budget_seconds
     root = Path(workspace).resolve()
     graph: dict[Path, set[Path]] = {}
-    budget = WalkBudget(max_files=MAX_FILES, max_seconds=BUDGET_SECONDS)
+    budget = WalkBudget(max_files=max_files, max_seconds=budget_seconds)
 
     try:
         # Refuse, not truncate: a partial graph would silently miss affected tests.
@@ -131,7 +152,8 @@ def build_import_graph(workspace: str | Path) -> dict[Path, set[Path]]:
             graph[pyfile] = {p for p in imports if root in p.parents or p == root}
     except WalkBudgetExceeded as exc:
         raise ImportGraphTooLarge(
-            f"{root} has more than {MAX_FILES} Python files or took longer than {BUDGET_SECONDS:g}s to read") from exc
+            f"{root} has more than {max_files} Python files or took longer than "
+            f"{budget_seconds:g}s to read") from exc
 
     return graph
 

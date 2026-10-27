@@ -94,6 +94,29 @@ class TestExtractImports:
         imports = _extract_imports_from_file(f, tmp_path)
         assert (tmp_path / "pkg" / "utils.py").resolve() in imports
 
+    def test_from_import_alias_resolves_submodule(self, tmp_path: Path):
+        """`from pkg import sub` depends on `pkg/sub.py`, not only the package.
+
+        This graph drives the affected-test lookup: a change to `sub.py` must
+        mark a test that imports it through the package as affected.
+        """
+        (tmp_path / "pkg").mkdir()
+        (tmp_path / "pkg" / "__init__.py").write_text("")
+        (tmp_path / "pkg" / "sub.py").write_text("")
+        f = tmp_path / "main.py"
+        f.write_text("from pkg import sub\n")
+        imports = _extract_imports_from_file(f, tmp_path)
+        assert (tmp_path / "pkg" / "sub.py").resolve() in imports
+
+    def test_relative_from_import_alias_resolves_submodule(self, tmp_path: Path):
+        (tmp_path / "pkg").mkdir()
+        (tmp_path / "pkg" / "__init__.py").write_text("")
+        (tmp_path / "pkg" / "sub.py").write_text("")
+        f = tmp_path / "pkg" / "main.py"
+        f.write_text("from . import sub\n")
+        imports = _extract_imports_from_file(f, tmp_path)
+        assert (tmp_path / "pkg" / "sub.py").resolve() in imports
+
     def test_syntax_error(self, tmp_path: Path):
         f = tmp_path / "bad.py"
         f.write_text("def foo(\n")
