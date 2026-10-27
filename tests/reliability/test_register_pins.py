@@ -53,7 +53,7 @@ ROW_RE = re.compile(
     r"\|\s*(?P<raises>\d+)\s*\|"
 )
 
-#: A floor for the table. The tree has 47 rows today; a scan that finds nothing must not pass.
+#: A floor for the table; a scan that finds nothing must not pass.
 ROW_FLOOR = 20
 
 
@@ -173,12 +173,10 @@ class TestTheRegisterIsTotal:
     def test_no_row_appears_twice(self, page_text):
         """Keyed on **(name, path)**, not on the name alone.
 
-        A class *name* is not an identity: `SchemaValidationError` is defined in **two**
-        modules — `wisp/structured_output.py:37` and `wisp/multi_agent/schema_validator.py:16` —
-        and the register lists both, each with its own `defined_at`. That is why the table has
-        47 rows and 46 distinct names, and it is recorded rather than asserted away: the
-        duplication is a fact about the code, and a guard that failed on it would be failing on
-        a legitimate state.
+        A class *name* is not an identity: two modules may define the same name, and the
+        register must list each with its own `defined_at`. Keying rows by name alone would
+        silently merge them — the defect that once made the scanner report one class fewer
+        than the tree holds.
         """
         keys = [(m.group("name"), m.group("path")) for m in _rows(page_text)]
         dupes = sorted({k for k in keys if keys.count(k) > 1})
