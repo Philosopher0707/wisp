@@ -77,7 +77,6 @@ ROOT_MODULES: dict[str, str] = {
     "wisp/completion.py": "shell completion",
     "wisp/skills.py": "SKILL.md discovery + parsing",
     "wisp/context_assembler.py": "builds the prompt context",
-    "wisp/markdown_parser.py": "streamed markdown rendering",
     "wisp/diff_renderer.py": "diff rendering",
     "wisp/change_tracker.py": "tracks changed files per turn",
     "wisp/capability_filter.py": "tool capability filtering",

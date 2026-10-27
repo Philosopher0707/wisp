@@ -46,8 +46,8 @@ PHASES = ("startup", "context", "turn", "provider", "tool", "approval", "plan",
 
 #: `(name, defined_at, base, role, phase, adr)`.
 #:
-#: `defined_at` is the row's **identity** — not the name, because the tree defines
-#: `SchemaValidationError` twice (§Findings). Two rows sharing a name are two rows.
+#: `defined_at` is the row's **identity** — not the name, because two rows may
+#: share a name. Two rows sharing a name are two rows.
 #:
 #: `adr` cites a decision **only where the class's own docstring names one**. An exception with
 #: no stated provenance carries `—` rather than a plausible guess; guessing a decision is the
@@ -108,8 +108,6 @@ ROWS: list[tuple[str, str, str, str, str, str]] = [
     ("LSPServerError", "wisp/lsp/client.py:24", "Exception", "fault", "tool", "—"),
     ("SearchReplaceError", "wisp/core/mutator/search_replace.py:38", "ValueError", "fault",
      "tool", "—"),
-    ("JsonExtractionError", "wisp/structured_output.py:28", "RuntimeError", "fault",
-     "provider", "—"),
     ("DockerUnavailable", "wisp/benchmark/adapters/docker_backend.py:35", "RuntimeError",
      "fault", "bench", "—"),
     ("ExportRefused", "wisp/trace/otlp.py:24", "Exception", "fault", "observe", "—"),
@@ -135,8 +133,6 @@ ROWS: list[tuple[str, str, str, str, str, str]] = [
     ("CancelledTurnError", "wisp/core/contracts.py:118", "WispError", "unwired", "—", "—"),
     ("LadderExhausted", "wisp/core/recovery.py:607", "RuntimeError", "unwired", "—", "—"),
     ("EventStreamError", "wisp/stream_parser.py:17", "Exception", "unwired", "—", "—"),
-    ("SchemaValidationError", "wisp/structured_output.py:37", "RuntimeError", "unwired",
-     "—", "—"),
     ("SchemaValidationError", "wisp/multi_agent/schema_validator.py:16", "Exception",
      "unwired", "—", "—"),
 ]
@@ -509,9 +505,9 @@ def render() -> str:
     A("searching `tests/` for each name, so it is a floor and not a proof: a test can exercise a")
     A("path without ever naming the exception. The list is a place to look, not a verdict.")
     A("")
-    A("The name and row counts differ because `SchemaValidationError` is defined twice "
-      "(§Findings); a name-keyed count would say 8 and a row-keyed count 9, and only the pair "
-      "is honest.")
+    A("A name-keyed count and a row-keyed count agree today, because every class name is "
+      "defined once. The table still keys rows by *definition site*, so a future duplicate "
+      "is recorded rather than merged.")
     A("")
     if untested:
         A(", ".join(f"`{n}`" for n in untested))
@@ -539,9 +535,8 @@ def render() -> str:
 def _findings(untested: int) -> list[str]:
     """The §Findings entries. `untested` is passed in so the count is computed once.
 
-    It was a module-level list with its own `_tripwires(...)` call, and that copy counted
-    `SchemaValidationError` **twice** — the two definitions share a name — so §(c) said 8 and
-    §Findings said 9. One number, one computation.
+    It was a module-level list with its own `_tripwires(...)` call, and that copy counted by
+    name while §(c) counted rows, so the two sections disagreed. One number, one computation.
     """
     return [
     "- **The typed error taxonomy is declared and unwired — the largest single finding on this "
@@ -594,16 +589,6 @@ def _findings(untested: int) -> list[str]:
     "the mis-attribution is the F8 defect class from the other side: a system failure reported as "
     "a human verdict.*",
 
-    "- **`SchemaValidationError` is defined twice, and the registry cannot see it.** "
-    "`wisp/multi_agent/schema_validator.py:16` subclasses `Exception`; "
-    "`wisp/structured_output.py:37` subclasses `RuntimeError`. Two classes, one name, two bases, "
-    "no relation. The second has zero raise sites and zero catch sites. **This is also a finding "
-    "about the instrument**: the first draft of the scanner keyed its registry by class *name* "
-    "and reported **46** classes where the tree has **47** — a name-keyed scan silently merges "
-    "the second definition into the first. This page keys rows by *definition site* so the "
-    "totality check cannot repeat that error, and the derivation now refuses two rows sharing a "
-    "pin. *A scanner that reports 46 has not shown the tree holds 46.*",
-
     "- **`EventStreamError` is caught twice and raised never.** Two `except EventStreamError` "
     "clauses in `wisp/stream_parser.py::parse_stream` (at `:191` and `:197`), zero raise sites, "
     "and no importer outside the module. A handler for a signal the tree cannot produce — either "
@@ -643,7 +628,7 @@ def _findings(untested: int) -> list[str]:
     "it discards the journal and says why. *A docstring absolute that the tree deliberately "
     "narrows is a trap for the next reader; the sentence should name the loop.*",
 
-    "- **`adr` is `—` for 45 of 47 rows, and that is a limit, not a claim.** Only two rows "
+    f"- **`adr` is `—` for {len(ROWS) - 2} of {len(ROWS)} rows, and that is a limit, not a claim.** Only two rows "
     "carry a decision, and each is cited because the class's **own docstring** names it — "
     "`ADR-0038` for `OllamaConfigurationError`, `ADR-0050` for `CriteriaDeclarationRejected`. "
     "Most of these exceptions arrived in a phase whose ADR exists but does not name the class. "

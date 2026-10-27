@@ -11,7 +11,6 @@ import asyncio
 import contextlib
 import json
 import os
-import shlex
 import sys
 from collections.abc import Iterator
 from typing import Any
@@ -408,26 +407,3 @@ def _plan(args: list[str], workspace: str, store, model: str, provider: str,
           f"  wisp graph execute {proposal['proposal_id']} --yes")
     return 0
 
-
-def register_repl(dispatcher) -> None:
-    """Register /graph with the REPL dispatcher (additive; no legacy changes)."""
-    from wisp.cli.dispatcher import CommandResult
-
-    @dispatcher.register("graph", "Graph execution (list/run/status/trace)", usage="/graph ...")
-    def _graph(ctx, args: str):
-        try:
-            parts = shlex.split(args) if args else ["list"]
-        except ValueError as exc:
-            ctx.emit(f"bad quoting: {exc}")
-            return CommandResult.CONSUMED
-        if not parts:
-            return CommandResult.CONSUMED
-        from io import StringIO
-        import contextlib as _cl
-        buf = StringIO()
-        ws = getattr(ctx.config, "workspace", ".") if not isinstance(ctx.config, dict) \
-            else ctx.config.get("workspace", ".")
-        with _cl.redirect_stdout(buf):
-            code = main(parts, workspace=ws)
-        ctx.emit(buf.getvalue().strip() or f"(exit {code})")
-        return CommandResult.CONSUMED
